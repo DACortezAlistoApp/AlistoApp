@@ -1,12 +1,13 @@
 // ============================================================================
-// ALISTO NETWORK PH - SUPERADMIN, OPERATOR & FORENSIC GOVERNANCE CONSOLE
+// ALISTO NETWORK PH - AUTHENTICATED RBAC MASTER COMMAND CONSOLE
 // Author & Chief Systems Architect: D. A. Cortez
 // ============================================================================
 
 const _K_U = atob("aHR0cHM6Ly9mbWpqeWhtdGRzdmh1ZmtneWpwci5zdXBhYmFzZS5jbw==");
 const _K_A = atob("ZXlKaGJHY2lPaUpJVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKemRYQmhZbUZ6WlNJc0luSmxaaUk2SW1adGFtcDVhRzEwWkhOMmFIVm1hMmQ1YW5CeUlpd2ljbTlzWlNJNkltRnViMjRpTENKcFlYUWlPakUzT1RRNU1URTVPRElzSW1WNGNDSTZNakV4TURRNE56azRNbjAueGV2a21NQkFuSVVjTktrcDM0UFRubWxrLTM4NVNVd3B3aGJWMEtheWd6cw==");
 let supabaseClient = null;
-const SUPERADMIN_UUID = '11111111-1111-1111-1111-111111111111';
+let currentAuthUser = null;
+const SESSION_STORAGE_KEY = 'ALISTO_AUTH_SESSION_V1';
 
 const consoleState = {
   globalCommissionRate: 0.12,
@@ -22,7 +23,157 @@ const consoleState = {
   operatorAuditLogs: []
 };
 
+// ============================================================================
+// 1. DATABASE AUTHENTICATION & SESSION RBAC ENFORCEMENT
+// ============================================================================
+
+function toggleAuthPasswordVisibility() {
+  const pw = document.getElementById('authPasswordInput');
+  if (!pw) return;
+  pw.type = pw.type === 'password' ? 'text' : 'password';
+}
+
+async function submitConsoleLogin() {
+  const idInput = document.getElementById('authIdentifierInput');
+  const pwInput = document.getElementById('authPasswordInput');
+  const errBanner = document.getElementById('authErrorBanner');
+  const submitBtn = document.getElementById('authSubmitBtn');
+
+  errBanner.style.display = 'none';
+  const identifier = (idInput.value || '').trim();
+  const password = pwInput.value || '';
+
+  if (!identifier || !password) {
+    errBanner.textContent = 'Please enter both your Username/Phone/Email and Password.';
+    errBanner.style.display = 'block';
+    return;
+  }
+
+  if (!supabaseClient) {
+    errBanner.textContent = 'Supabase client is initializing. Please try again in a moment.';
+    errBanner.style.display = 'block';
+    return;
+  }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'VERIFYING AGAINST PUBLIC.USERS...';
+
+  try {
+    const { data, error } = await supabaseClient.rpc('authenticate_user_rpc', {
+      p_identifier: identifier,
+      p_password: password
+    });
+
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'AUTHENTICATE & UNLOCK CONSOLE';
+
+    if (error) {
+      errBanner.textContent = 'Database Auth RPC Error (Ensure 04_alisto_auth_and_rbac_lockdown.sql is executed in Supabase): ' + error.message;
+      errBanner.style.display = 'block';
+      return;
+    }
+
+    if (!data || data.status !== 'SUCCESS' || !data.user) {
+      errBanner.textContent = (data && data.message) ? data.message : 'Invalid credentials or unauthorized account.';
+      errBanner.style.display = 'block';
+      return;
+    }
+
+    currentAuthUser = data.user;
+    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(currentAuthUser));
+    pwInput.value = '';
+    await unlockConsoleForAuthenticatedUser();
+  } catch (err) {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'AUTHENTICATE & UNLOCK CONSOLE';
+    errBanner.textContent = 'Authentication error: ' + err.message;
+    errBanner.style.display = 'block';
+  }
+}
+
+async function unlockConsoleForAuthenticatedUser() {
+  if (!currentAuthUser) return;
+
+  document.getElementById('authGateOverlay').style.display = 'none';
+  document.getElementById('protectedConsoleShell').style.display = 'block';
+
+  const uLabel = document.getElementById('activeSessionUserLabel');
+  const rBadge = document.getElementById('activeSessionRoleBadge');
+  if (uLabel) {
+    uLabel.textContent = `${currentAuthUser.full_name} (@${currentAuthUser.username || currentAuthUser.role})`;
+  }
+  if (rBadge) {
+    rBadge.textContent = `ROLE: ${currentAuthUser.role.toUpperCase()}`;
+  }
+
+  applyRoleBasedAccessControl();
+  await syncFromSupabase();
+  subscribeRealtimeKernel();
+}
+
+function applyRoleBasedAccessControl() {
+  if (!currentAuthUser) return;
+  const role = currentAuthUser.role;
+
+  const tabOp = document.getElementById('tabBtnOperatorOps');
+  const tabSuper = document.getElementById('tabBtnSuperAdmin');
+  const tabLgu = document.getElementById('tabBtnLguAdmin');
+  const tabApk = document.getElementById('tabBtnApkPortal');
+  const onbAdminOpt = document.getElementById('onbAdminOption');
+
+  if (role === 'super_admin') {
+    // SuperAdmin: Full unrestricted access to all 4 tabs & ability to onboard Admin Operators
+    tabOp.style.display = 'inline-block';
+    tabSuper.style.display = 'inline-block';
+    tabLgu.style.display = 'inline-block';
+    tabApk.style.display = 'inline-block';
+    if (onbAdminOpt) onbAdminOpt.disabled = false;
+    switchConsoleView('operator_ops');
+  } else if (role === 'admin') {
+    // Admin Operator / LGU Coordinator: Access to Operator Dashboard, LGU Audit Trail & APKs; SuperAdmin Console LOCKED
+    tabOp.style.display = 'inline-block';
+    tabSuper.style.display = 'none';
+    tabLgu.style.display = 'inline-block';
+    tabApk.style.display = 'inline-block';
+    if (onbAdminOpt) {
+      onbAdminOpt.disabled = true;
+      if (document.getElementById('onbRole').value === 'admin') {
+        document.getElementById('onbRole').value = 'contractor';
+      }
+    }
+    switchConsoleView('operator_ops');
+  } else {
+    // Contractor / Customer: Strictly isolated to their Personal Account & Native Android Kotlin APK Portal
+    tabOp.style.display = 'none';
+    tabSuper.style.display = 'none';
+    tabLgu.style.display = 'none';
+    tabApk.style.display = 'inline-block';
+    switchConsoleView('apk_portal');
+  }
+}
+
+function logoutConsoleSession() {
+  currentAuthUser = null;
+  sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  document.getElementById('protectedConsoleShell').style.display = 'none';
+  document.getElementById('authGateOverlay').style.display = 'flex';
+  const errBanner = document.getElementById('authErrorBanner');
+  if (errBanner) errBanner.style.display = 'none';
+}
+
 function switchConsoleView(viewKey) {
+  if (!currentAuthUser) return;
+  const role = currentAuthUser.role;
+
+  // Hard guard against unauthorized tab switching
+  if (viewKey === 'superadmin' && role !== 'super_admin') {
+    alert('RBAC Restriction: Only SuperAdmin can access the Master Service Vertical & Moderation Console.');
+    return;
+  }
+  if ((viewKey === 'operator_ops' || viewKey === 'lgu_admin') && !['super_admin', 'admin'].includes(role)) {
+    viewKey = 'apk_portal';
+  }
+
   document.querySelectorAll('.role-tab').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.view === viewKey);
   });
@@ -31,6 +182,10 @@ function switchConsoleView(viewKey) {
   });
   renderAll();
 }
+
+// ============================================================================
+// 2. SUPABASE DATA SYNC & REALTIME SUBSCRIPTIONS
+// ============================================================================
 
 function formatTs(ts) {
   if (!ts) return '— (Not Reached)';
@@ -53,7 +208,7 @@ function getInfractionCount(uid) {
 }
 
 async function syncFromSupabase() {
-  if (!supabaseClient) return;
+  if (!supabaseClient || !currentAuthUser) return;
   try {
     const [
       vRes, cfgRes, uRes, bRes, lRes, mRes, tRes, rRes, aRes, opRes
@@ -85,7 +240,15 @@ async function syncFromSupabase() {
         if (document.getElementById('cfgMaturity')) document.getElementById('cfgMaturity').value = consoleState.maturityHours;
       }
     }
-    if (uRes.data) consoleState.users = uRes.data;
+    if (uRes.data) {
+      consoleState.users = uRes.data;
+      const freshSelf = consoleState.users.find(u => u.id === currentAuthUser.id);
+      if (freshSelf && freshSelf.account_frozen) {
+        alert('Your account has been suspended by an administrator. Signing out.');
+        logoutConsoleSession();
+        return;
+      }
+    }
     if (bRes.data) consoleState.bookings = bRes.data;
     if (lRes.data) consoleState.ledger = lRes.data;
     if (mRes.data) consoleState.messages = mRes.data;
@@ -99,8 +262,10 @@ async function syncFromSupabase() {
   renderAll();
 }
 
+let realtimeSubscribed = false;
 function subscribeRealtimeKernel() {
-  if (!supabaseClient) return;
+  if (!supabaseClient || realtimeSubscribed) return;
+  realtimeSubscribed = true;
   supabaseClient
     .channel('alisto-operator-live')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'service_verticals' }, () => syncFromSupabase())
@@ -126,7 +291,7 @@ function renderVerticalStrip() {
 }
 
 // ============================================================================
-// OPERATOR DASHBOARD RENDERERS & ACTIONS
+// 3. OPERATOR DASHBOARD RENDERERS & ROLE-PROTECTED ACTIONS
 // ============================================================================
 
 function toggleOnboardContractorFields() {
@@ -174,14 +339,15 @@ function renderOperatorKpis() {
 }
 
 async function operatorOnboardUser() {
+  if (!currentAuthUser) return;
   const role = document.getElementById('onbRole').value;
+  const username = document.getElementById('onbUsername').value.trim();
   const fullName = document.getElementById('onbName').value.trim();
   const phone = document.getElementById('onbPhone').value.trim();
   const email = document.getElementById('onbEmail').value.trim();
   const municipality = document.getElementById('onbMunicipality').value;
   const barangay = document.getElementById('onbBarangay').value;
   const password = document.getElementById('onbPassword').value.trim() || 'Alisto2026!';
-  const kyc = document.getElementById('onbKyc').value === 'true';
 
   if (!fullName || !phone) {
     alert('Full Name and Mobile Phone Number are required to onboard an account.');
@@ -199,9 +365,8 @@ async function operatorOnboardUser() {
     ? (parseFloat(customCommRaw) / 100.0)
     : null;
 
-  if (!supabaseClient) return;
   const { data, error } = await supabaseClient.rpc('operator_onboard_user_rpc', {
-    p_operator_id: SUPERADMIN_UUID,
+    p_operator_id: currentAuthUser.id,
     p_full_name: fullName,
     p_phone: phone,
     p_email: email,
@@ -209,45 +374,47 @@ async function operatorOnboardUser() {
     p_municipality: municipality,
     p_barangay_zone: barangay,
     p_password: password,
-    p_kyc_verified: kyc,
+    p_kyc_verified: true,
     p_lgu_endorsed: lguEndorsed,
     p_skill_categories: skillArr,
     p_sub_400cc: true,
     p_initial_credits: initCredits,
-    p_custom_commission_rate: customCommDecimal
+    p_custom_commission_rate: customCommDecimal,
+    p_username: username || null
   });
 
   if (error || (data && data.status === 'ERROR')) {
-    alert('Onboarding Error (Ensure 03_alisto_operator_dashboard_kernel.sql was executed in Supabase): ' + (error ? error.message : data.message));
+    alert('Onboarding Error: ' + (error ? error.message : data.message));
     return;
   }
 
+  document.getElementById('onbUsername').value = '';
   document.getElementById('onbName').value = '';
   document.getElementById('onbPhone').value = '';
   document.getElementById('onbEmail').value = '';
-  alert(`Successfully onboarded ${role.toUpperCase()}: ${fullName} (${phone})`);
+  alert(`Successfully onboarded ${role.toUpperCase()}: ${fullName} (Username: @${data.user.username})`);
   await syncFromSupabase();
 }
 
 async function operatorUpdateGlobalCommission() {
+  if (!currentAuthUser) return;
   const pct = parseFloat(document.getElementById('opGlobalCommInput').value);
   if (isNaN(pct) || pct <= 0 || pct > 50) {
     alert('Enter a valid commission percentage between 1% and 50%.');
     return;
   }
   const rateDecimal = (pct / 100.0).toFixed(4);
-  if (supabaseClient) {
-    const { error } = await supabaseClient.rpc('admin_update_system_config_rpc', {
-      p_commission_rate: String(rateDecimal),
-      p_maturity_hours: String(consoleState.maturityHours)
-    });
-    if (error) {
-      alert('RPC Error: ' + error.message);
-      return;
-    }
-    await syncFromSupabase();
-    alert(`Global Platform Commission Rate updated to ${pct}%.`);
+  const { data, error } = await supabaseClient.rpc('admin_update_system_config_rpc', {
+    p_commission_rate: String(rateDecimal),
+    p_maturity_hours: String(consoleState.maturityHours),
+    p_actor_id: currentAuthUser.id
+  });
+  if (error || (data && data.status === 'ERROR')) {
+    alert('RPC Error: ' + (error ? error.message : data.message));
+    return;
   }
+  await syncFromSupabase();
+  alert(`Global Platform Commission Rate updated to ${pct}%.`);
 }
 
 function renderOperatorContractorCommissionTable() {
@@ -264,7 +431,7 @@ function renderOperatorContractorCommissionTable() {
     return `
       <tr>
         <td>
-          <strong>${c.full_name}</strong><br/>
+          <strong>${c.full_name}</strong> <small style="color:var(--cyan-accent)">@${c.username || 'contractor'}</small><br/>
           <small style="color:var(--text-muted)">${c.phone} • ${c.barangay_zone}</small>
         </td>
         <td>
@@ -288,6 +455,7 @@ function renderOperatorContractorCommissionTable() {
 }
 
 async function promptContractorCommissionOverride(contractorId, contractorName) {
+  if (!currentAuthUser) return;
   const input = prompt(
     `Set Custom Commission Rate (%) for ${contractorName} (e.g., enter 8 for 8%, or leave blank to restore Global Default):`,
     ''
@@ -302,7 +470,7 @@ async function promptContractorCommissionOverride(contractorId, contractorName) 
   }
 
   const { error, data } = await supabaseClient.rpc('operator_set_contractor_commission_rpc', {
-    p_operator_id: SUPERADMIN_UUID,
+    p_operator_id: currentAuthUser.id,
     p_contractor_id: contractorId,
     p_custom_rate_decimal: decimalVal
   });
@@ -333,16 +501,17 @@ async function operatorTopUpContractor(contractorId, contractorName) {
 
 function renderOperatorUsersTable() {
   const tbody = document.getElementById('operatorUsersTable');
-  if (!tbody) return;
+  if (!tbody || !currentAuthUser) return;
   const q = (document.getElementById('userSearchInput')?.value || '').toLowerCase().trim();
   const roleFilter = document.getElementById('userRoleFilter')?.value || 'ALL';
   const globalPct = (consoleState.globalCommissionRate * 100).toFixed(1);
+  const actorIsSuper = currentAuthUser.role === 'super_admin';
 
   const filtered = consoleState.users.filter(u => {
     if (roleFilter === 'FROZEN' && !u.account_frozen) return false;
     if (roleFilter !== 'ALL' && roleFilter !== 'FROZEN' && u.role !== roleFilter) return false;
     if (!q) return true;
-    const hay = `${u.full_name} ${u.phone} ${u.email || ''} ${u.barangay_zone} ${u.municipality} ${u.role}`.toLowerCase();
+    const hay = `${u.username || ''} ${u.full_name} ${u.phone} ${u.email || ''} ${u.barangay_zone} ${u.municipality} ${u.role}`.toLowerCase();
     return hay.includes(q);
   });
 
@@ -359,18 +528,24 @@ function renderOperatorUsersTable() {
       ? (u.custom_commission_rate != null
           ? `${(Number(u.custom_commission_rate) * 100).toFixed(1)}% (Custom)`
           : `${globalPct}% (Default)`)
-      : 'Customer Account';
+      : u.role.toUpperCase();
 
     const statusHtml = u.account_frozen
       ? `<span class="pill-risk">SUSPENDED</span><br/><small style="color:#fca5a5">${u.suspension_reason || 'Rule Violation'}</small>`
       : `<span class="pill-clean">ACTIVE</span>${u.role === 'contractor' ? `<br/><small>${u.lgu_peso_endorsed ? 'LGU Endorsed' : 'No LGU Endorsement'}</small>` : ''}`;
 
     const safeName = (u.full_name || '').replace(/'/g, "");
+    const isTargetSuper = u.role === 'super_admin';
+    const isTargetAdmin = u.role === 'admin';
+
+    // Role Hierarchy Enforcement in UI
+    const canResetPw = actorIsSuper || !isTargetSuper;
+    const canSuspend = !isTargetSuper && (actorIsSuper || !isTargetAdmin);
 
     return `
       <tr>
         <td>
-          <strong>${u.full_name}</strong><br/>
+          <strong>${u.full_name}</strong> <small style="color:var(--cyan-accent)">@${u.username || u.role}</small><br/>
           <span class="engine-tag">${u.role.toUpperCase()}</span>
         </td>
         <td>
@@ -381,17 +556,21 @@ function renderOperatorUsersTable() {
         <td>
           ${u.role === 'contractor'
             ? `Avail: <strong>PHP ${Number(u.credit_balance || 0).toFixed(2)}</strong><br/><small>Rate: ${commText}</small>`
-            : `<small style="color:var(--text-muted)">0% Booking Platform Fee</small>`}
+            : `<small style="color:var(--text-muted)">${commText}</small>`}
         </td>
         <td>${riskBadge}</td>
         <td>${statusHtml}</td>
         <td>
           <div class="action-cluster">
             <button class="btn-xs" onclick="openProfileInspector('${u.id}')">View Profile</button>
-            <button class="btn-xs" onclick="operatorResetPassword('${u.id}', '${safeName}')">Reset PW</button>
-            ${u.account_frozen
-              ? `<button class="btn-xs" style="border-color:var(--emerald-ok);color:var(--emerald-ok);" onclick="operatorToggleSuspension('${u.id}', false, '${safeName}')">Reinstate</button>`
-              : `<button class="btn-danger" onclick="operatorToggleSuspension('${u.id}', true, '${safeName}')">Suspend</button>`}
+            ${canResetPw
+              ? `<button class="btn-xs" onclick="operatorResetPassword('${u.id}', '${safeName}')">Reset PW</button>`
+              : `<span style="font-size:0.7rem;color:var(--text-muted)">SuperAdmin Locked</span>`}
+            ${canSuspend
+              ? (u.account_frozen
+                  ? `<button class="btn-xs" style="border-color:var(--emerald-ok);color:var(--emerald-ok);" onclick="operatorToggleSuspension('${u.id}', false, '${safeName}')">Reinstate</button>`
+                  : `<button class="btn-danger" onclick="operatorToggleSuspension('${u.id}', true, '${safeName}')">Suspend</button>`)
+              : ''}
           </div>
         </td>
       </tr>
@@ -400,10 +579,11 @@ function renderOperatorUsersTable() {
 }
 
 async function operatorResetPassword(userId, userName) {
+  if (!currentAuthUser) return;
   const newPw = prompt(`Enter new password for ${userName}:`, 'AlistoReset2026!');
   if (!newPw) return;
   const { error, data } = await supabaseClient.rpc('operator_reset_user_password_rpc', {
-    p_operator_id: SUPERADMIN_UUID,
+    p_operator_id: currentAuthUser.id,
     p_target_user_id: userId,
     p_new_password: newPw.trim()
   });
@@ -411,18 +591,19 @@ async function operatorResetPassword(userId, userName) {
     alert('Password Reset Error: ' + (error ? error.message : data.message));
     return;
   }
-  alert(`Password for ${userName} has been reset and logged in operator_audit_logs.`);
+  alert(`Password for ${userName} has been updated in public.user_credentials and logged.`);
   await syncFromSupabase();
 }
 
 async function operatorToggleSuspension(userId, suspend, userName) {
+  if (!currentAuthUser) return;
   let reason = 'Cleared by Admin Operator';
   if (suspend) {
     reason = prompt(`Enter official violation reason for suspending ${userName}:`, 'Off-platform side-deal solicitation / Safety rule violation');
     if (reason === null) return;
   }
   const { error, data } = await supabaseClient.rpc('operator_set_account_suspension_rpc', {
-    p_operator_id: SUPERADMIN_UUID,
+    p_operator_id: currentAuthUser.id,
     p_target_user_id: userId,
     p_suspend: suspend,
     p_reason: reason
@@ -496,7 +677,7 @@ function renderOperatorBookingsTable() {
 }
 
 // ============================================================================
-// FORENSIC BOOKING INVESTIGATION DOSSIER MODAL (TIMESTAMPS, CHAT, GPS, ACTIONS)
+// 4. FORENSIC BOOKING DOSSIER & PROFILE INSPECTOR MODALS
 // ============================================================================
 
 function openForensicDossier(bookingId) {
@@ -534,7 +715,7 @@ function openForensicDossier(bookingId) {
       `).join('');
 
   const gpsHtml = gps.length === 0
-    ? `<div style="color:var(--text-muted)">No GPS breadcrumbs logged yet. Click "+ Simulate GPS Ping" below to test Engine 05 telemetry trail.</div>`
+    ? `<div style="color:var(--text-muted)">No GPS breadcrumbs logged yet. Click "+ Record Test GPS Telemetry Ping" to test Engine 05 telemetry trail.</div>`
     : gps.map(g => `
         <div style="padding:0.35rem 0;border-bottom:1px solid var(--border-subtle);font-size:0.76rem;">
           <strong>${formatTs(g.recorded_at)}</strong> •
@@ -576,19 +757,19 @@ function openForensicDossier(bookingId) {
 
     <div class="forensic-grid">
       <div class="forensic-box">
-        <h4>3. Transactional In-App Chat History (\`booking_messages\`)</h4>
+        <h4>3. Transactional In-App Chat History (<code>booking_messages</code>)</h4>
         <div style="max-height:200px;overflow-y:auto;">${chatHtml}</div>
       </div>
 
       <div class="forensic-box">
-        <h4>4. Blocked Chat Violations (\`moderation_audit_logs\`)</h4>
+        <h4>4. Blocked Chat Violations (<code>moderation_audit_logs</code>)</h4>
         <div style="max-height:200px;overflow-y:auto;">${flagsHtml}</div>
       </div>
     </div>
 
     <div class="forensic-box">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
-        <h4>5. Location & Real-Time GPS Telemetry Breadcrumbs (\`booking_telemetry\`)</h4>
+        <h4>5. Location & Real-Time GPS Telemetry Breadcrumbs (<code>booking_telemetry</code>)</h4>
         <button class="btn-xs" onclick="simulateTelemetryPing('${b.id}', '${b.contractor_id || '33333333-3333-3333-3333-333333333333'}')">
           + Record Test GPS Telemetry Ping
         </button>
@@ -641,10 +822,6 @@ async function simulateTelemetryPing(bookingId, contractorId) {
   openForensicDossier(bookingId);
 }
 
-// ============================================================================
-// USER PROFILE & LEDGER INSPECTOR MODAL
-// ============================================================================
-
 function openProfileInspector(userId) {
   const u = getUserById(userId);
   if (!u) return;
@@ -654,7 +831,7 @@ function openProfileInspector(userId) {
   const userFlags = consoleState.moderationAuditLogs.filter(f => f.sender_id === u.id);
 
   document.getElementById('profileModalTitle').textContent =
-    `Account Profile Inspector • ${u.full_name} [${u.role.toUpperCase()}]`;
+    `Account Profile Inspector • ${u.full_name} (@${u.username || u.role}) [${u.role.toUpperCase()}]`;
 
   const bookingsRows = userBookings.length === 0
     ? `<div style="color:var(--text-muted)">No bookings associated with this account yet.</div>`
@@ -681,12 +858,13 @@ function openProfileInspector(userId) {
         <h4>Identity, Governance & Credentials</h4>
         <ul class="ts-list">
           <li><strong>Account UUID:</strong> <code>${u.id}</code></li>
+          <li><strong>Username:</strong> <code>@${u.username || '—'}</code></li>
           <li><strong>Full Name:</strong> ${u.full_name}</li>
           <li><strong>Role:</strong> ${u.role.toUpperCase()}</li>
           <li><strong>Phone / Email:</strong> ${u.phone} / ${u.email || '—'}</li>
           <li><strong>Barangay / Municipality:</strong> ${u.barangay_zone}, ${u.municipality}</li>
           <li><strong>KYC & LGU Status:</strong> KYC=${u.kyc_verified ? 'YES' : 'NO'} | LGU Endorsed=${u.lgu_peso_endorsed ? 'YES' : 'NO'}</li>
-          <li><strong>Last Password Update:</strong> ${formatTs(u.password_updated_at || u.created_at)}</li>
+          <li><strong>Last Login / PW Update:</strong> ${formatTs(u.last_login_at || u.password_updated_at || u.created_at)}</li>
         </ul>
       </div>
 
@@ -722,10 +900,12 @@ function closeProfileModal() {
 }
 
 // ============================================================================
-// SUPERADMIN & LGU VIEWS
+// 5. SUPERADMIN, LGU & SCOPED USER PORTAL RENDERERS
 // ============================================================================
 
 function renderSuperAdmin() {
+  if (!currentAuthUser || currentAuthUser.role !== 'super_admin') return;
+
   const list = document.getElementById('superAdminVerticalList');
   if (list) {
     list.innerHTML = consoleState.verticals.map(v => `
@@ -774,55 +954,61 @@ function renderSuperAdmin() {
 }
 
 async function toggleVertical(verticalKey) {
+  if (!currentAuthUser || currentAuthUser.role !== 'super_admin') {
+    alert('UNAUTHORIZED: Only SuperAdmin can toggle platform service verticals.');
+    return;
+  }
   const target = consoleState.verticals.find(v => v.vertical_key === verticalKey);
   if (!target) return;
   const nextState = !target.is_enabled;
   target.is_enabled = nextState;
   renderAll();
 
-  if (supabaseClient) {
-    const { error } = await supabaseClient.rpc('admin_toggle_service_vertical', {
-      p_admin_id: SUPERADMIN_UUID,
-      p_vertical_key: verticalKey,
-      p_is_enabled: nextState
-    });
-    if (error) alert('RPC Error: ' + error.message);
-    await syncFromSupabase();
+  const { data, error } = await supabaseClient.rpc('admin_toggle_service_vertical', {
+    p_admin_id: currentAuthUser.id,
+    p_vertical_key: verticalKey,
+    p_is_enabled: nextState
+  });
+  if (error || (data && data.status === 'ERROR')) {
+    alert('RPC Error: ' + (error ? error.message : data.message));
   }
+  await syncFromSupabase();
 }
 
 async function saveRuntimeConfig() {
+  if (!currentAuthUser) return;
   const comm = parseFloat(document.getElementById('cfgCommission').value) || 12;
   const mat = parseInt(document.getElementById('cfgMaturity').value, 10) || 72;
   const rateDecimal = (comm / 100.0).toFixed(4);
 
-  if (supabaseClient) {
-    const { error } = await supabaseClient.rpc('admin_update_system_config_rpc', {
-      p_commission_rate: String(rateDecimal),
-      p_maturity_hours: String(mat)
-    });
-    if (error) {
-      alert('RPC Error: ' + error.message);
-      return;
-    }
-    await syncFromSupabase();
+  const { data, error } = await supabaseClient.rpc('admin_update_system_config_rpc', {
+    p_commission_rate: String(rateDecimal),
+    p_maturity_hours: String(mat),
+    p_actor_id: currentAuthUser.id
+  });
+  if (error || (data && data.status === 'ERROR')) {
+    alert('RPC Error: ' + (error ? error.message : data.message));
+    return;
   }
+  await syncFromSupabase();
   alert(`Engine 10 Runtime Parameters Committed: Commission Hold = ${comm}%, Skills Board Maturity = ${mat} hours.`);
 }
 
 async function addModerationRule() {
+  if (!currentAuthUser || currentAuthUser.role !== 'super_admin') return;
   const ruleType = document.getElementById('newRuleType').value;
   const pattern = document.getElementById('newRulePattern').value.trim();
   if (!pattern || !supabaseClient) return;
 
-  const { error } = await supabaseClient.rpc('admin_manage_moderation_rule_rpc', {
+  const { data, error } = await supabaseClient.rpc('admin_manage_moderation_rule_rpc', {
     p_operation: 'ADD',
     p_rule_type: ruleType,
     p_pattern: pattern.toLowerCase(),
-    p_action_type: 'block'
+    p_action_type: 'block',
+    p_actor_id: currentAuthUser.id
   });
-  if (error) {
-    alert('RPC Error: ' + error.message);
+  if (error || (data && data.status === 'ERROR')) {
+    alert('RPC Error: ' + (error ? error.message : data.message));
     return;
   }
   document.getElementById('newRulePattern').value = '';
@@ -830,12 +1016,15 @@ async function addModerationRule() {
 }
 
 async function removeModerationRule(id) {
-  if (!supabaseClient) return;
-  const { error } = await supabaseClient.rpc('admin_manage_moderation_rule_rpc', {
+  if (!currentAuthUser || currentAuthUser.role !== 'super_admin') return;
+  const { data, error } = await supabaseClient.rpc('admin_manage_moderation_rule_rpc', {
     p_operation: 'DELETE',
-    p_rule_id: id
+    p_rule_id: id,
+    p_actor_id: currentAuthUser.id
   });
-  if (error) alert('RPC Error: ' + error.message);
+  if (error || (data && data.status === 'ERROR')) {
+    alert('RPC Error: ' + (error ? error.message : data.message));
+  }
   await syncFromSupabase();
 }
 
@@ -845,7 +1034,7 @@ function renderLguAdmin() {
   if (tbody) {
     tbody.innerHTML = contractors.map(c => `
       <tr>
-        <td><strong>${c.full_name}</strong></td>
+        <td><strong>${c.full_name}</strong> <small style="color:var(--cyan-accent)">@${c.username || 'contractor'}</small></td>
         <td>${c.barangay_zone}, ${c.municipality || 'Angeles City'}</td>
         <td>${(c.skill_categories || []).join(', ')} • <span class="engine-tag">Sub-400cc</span></td>
         <td>PHP ${Number(c.credit_balance || 0).toFixed(2)} (Held: PHP ${Number(c.held_credits || 0).toFixed(2)})</td>
@@ -866,7 +1055,7 @@ function renderLguAdmin() {
   const opBody = document.getElementById('operatorAuditLogsTable');
   if (opBody) {
     if (consoleState.operatorAuditLogs.length === 0) {
-      opBody.innerHTML = `<tr><td colspan="3" style="color:var(--text-muted)">No operator actions logged yet. Onboard a user, reset a password, or adjust a commission rate to populate the audit trail.</td></tr>`;
+      opBody.innerHTML = `<tr><td colspan="3" style="color:var(--text-muted)">No operator actions logged yet.</td></tr>`;
     } else {
       opBody.innerHTML = consoleState.operatorAuditLogs.map(l => `
         <tr>
@@ -879,8 +1068,28 @@ function renderLguAdmin() {
   }
 }
 
+function renderScopedAccountSummary() {
+  const card = document.getElementById('scopedAccountSummaryCard');
+  if (!card || !currentAuthUser) return;
+  const selfRecord = getUserById(currentAuthUser.id) || currentAuthUser;
+  const myBookings = consoleState.bookings.filter(b => b.client_id === selfRecord.id || b.contractor_id === selfRecord.id);
+
+  card.innerHTML = `
+    <div class="card-header">
+      <h2>Authenticated Account Session Profile • ${selfRecord.full_name} (@${selfRecord.username || selfRecord.role})</h2>
+      <span class="engine-tag">ROLE: ${selfRecord.role.toUpperCase()}</span>
+    </div>
+    <div style="font-size:0.83rem;color:var(--text-muted);display:flex;gap:1.5rem;flex-wrap:wrap;">
+      <div><strong>Phone:</strong> ${selfRecord.phone}</div>
+      <div><strong>Zone:</strong> ${selfRecord.barangay_zone}, ${selfRecord.municipality}</div>
+      ${selfRecord.role === 'contractor' ? `<div><strong>Prepaid Credits:</strong> <span style="color:var(--emerald-ok);font-weight:700;">PHP ${Number(selfRecord.credit_balance || 0).toFixed(2)}</span> (Held: PHP ${Number(selfRecord.held_credits || 0).toFixed(2)})</div>` : ''}
+      <div><strong>Associated Bookings:</strong> ${myBookings.length}</div>
+    </div>
+  `;
+}
+
 async function toggleContractorEndorsement(cId, nextEndorsed) {
-  if (!supabaseClient) return;
+  if (!supabaseClient || !currentAuthUser) return;
   const { error } = await supabaseClient.rpc('lgu_toggle_contractor_endorsement_rpc', {
     p_contractor_id: cId,
     p_lgu_endorsed: nextEndorsed
@@ -890,11 +1099,12 @@ async function toggleContractorEndorsement(cId, nextEndorsed) {
 }
 
 async function reverseBookingDispute(bookingId, bookingRef) {
+  if (!currentAuthUser) return;
   const reason = prompt(`Engine 09 Dispute Vault — Enter audit reason for reversing the commission hold on ${bookingRef}:`, 'Verified customer/contractor complaint resolution');
   if (!reason || !supabaseClient) return;
   const { error } = await supabaseClient.rpc('admin_resolve_dispute_reversal_rpc', {
     p_booking_id: bookingId,
-    p_admin_id: SUPERADMIN_UUID,
+    p_admin_id: currentAuthUser.id,
     p_resolution_notes: reason
   });
   if (error) alert('Dispute RPC Error: ' + error.message);
@@ -903,23 +1113,32 @@ async function reverseBookingDispute(bookingId, bookingRef) {
 }
 
 function renderAll() {
+  if (!currentAuthUser) return;
   renderVerticalStrip();
-  renderOperatorKpis();
-  renderOperatorContractorCommissionTable();
-  renderOperatorUsersTable();
-  renderOperatorBookingsTable();
-  renderSuperAdmin();
-  renderLguAdmin();
+  if (['super_admin', 'admin'].includes(currentAuthUser.role)) {
+    renderOperatorKpis();
+    renderOperatorContractorCommissionTable();
+    renderOperatorUsersTable();
+    renderOperatorBookingsTable();
+    renderLguAdmin();
+  }
+  if (currentAuthUser.role === 'super_admin') {
+    renderSuperAdmin();
+  }
+  renderScopedAccountSummary();
 }
 
 window.addEventListener('DOMContentLoaded', async () => {
   if (window.supabase) {
     supabaseClient = window.supabase.createClient(_K_U, _K_A);
-    const badge = document.getElementById('kernelConnectionBadge');
-    if (badge) badge.textContent = 'KERNEL: SUPABASE LIVE (fmjjyhmtdsvhufkgyjpr)';
-    await syncFromSupabase();
-    subscribeRealtimeKernel();
-  } else {
-    renderAll();
+  }
+  const savedSession = sessionStorage.getItem(SESSION_STORAGE_KEY);
+  if (savedSession) {
+    try {
+      currentAuthUser = JSON.parse(savedSession);
+      await unlockConsoleForAuthenticatedUser();
+    } catch (_e) {
+      sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    }
   }
 });
