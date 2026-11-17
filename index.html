@@ -9,18 +9,70 @@
 </head>
 <body>
   <header class="topbar">
+    <!-- LEFT: ALISTO NETWORK PH (COMPANY ANIMATED LOGO) -->
     <div class="brand-cluster">
-      <div class="shield-emblem" title="Alisto Network PH Shield Emblem">
-        <span class="shield-core">A</span>
+      <div class="company-logo-wrap" title="Alisto Network PH — Official Corporate Emblem">
+        <svg class="company-svg" viewBox="0 0 660 160" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="cyanBorderDark" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#00f2fe"/>
+              <stop offset="100%" stop-color="#0284c7"/>
+            </linearGradient>
+            <linearGradient id="shieldFacetLeftDark" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#0284c7"/>
+              <stop offset="100%" stop-color="#0369a1"/>
+            </linearGradient>
+            <linearGradient id="shieldFacetRightDark" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#38bdf8"/>
+              <stop offset="100%" stop-color="#0284c7"/>
+            </linearGradient>
+            <radialGradient id="amberGlowDark" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#fbbf24" stop-opacity="1"/>
+              <stop offset="70%" stop-color="#f59e0b" stop-opacity="0.7"/>
+              <stop offset="100%" stop-color="#f59e0b" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <g id="shield-logo" transform="translate(20, 10)">
+            <path d="M 65 5 L 122 30 L 108 114 L 65 142 L 22 114 L 8 30 Z"
+                  fill="#090d16" stroke="url(#cyanBorderDark)" stroke-width="4.5" stroke-linejoin="round"/>
+            <path d="M 65 10 L 65 136 L 24 110 L 12 32 Z" fill="url(#shieldFacetLeftDark)" opacity="0.95"/>
+            <path d="M 65 10 L 118 32 L 106 110 L 65 136 Z" fill="url(#shieldFacetRightDark)" opacity="0.95"/>
+            <circle class="anim-amber" cx="65" cy="76" r="20" fill="url(#amberGlowDark)"/>
+            <polygon class="anim-amber" points="65,60 74,78 56,78" fill="#fbbf24"/>
+            <path d="M 65 22 L 98 116 L 82 116 L 65 72 L 48 116 L 32 116 Z" fill="#070a12" stroke="#00f2fe" stroke-width="1.5"/>
+            <line x1="42" y1="82" x2="88" y2="82" stroke="#00f2fe" stroke-width="3.5" stroke-linecap="round"/>
+            <circle class="anim-node-left" cx="42" cy="82" r="4.5" fill="#00f2fe"/>
+            <circle class="anim-node-right" cx="88" cy="82" r="4.5" fill="#00f2fe"/>
+          </g>
+          <g id="brand-text" transform="translate(-35, 0)">
+            <text x="220" y="73" font-family="'Orbitron', sans-serif" font-weight="900" font-size="50" fill="#ffffff" letter-spacing="3.5">ALISTO</text>
+            <rect x="220" y="87" width="285" height="3.5" fill="#1e293b" rx="1.75"/>
+            <rect class="anim-sweep" x="220" y="87" width="60" height="3.5" fill="#00f2fe" rx="1.75"/>
+            <text x="220" y="121" font-family="'Rajdhani', sans-serif" font-weight="900" font-size="27.5" fill="#38bdf8" letter-spacing="9">NETWORK PH</text>
+          </g>
+        </svg>
       </div>
+      <div class="header-divider"></div>
       <div>
-        <div class="brand-title">ALISTO NETWORK PH <span class="badge-kernel">SUPERADMIN & LGU KERNEL</span></div>
-        <div class="brand-sub">Project Nexus • Angeles City & Magalang, Pampanga (Region III) • 10-Engine Micro-Kernel</div>
+        <div class="brand-title">MASTER COMMAND CONSOLE <span class="badge-kernel">10-ENGINE MICRO-KERNEL</span></div>
+        <div class="brand-sub">Founder, Chief Systems Architect & Full-Lifecycle Architect: <strong>D. A. Cortez</strong> • Angeles City & Magalang (Region III)</div>
       </div>
     </div>
-    <div class="architect-meta">
-      <div>Founder, Chief Systems Architect & Full-Lifecycle Architect: <strong>D. A. Cortez</strong></div>
-      <div id="kernelConnectionBadge" class="conn-pill">KERNEL: CONNECTING...</div>
+
+    <!-- RIGHT: ALISTO APP CONCEPT LOGO (PROJECT NEXUS) + CONNECTION STATUS -->
+    <div class="nexus-cluster">
+      <div class="architect-meta">
+        <div style="font-weight:700;color:#fbbf24;letter-spacing:0.05em;">ALISTO APPS (PROJECT NEXUS)</div>
+        <div id="kernelConnectionBadge" class="conn-pill">KERNEL: CONNECTING...</div>
+      </div>
+      <div class="app-logo-badge" title="Alisto Concept Logo (Project Nexus) — Customer & Contractor Apps">
+        <svg class="nexus-pin-svg" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
+          <circle class="pulse-ring ring-1" cx="200" cy="200" r="10" />
+          <circle class="pulse-ring ring-2" cx="200" cy="200" r="10" />
+          <path class="a-stroke" d="M 100 100 L 300 100 L 200 320 Z M 150 180 L 250 180" />
+          <text x="200" y="385" text-anchor="middle" font-size="52" letter-spacing="8" class="nexus-text-color">ALISTO</text>
+        </svg>
+      </div>
     </div>
   </header>
 
@@ -187,10 +239,23 @@
             <h2>1. Alisto App — Customer APK (`alisto-customer.apk`)</h2>
             <span class="engine-tag">:app-customer (ph.alisto.customer)</span>
           </div>
-          <p class="muted-note">
-            Native Android Kotlin application for households and businesses in Angeles City & Magalang, Pampanga.
-          </p>
-          <ul style="font-size:0.84rem;color:var(--text-main);padding-left:1.2rem;line-height:1.8;margin-bottom:1.2rem;">
+          <div class="apk-hero-row">
+            <div class="apk-logo-showcase">
+              <svg viewBox="0 0 400 400" width="96" height="96">
+                <circle class="pulse-ring ring-1" cx="200" cy="200" r="10" />
+                <circle class="pulse-ring ring-2" cx="200" cy="200" r="10" />
+                <path class="a-stroke" d="M 100 100 L 300 100 L 200 320 Z M 150 180 L 250 180" />
+                <text x="200" y="385" text-anchor="middle" font-size="52" letter-spacing="8" class="nexus-text-color">ALISTO</text>
+              </svg>
+            </div>
+            <div>
+              <p class="muted-note" style="margin-bottom:0.4rem;">
+                <strong>Alisto Concept Logo (Project Nexus)</strong> embedded as native Android launcher icon & animated header, powered by <strong>Alisto Network PH</strong>.
+              </p>
+              <small style="color:var(--cyan-accent)">Target: Households & Businesses in Angeles City & Magalang, Pampanga</small>
+            </div>
+          </div>
+          <ul style="font-size:0.84rem;color:var(--text-main);padding-left:1.2rem;line-height:1.8;margin:1rem 0 1.2rem;">
             <li><strong>Live Engine 10 Vertical Sync:</strong> Unlocks <em>On-Demand Skills Marketplace</em> for Phase 1 while dynamically locking or unlocking <em>Delivery</em> and <em>Ride-Hailing</em> whenever toggled by SuperAdmin.</li>
             <li><strong>Barangay Dispatch & Tipping:</strong> Dispatches jobs via <code>create_booking_rpc</code> with 0%-commission optional client tips.</li>
             <li><strong>Moderated In-App Chat:</strong> RLS-protected chat bound to active booking states with automatic side-deal blocking.</li>
@@ -205,10 +270,23 @@
             <h2>2. Alisto Contractor App — Technician & Operator APK (`alisto-contractor.apk`)</h2>
             <span class="engine-tag">:app-contractor (ph.alisto.contractor)</span>
           </div>
-          <p class="muted-note">
-            Native Android Kotlin application for LGU/PESO-endorsed skilled technicians and sub-400cc transit operators.
-          </p>
-          <ul style="font-size:0.84rem;color:var(--text-main);padding-left:1.2rem;line-height:1.8;margin-bottom:1.2rem;">
+          <div class="apk-hero-row">
+            <div class="apk-logo-showcase">
+              <svg viewBox="0 0 400 400" width="96" height="96">
+                <circle class="pulse-ring ring-1" cx="200" cy="200" r="10" />
+                <circle class="pulse-ring ring-2" cx="200" cy="200" r="10" />
+                <path class="a-stroke" d="M 100 100 L 300 100 L 200 320 Z M 150 180 L 250 180" />
+                <text x="200" y="385" text-anchor="middle" font-size="52" letter-spacing="8" class="nexus-text-color">ALISTO</text>
+              </svg>
+            </div>
+            <div>
+              <p class="muted-note" style="margin-bottom:0.4rem;">
+                <strong>Alisto Concept Logo (Project Nexus)</strong> with contractor badge & <strong>Alisto Network PH</strong> corporate shield seal.
+              </p>
+              <small style="color:var(--amber-core)">Target: LGU/PESO Skilled Technicians & Sub-400cc Transit Operators</small>
+            </div>
+          </div>
+          <ul style="font-size:0.84rem;color:var(--text-main);padding-left:1.2rem;line-height:1.8;margin:1rem 0 1.2rem;">
             <li><strong>Engine 01 KYC & LGU/PESO Guard:</strong> Enforces barangay KYC and PESO endorsement verification before job acceptance.</li>
             <li><strong>Engine 03 Closed-Loop Credit Wallet:</strong> Tracks non-withdrawable Prepaid Service Credits, PayMongo QR Ph top-ups, and atomic <strong>12% commission holds</strong>.</li>
             <li><strong>Engine 04 & 05 Dispatch + Sub-400cc Routing:</strong> Barangay Job Board (48–72h maturity) for Phase 1 + expanding radius loop for Region III transit.</li>
