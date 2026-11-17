@@ -32,6 +32,18 @@ async function syncFromSupabase() {
     const { data: vData } = await supabaseClient.from('service_verticals').select('*').order('vertical_key');
     if (vData) consoleState.verticals = vData;
 
+    const { data: cfgData } = await supabaseClient.from('system_config').select('*');
+    if (cfgData) {
+      const commRow = cfgData.find(c => c.config_key === 'platform_commission_rate');
+      const matRow = cfgData.find(c => c.config_key === 'skills_maturity_window_hours');
+      if (commRow && document.getElementById('cfgCommission')) {
+        document.getElementById('cfgCommission').value = Math.round( parseFloat(commRow.config_value) * 100 );
+      }
+      if (matRow && document.getElementById('cfgMaturity')) {
+        document.getElementById('cfgMaturity').value = parseInt(matRow.config_value, 10);
+      }
+    }
+
     const { data: rData } = await supabaseClient.from('moderation_rules').select('*').order('created_at');
     if (rData) consoleState.moderationRules = rData;
 
@@ -55,6 +67,7 @@ function subscribeRealtimeKernel() {
     .channel('alisto-superadmin-live')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'service_verticals' }, () => syncFromSupabase())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, () => syncFromSupabase())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'moderation_rules' }, () => syncFromSupabase())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'moderation_audit_logs' }, () => syncFromSupabase())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => syncFromSupabase())
     .subscribe();
@@ -133,36 +146,63 @@ async function toggleVertical(verticalKey) {
       p_vertical_key: verticalKey,
       p_is_enabled: nextState
     });
-    if (error) {
-      alert('RPC Error: ' + error.message);
-    }
+    if (error) alert('RPC Error: ' + error.message);
     await syncFromSupabase();
   }
 }
 
-function saveRuntimeConfig() {
+async function saveRuntimeConfig() {
   const comm = parseFloat(document.getElementById('cfgCommission').value) || 12;
   const mat = parseInt(document.getElementById('cfgMaturity').value, 10) || 72;
-  alert(`Engine 10 Runtime Parameters Synchronized: Commission Hold = ${comm}%, Skills Board Maturity = ${mat} hours.`);
+  const rateDecimal = (comm / 100.0).toFixed(2);
+
+  if (supabaseClient) {
+    const { error } = await supabaseClient.rpc('admin_update_system_config_rpc', {
+      p_commission_rate: String(rateDecimal),
+      p_maturity_hours: String(mat)
+    });
+    if (error) {
+      alert('Run 02_alisto_admin_rpcs.sql in Supabase SQL Editor to persist config: ' + error.message);
+      return;
+    }
+    await syncFromSupabase();
+  }
+  alert(`Engine 10 Runtime Parameters Committed to PostgreSQL: Commission Hold = ${comm}%, Skills Board Maturity = ${mat} hours.`);
 }
 
-function addModerationRule() {
+async function addModerationRule() {
   const ruleType = document.getElementById('newRuleType').value;
   const pattern = document.getElementById('newRulePattern').value.trim();
   if (!pattern) return;
-  consoleState.moderationRules.push({
-    id: 'r_' + Date.now(),
-    rule_type: ruleType,
-    pattern_or_word: pattern.toLowerCase(),
-    action_type: 'block'
-  });
-  document.getElementById('newRulePattern').value = '';
-  renderSuperAdmin();
+
+  if (supabaseClient) {
+    const { error } = await supabaseClient.rpc('admin_manage_moderation_rule_rpc', {
+      p_operation: 'ADD',
+      p_rule_type: ruleType,
+      p_pattern: pattern.toLowerCase(),
+      p_action_type: 'block'
+    });
+    if (error) {
+      alert('RPC Error: ' + error.message);
+      return;
+    }
+    document.getElementById('newRulePattern').value = '';
+    await syncFromSupabase();
+  }
 }
 
-function removeModerationRule(id) {
-  consoleState.moderationRules = consoleState.moderationRules.filter(r => r.id !== id);
-  renderSuperAdmin();
+async function removeModerationRule(id) {
+  if (supabaseClient) {
+    const { error } = await supabaseClient.rpc('admin_manage_moderation_rule_rpc', {
+      p_operation: 'DELETE',
+      p_rule_id: id
+    });
+    if (error) {
+      alert('RPC Error: ' + error.message);
+      return;
+    }
+    await syncFromSupabase();
+  }
 }
 
 function renderLguAdmin() {
@@ -180,7 +220,7 @@ function renderLguAdmin() {
           </span>
         </td>
         <td>
-          <button class="btn-outline" onclick="toggleContractorEndorsement('${c.id}')">
+          <button class="btn-outline" onclick="toggleContractorEndorsement('${c.id}', ${!c.lgu_peso_endorsed})">
             ${c.lgu_peso_endorsed ? 'Suspend Endorsement' : 'Grant Endorsement'}
           </button>
         </td>
@@ -196,36 +236,41 @@ function renderLguAdmin() {
         <td><code>${b.vertical_key}</code></td>
         <td>${b.barangay_zone}, ${b.municipality || 'Angeles City'}</td>
         <td>PHP ${Number(b.quoted_fee).toFixed(2)} (+${Number(b.tip_amount || 0).toFixed(2)} tip)</td>
-        <td>PHP ${Number(b.commission_locked || (b.quoted_fee * 0.12)).toFixed(2)}</td>
+        <td>PHP ${Number(b.commission_locked || 0).toFixed(2)}</td>
         <td><span class="engine-tag">${b.status}</span></td>
+        <td>
+          ${Number(b.commission_locked || 0) > 0 && b.status !== 'COMPLETED' && b.status !== 'CANCELLED'
+            ? `<button class="btn-danger" onclick="reverseBookingDispute('${b.id}', '${b.booking_ref}')">Reverse 12% Hold</button>`
+            : `<span style="color:var(--text-muted);font-size:0.75rem;">No Active Hold</span>`}
+        </td>
       </tr>
     `).join('');
   }
 }
 
-function toggleContractorEndorsement(cId) {
-  const c = consoleState.contractors.find(x => x.id === cId);
-  if (!c) return;
-  c.lgu_peso_endorsed = !c.lgu_peso_endorsed;
-  renderAll();
-}
-
-function toggleSupabaseModal() {
-  const m = document.getElementById('supabaseModal');
-  if (m) m.style.display = m.style.display === 'none' ? 'flex' : 'none';
-}
-
-async function connectSupabaseKernel() {
-  const url = document.getElementById('sbUrlInput').value.trim() || _K_U;
-  const key = document.getElementById('sbKeyInput').value.trim() || _K_A;
-  const badge = document.getElementById('kernelConnectionBadge');
-  if (url && key && window.supabase) {
-    supabaseClient = window.supabase.createClient(url, key);
-    if (badge) badge.textContent = 'KERNEL: SUPABASE LIVE (fmjjyhmtdsvhufkgyjpr)';
+async function toggleContractorEndorsement(cId, nextEndorsed) {
+  if (supabaseClient) {
+    const { error } = await supabaseClient.rpc('lgu_toggle_contractor_endorsement_rpc', {
+      p_contractor_id: cId,
+      p_lgu_endorsed: nextEndorsed
+    });
+    if (error) alert('RPC Error: ' + error.message);
     await syncFromSupabase();
-    subscribeRealtimeKernel();
   }
-  toggleSupabaseModal();
+}
+
+async function reverseBookingDispute(bookingId, bookingRef) {
+  const reason = prompt(`Engine 09 Dispute Vault — Enter audit reason for reversing the 12% commission hold on ${bookingRef}:`, 'Client/Contractor verified cancellation');
+  if (!reason) return;
+  if (supabaseClient) {
+    const { error } = await supabaseClient.rpc('admin_resolve_dispute_reversal_rpc', {
+      p_booking_id: bookingId,
+      p_admin_id: SUPERADMIN_UUID,
+      p_resolution_notes: reason
+    });
+    if (error) alert('Dispute RPC Error: ' + error.message);
+    await syncFromSupabase();
+  }
 }
 
 function renderAll() {

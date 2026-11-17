@@ -15,29 +15,29 @@
       </div>
       <div>
         <div class="brand-title">ALISTO NETWORK PH <span class="badge-kernel">SUPERADMIN & LGU KERNEL</span></div>
-        <div class="brand-sub">Project Nexus • Angeles City & Magalang, Pampanga (Region III) • Native Kotlin APK Ecosystem</div>
+        <div class="brand-sub">Project Nexus • Angeles City & Magalang, Pampanga (Region III) • 10-Engine Micro-Kernel</div>
       </div>
     </div>
     <div class="architect-meta">
       <div>Founder, Chief Systems Architect & Full-Lifecycle Architect: <strong>D. A. Cortez</strong></div>
-      <div id="kernelConnectionBadge" class="conn-pill">KERNEL: READY</div>
+      <div id="kernelConnectionBadge" class="conn-pill">KERNEL: CONNECTING...</div>
     </div>
   </header>
 
   <section class="role-bar">
     <div class="role-tabs">
       <button class="role-tab active" data-view="superadmin" onclick="switchConsoleView('superadmin')">
-        SUPERADMIN CONSOLE (Service Penetration Toggles & Chat Moderation)
+        SUPERADMIN CONSOLE (Service Penetration & Chat Moderation)
       </button>
       <button class="role-tab" data-view="lgu_admin" onclick="switchConsoleView('lgu_admin')">
-        LGU / PESO COORDINATOR (KYC, Engine 08 History & Engine 09 Disputes)
+        LGU / PESO & ENGINE 09 DISPUTE VAULT
       </button>
       <button class="role-tab" data-view="apk_portal" onclick="switchConsoleView('apk_portal')">
-        NATIVE ANDROID KOTLIN APKs (Customer & Contractor Apps)
+        NATIVE ANDROID KOTLIN APKs (Download Portal)
       </button>
     </div>
     <div class="db-config-bar">
-      <button class="btn-outline" onclick="toggleSupabaseModal()">Bind Supabase URL / Key</button>
+      <button class="btn-outline" onclick="syncFromSupabase()">Refresh Live Kernel</button>
     </div>
   </section>
 
@@ -54,14 +54,14 @@
             <span class="engine-tag">ENGINE 02 + ENGINE 10</span>
           </div>
           <p class="muted-note">
-            Toggle any of the 3 core verticals ON or OFF in real time. Native Android Kotlin clients (<code>alisto-customer.apk</code> & <code>alisto-contractor.apk</code>) read this table directly to unlock or lock services without app binary updates.
+            Toggle any of the 3 core verticals ON or OFF in real time. Both Native Android Kotlin apps (<code>alisto-customer.apk</code> & <code>alisto-contractor.apk</code>) sync with this table directly via Supabase.
           </p>
           <div id="superAdminVerticalList" class="vertical-toggle-list"></div>
         </div>
 
         <div class="card">
           <div class="card-header">
-            <h2>Engine 10: Runtime Micro-Kernel Parameters</h2>
+            <h2>Engine 10: Runtime Micro-Kernel Parameters (`system_config`)</h2>
             <span class="engine-tag">DYNAMIC KV STORE</span>
           </div>
           <div class="param-grid">
@@ -81,7 +81,7 @@
               <small>Engine 04 + Engine 05 road-network dispatch loop for Delivery & Ride-Hailing.</small>
             </div>
           </div>
-          <button class="btn-primary" onclick="saveRuntimeConfig()">Commit Runtime Parameters</button>
+          <button class="btn-primary" onclick="saveRuntimeConfig()">Commit Runtime Parameters to PostgreSQL</button>
         </div>
       </div>
 
@@ -121,8 +121,8 @@
             <thead>
               <tr>
                 <th>Timestamp</th>
-                <th>Booking Ref</th>
-                <th>Sender</th>
+                <th>Booking ID</th>
+                <th>Sender ID</th>
                 <th>Flagged Message</th>
                 <th>Matched Rule</th>
               </tr>
@@ -133,7 +133,7 @@
       </div>
     </section>
 
-    <!-- 2. LGU / PESO ADMIN VIEW -->
+    <!-- 2. LGU / PESO ADMIN & ENGINE 09 DISPUTE VIEW -->
     <section id="view-lgu_admin" class="role-view">
       <div class="grid-2">
         <div class="card">
@@ -158,8 +158,8 @@
 
         <div class="card">
           <div class="card-header">
-            <h2>Engine 08: Partitioned Booking History & LGU Compliance Archive</h2>
-            <span class="engine-tag">WISDOM LAYER</span>
+            <h2>Engine 02, 08 & 09: Live Bookings & Verified Credit Reversal</h2>
+            <span class="engine-tag">STATE & DISPUTE KERNEL</span>
           </div>
           <table class="data-table">
             <thead>
@@ -170,6 +170,7 @@
                 <th>Quoted Fee / Tip</th>
                 <th>12% Hold</th>
                 <th>Status</th>
+                <th>Engine 09 Action</th>
               </tr>
             </thead>
             <tbody id="liveBookingsTable"></tbody>
@@ -178,57 +179,47 @@
       </div>
     </section>
 
-    <!-- 3. NATIVE ANDROID KOTLIN APK ARCHITECTURE VIEW -->
+    <!-- 3. NATIVE ANDROID KOTLIN APK DOWNLOAD PORTAL -->
     <section id="view-apk_portal" class="role-view">
       <div class="grid-2">
         <div class="card">
           <div class="card-header">
-            <h2>1. Alisto App — Native Android Kotlin (`alisto-customer.apk`)</h2>
+            <h2>1. Alisto App — Customer APK (`alisto-customer.apk`)</h2>
             <span class="engine-tag">:app-customer (ph.alisto.customer)</span>
           </div>
           <p class="muted-note">
-            Dedicated native Android Kotlin application for households and businesses in Angeles City & Magalang, Pampanga.
+            Native Android Kotlin application for households and businesses in Angeles City & Magalang, Pampanga.
           </p>
-          <ul style="font-size:0.84rem;color:var(--text-main);padding-left:1.2rem;line-height:1.8;">
-            <li><strong>Dynamic Vertical Unlocking:</strong> Queries <code>public.service_verticals</code> on launch so Phase 1 <em>On-Demand Skills Marketplace</em> is active while <em>Delivery</em> and <em>Ride-Hailing</em> unlock automatically when toggled in the SuperAdmin Console.</li>
-            <li><strong>RPC State Dispatcher:</strong> Dispatches bookings via <code>public.create_booking_rpc</code> with barangay indexing and optional 0%-commission client tips.</li>
-            <li><strong>RLS-Protected In-App Chat:</strong> Native booking chat bound to active states (<code>ACCEPTED</code>, <code>ARRIVED</code>, <code>IN_PROGRESS</code>) with anti-circumvention filter enforcement.</li>
+          <ul style="font-size:0.84rem;color:var(--text-main);padding-left:1.2rem;line-height:1.8;margin-bottom:1.2rem;">
+            <li><strong>Live Engine 10 Vertical Sync:</strong> Unlocks <em>On-Demand Skills Marketplace</em> for Phase 1 while dynamically locking or unlocking <em>Delivery</em> and <em>Ride-Hailing</em> whenever toggled by SuperAdmin.</li>
+            <li><strong>Barangay Dispatch & Tipping:</strong> Dispatches jobs via <code>create_booking_rpc</code> with 0%-commission optional client tips.</li>
+            <li><strong>Moderated In-App Chat:</strong> RLS-protected chat bound to active booking states with automatic side-deal blocking.</li>
           </ul>
+          <a href="alisto-customer.apk" download class="btn-primary" style="display:inline-block;text-decoration:none;">
+            Download alisto-customer.apk (Native Android Kotlin)
+          </a>
         </div>
 
         <div class="card">
           <div class="card-header">
-            <h2>2. Alisto Contractor App — Native Android Kotlin (`alisto-contractor.apk`)</h2>
+            <h2>2. Alisto Contractor App — Technician & Operator APK (`alisto-contractor.apk`)</h2>
             <span class="engine-tag">:app-contractor (ph.alisto.contractor)</span>
           </div>
           <p class="muted-note">
-            Dedicated native Android Kotlin application for LGU/PESO-endorsed skilled technicians and sub-400cc transit operators.
+            Native Android Kotlin application for LGU/PESO-endorsed skilled technicians and sub-400cc transit operators.
           </p>
-          <ul style="font-size:0.84rem;color:var(--text-main);padding-left:1.2rem;line-height:1.8;">
-            <li><strong>Engine 01 KYC & LGU/PESO Guard:</strong> Verifies barangay clearance and PESO endorsement status before permitting job claims.</li>
-            <li><strong>Engine 03 Prepaid Credit Wallet:</strong> Displays non-withdrawable Prepaid Service Credits, PayMongo QR Ph top-up flow, and automatic <strong>12% commission hold</strong> locking upon job claim.</li>
-            <li><strong>Engine 04 & 05 Dispatch + Sub-400cc Routing:</strong> Manual Barangay Job Board (48–72h maturity) for Phase 1 Skills + +500m/1-min expanding radius loop enforcing Region III non-expressway rules.</li>
+          <ul style="font-size:0.84rem;color:var(--text-main);padding-left:1.2rem;line-height:1.8;margin-bottom:1.2rem;">
+            <li><strong>Engine 01 KYC & LGU/PESO Guard:</strong> Enforces barangay KYC and PESO endorsement verification before job acceptance.</li>
+            <li><strong>Engine 03 Closed-Loop Credit Wallet:</strong> Tracks non-withdrawable Prepaid Service Credits, PayMongo QR Ph top-ups, and atomic <strong>12% commission holds</strong>.</li>
+            <li><strong>Engine 04 & 05 Dispatch + Sub-400cc Routing:</strong> Barangay Job Board (48–72h maturity) for Phase 1 + expanding radius loop for Region III transit.</li>
           </ul>
+          <a href="alisto-contractor.apk" download class="btn-primary" style="display:inline-block;text-decoration:none;">
+            Download alisto-contractor.apk (Native Android Kotlin)
+          </a>
         </div>
       </div>
     </section>
   </main>
-
-  <!-- SUPABASE CONNECTION MODAL -->
-  <div id="supabaseModal" class="modal-backdrop" style="display:none;">
-    <div class="modal-panel">
-      <h3>Bind Live Supabase Micro-Kernel</h3>
-      <p class="muted-note">Paste your Supabase Project URL and Anon Key to connect the SuperAdmin Console directly to your live PostgreSQL kernel.</p>
-      <label>Supabase Project URL</label>
-      <input type="text" id="sbUrlInput" placeholder="https://your-project.supabase.co" />
-      <label>Supabase Anon Key</label>
-      <input type="password" id="sbKeyInput" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..." />
-      <div class="modal-actions">
-        <button class="btn-outline" onclick="toggleSupabaseModal()">Cancel</button>
-        <button class="btn-primary" onclick="connectSupabaseKernel()">Save & Sync Kernel</button>
-      </div>
-    </div>
-  </div>
 
   <script src="app.js"></script>
 </body>
