@@ -1,0 +1,39 @@
+name: Build Alisto Native Android Kotlin APKs
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-apks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Assemble Alisto Customer APK & Alisto Contractor APK
+        working-directory: ./android-alisto
+        run: |
+          gradle :app-customer:assembleDebug :app-contractor:assembleDebug --no-daemon
+
+      - name: Copy Compiled APKs to Artifact Staging
+        run: |
+          mkdir -p dist-apks
+          cp android-alisto/app-customer/build/outputs/apk/debug/app-customer-debug.apk dist-apks/alisto-customer.apk
+          cp android-alisto/app-contractor/build/outputs/apk/debug/app-contractor-debug.apk dist-apks/alisto-contractor.apk
+
+      - name: Upload Native Android APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: alisto-native-android-apks
+          path: dist-apks/*.apk
