@@ -3,11 +3,13 @@ package ph.alisto.contractor
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
+import android.text.InputType
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.*
+import ph.alisto.kernel.AlistoBrandHeaderView
 import ph.alisto.kernel.AlistoKernelClient
 import ph.alisto.kernel.BookingRecord
 
@@ -15,51 +17,147 @@ class ContractorMainActivity : AppCompatActivity() {
 
     private val uiScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    private lateinit var walletSummaryText: TextView
-    private lateinit var kycBadgeText: TextView
-    private lateinit var dispatchListLayout: LinearLayout
-    private lateinit var ledgerListLayout: LinearLayout
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (AlistoKernelClient.currentSessionUser == null) {
+            showLoginGate()
+        } else {
+            showAuthenticatedContractorPortal()
+        }
+    }
 
-        val rootScroll = ScrollView(this).apply {
-            setBackgroundColor(Color.parseColor("#070D19"))
+    private fun showLoginGate() {
+        val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor("#070A12")) }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(42, 64, 42, 64)
         }
 
+        container.addView(
+            AlistoBrandHeaderView(
+                this,
+                "ALISTO CONTRACTOR",
+                "Engine 01 Technician & Operator Login Gate"
+            ).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(0, 0, 0, 32) }
+            }
+        )
+
+        val idInput = styledInput("Username, Mobile Phone (+63...), or Email")
+        container.addView(labeledField("Contractor Login Identifier (public.users)", idInput))
+
+        val pwInput = styledInput("Password").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        container.addView(labeledField("Account Password", pwInput))
+
+        val loginBtn = Button(this).apply {
+            text = "SIGN IN TO ALISTO CONTRACTOR APP"
+            setBackgroundColor(Color.parseColor("#FBBF24"))
+            setTextColor(Color.parseColor("#070A12"))
+            setTypeface(null, Typeface.BOLD)
+            setOnClickListener {
+                val idStr = idInput.text.toString()
+                val pwStr = pwInput.text.toString()
+                isEnabled = false
+                text = "VERIFYING CONTRACTOR CREDENTIALS..."
+                uiScope.launch {
+                    val res = AlistoKernelClient.authenticateUserRpc(idStr, pwStr, "contractor")
+                    isEnabled = true
+                    text = "SIGN IN TO ALISTO CONTRACTOR APP"
+                    res.onSuccess {
+                        showAuthenticatedContractorPortal()
+                    }.onFailure { err ->
+                        AlertDialog.Builder(this@ContractorMainActivity)
+                            .setTitle("Authentication Denied")
+                            .setMessage(err.message)
+                            .setPositiveButton("OK", null)
+                            .show()
+                    }
+                }
+            }
+        }
+        container.addView(loginBtn)
+
+        scroll.addView(container)
+        setContentView(scroll)
+    }
+
+    private fun showAuthenticatedContractorPortal() {
+        val user = AlistoKernelClient.currentSessionUser ?: return showLoginGate()
+
+        val rootScroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor("#070D19")) }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(36, 42, 36, 64)
         }
 
-        container.addView(TextView(this).apply {
-            text = "ALISTO CONTRACTOR APP"
-            setTextColor(Color.parseColor("#FFB300"))
-            textSize = 20f
-            setTypeface(null, Typeface.BOLD)
-        })
-        container.addView(TextView(this).apply {
-            text = "Alisto Network PH • LGU/PESO Technician & Sub-400cc Operator Console\nArchitect: D. A. Cortez"
-            setTextColor(Color.parseColor("#94A3B8"))
-            textSize = 12f
-            setPadding(0, 4, 0, 16)
-        })
+        container.addView(
+            AlistoBrandHeaderView(
+                this,
+                "ALISTO CONTRACTOR",
+                "${user.fullName} (@${user.username})"
+            ).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(0, 0, 0, 16) }
+            }
+        )
 
-        kycBadgeText = TextView(this).apply {
+        val sessionBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, 16)
+            addView(Button(this@ContractorMainActivity).apply {
+                text = "Sync Dispatch & Wallet"
+                setBackgroundColor(Color.parseColor("#1E293B"))
+                setTextColor(Color.WHITE)
+                setOnClickListener {
+                    uiScope.launch {
+                        AlistoKernelClient.syncBookingsAndWallet()
+                        showAuthenticatedContractorPortal()
+                    }
+                }
+            })
+            addView(Button(this@ContractorMainActivity).apply {
+                text = "Sign Out"
+                setBackgroundColor(Color.parseColor("#7F1D1D"))
+                setTextColor(Color.WHITE)
+                setOnClickListener {
+                    AlistoKernelClient.signOut()
+                    showLoginGate()
+                }
+            })
+        }
+        container.addView(sessionBar)
+
+        val kycBadgeText = TextView(this).apply {
             setPadding(20, 14, 20, 14)
-            setBackgroundColor(Color.parseColor("#064E3B"))
-            setTextColor(Color.parseColor("#34D399"))
+            val verified = AlistoKernelClient.contractorKycVerified && AlistoKernelClient.contractorLguEndorsed
+            setBackgroundColor(Color.parseColor(if (verified) "#064E3B" else "#7F1D1D"))
+            setTextColor(Color.parseColor(if (verified) "#34D399" else "#FCA5A5"))
             textSize = 12f
             setTypeface(null, Typeface.BOLD)
+            text = if (verified) {
+                "ENGINE 01 VERIFIED: Barangay KYC + LGU/PESO Endorsed (${user.barangayZone}, ${user.municipality})"
+            } else {
+                "ENGINE 01 HOLD: Pending Barangay KYC / LGU Endorsement"
+            }
         }
         container.addView(kycBadgeText)
 
-        container.addView(sectionTitle("Engine 03: Closed-Loop Prepaid Service Credit Wallet"))
-        walletSummaryText = TextView(this).apply {
+        val commPct = "%.1f".format(AlistoKernelClient.effectiveCommissionRate * 100.0)
+        container.addView(sectionTitle("Engine 03: Prepaid Service Credit Wallet (Rate: $commPct%)"))
+        val walletSummaryText = TextView(this).apply {
             setPadding(24, 20, 24, 20)
             setBackgroundColor(Color.parseColor("#1E293B"))
             setTextColor(Color.WHITE)
             textSize = 14f
+            text = "Available Prepaid Credits: PHP ${"%.2f".format(AlistoKernelClient.contractorAvailableCredits)} (Non-Withdrawable)\n" +
+                   "Locked Commission Holds: PHP ${"%.2f".format(AlistoKernelClient.contractorHeldCredits)}"
         }
         container.addView(walletSummaryText)
 
@@ -76,47 +174,18 @@ class ContractorMainActivity : AppCompatActivity() {
                         "PHP 500.00 Prepaid Credits minted via PayMongo QR Ph!",
                         Toast.LENGTH_SHORT
                     ).show()
-                    renderContractorScreen()
+                    showAuthenticatedContractorPortal()
                 }
             }
         }
         container.addView(topUpBtn)
 
         container.addView(sectionTitle("Engine 04: Barangay Job Board & Active State Machine"))
-        dispatchListLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        container.addView(dispatchListLayout)
-
-        container.addView(sectionTitle("Engine 03: Immutable Append-Only Credit Ledger"))
-        ledgerListLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        container.addView(ledgerListLayout)
-
-        rootScroll.addView(container)
-        setContentView(rootScroll)
-
-        renderContractorScreen()
-    }
-
-    private fun renderContractorScreen() {
-        kycBadgeText.text = if (AlistoKernelClient.contractorKycVerified && AlistoKernelClient.contractorLguEndorsed) {
-            "ENGINE 01 VERIFIED: Barangay KYC + Angeles City LGU/PESO Endorsed • Sub-400cc Non-Expressway Routing Active"
-        } else {
-            "ENGINE 01 HOLD: Pending Barangay KYC / LGU Endorsement"
-        }
-
-        walletSummaryText.text =
-            "Available Prepaid Credits: PHP ${"%.2f".format(AlistoKernelClient.contractorAvailableCredits)} (Non-Withdrawable)\n" +
-            "Locked 12% Commission Holds: PHP ${"%.2f".format(AlistoKernelClient.contractorHeldCredits)}"
-
-        dispatchListLayout.removeAllViews()
         AlistoKernelClient.bookings.forEach { b ->
-            dispatchListLayout.addView(buildContractorJobCard(b))
+            container.addView(buildContractorJobCard(b))
         }
 
-        ledgerListLayout.removeAllViews()
+        container.addView(sectionTitle("Engine 03: My Immutable Append-Only Credit Ledger"))
         AlistoKernelClient.ledgerHistory.forEach { entry ->
             val row = TextView(this).apply {
                 text = "[${entry.entryType}] ${entry.amount} • Avail: PHP ${"%.2f".format(entry.balanceAfter)} | Held: PHP ${"%.2f".format(entry.heldAfter)}\n${entry.notes}"
@@ -129,8 +198,11 @@ class ContractorMainActivity : AppCompatActivity() {
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply { setMargins(0, 0, 0, 10) }
             }
-            ledgerListLayout.addView(row)
+            container.addView(row)
         }
+
+        rootScroll.addView(container)
+        setContentView(rootScroll)
     }
 
     private fun buildContractorJobCard(b: BookingRecord): View {
@@ -144,36 +216,37 @@ class ContractorMainActivity : AppCompatActivity() {
             ).apply { setMargins(0, 0, 0, 16) }
         }
 
-        val reqComm = b.quotedFee * 0.12
+        val reqComm = b.quotedFee * AlistoKernelClient.effectiveCommissionRate
+        val commPct = "%.1f".format(AlistoKernelClient.effectiveCommissionRate * 100.0)
 
         card.addView(TextView(this).apply {
             text = "${b.bookingRef} • [${b.status}]"
-            setTextColor(Color.parseColor("#00E5FF"))
+            setTextColor(Color.parseColor("#00F2FE"))
             setTypeface(null, Typeface.BOLD)
             textSize = 14f
         })
         card.addView(TextView(this).apply {
-            text = "${b.serviceTitle}\nZone: ${b.barangayZone}, ${b.municipality}\nAddress: ${b.pickupAddress}\nQuoted Fee: PHP ${"%.2f".format(b.quotedFee)} | Tip (100% Yours): PHP ${"%.2f".format(b.tipAmount)} | 12% Hold: PHP ${"%.2f".format(reqComm)}"
+            text = "${b.serviceTitle}\nZone: ${b.barangayZone}, ${b.municipality}\nAddress: ${b.pickupAddress}\nQuoted Fee: PHP ${"%.2f".format(b.quotedFee)} | Tip (100% Yours): PHP ${"%.2f".format(b.tipAmount)} | $commPct% Hold: PHP ${"%.2f".format(reqComm)}"
             setTextColor(Color.WHITE)
             textSize = 13f
             setPadding(0, 6, 0, 12)
         })
 
         val actionBtn = Button(this).apply {
-            setBackgroundColor(Color.parseColor("#FFB300"))
+            setBackgroundColor(Color.parseColor("#FBBF24"))
             setTextColor(Color.parseColor("#070D19"))
             setTypeface(null, Typeface.BOLD)
         }
 
         when (b.status) {
             "SEARCHING" -> {
-                actionBtn.text = "CLAIM JOB (LOCK 12% HOLD: PHP ${"%.2f".format(reqComm)})"
+                actionBtn.text = "CLAIM JOB (LOCK $commPct% HOLD: PHP ${"%.2f".format(reqComm)})"
                 actionBtn.setOnClickListener {
                     uiScope.launch {
-                        val res = AlistoKernelClient.claimBookingRpc(b.id, "33333333-3333-3333-3333-333333333333")
+                        val res = AlistoKernelClient.claimBookingRpc(b.id)
                         res.onSuccess {
-                            Toast.makeText(this@ContractorMainActivity, "Job Claimed! 12% Commission Hold Locked.", Toast.LENGTH_SHORT).show()
-                            renderContractorScreen()
+                            Toast.makeText(this@ContractorMainActivity, "Job Claimed & GPS Telemetry Logged!", Toast.LENGTH_SHORT).show()
+                            showAuthenticatedContractorPortal()
                         }.onFailure { err ->
                             AlertDialog.Builder(this@ContractorMainActivity)
                                 .setTitle("Cannot Claim Job")
@@ -186,7 +259,7 @@ class ContractorMainActivity : AppCompatActivity() {
                 card.addView(actionBtn)
             }
             "ACCEPTED" -> {
-                actionBtn.text = "MARK ARRIVED AT CLIENT SITE"
+                actionBtn.text = "MARK ARRIVED AT CLIENT SITE (LOG GPS)"
                 actionBtn.setOnClickListener { transitionJob(b.id, "ARRIVED") }
                 card.addView(actionBtn)
             }
@@ -196,7 +269,7 @@ class ContractorMainActivity : AppCompatActivity() {
                 card.addView(actionBtn)
             }
             "IN_PROGRESS" -> {
-                actionBtn.text = "COMPLETE JOB & SETTLE 12% COMMISSION"
+                actionBtn.text = "COMPLETE JOB & SETTLE COMMISSION"
                 actionBtn.setOnClickListener { transitionJob(b.id, "COMPLETED") }
                 card.addView(actionBtn)
             }
@@ -218,7 +291,7 @@ class ContractorMainActivity : AppCompatActivity() {
     private fun transitionJob(bookingId: String, nextStatus: String) {
         uiScope.launch {
             AlistoKernelClient.advanceBookingStateRpc(bookingId, nextStatus)
-            renderContractorScreen()
+            showAuthenticatedContractorPortal()
         }
     }
 
@@ -242,13 +315,7 @@ class ContractorMainActivity : AppCompatActivity() {
         }
         dialogLayout.addView(transcriptView)
 
-        val msgInput = EditText(this).apply {
-            hint = "Message client (or test 'pay me cash direct')..."
-            setHintTextColor(Color.parseColor("#64748B"))
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#1E293B"))
-            setPadding(20, 16, 20, 16)
-        }
+        val msgInput = styledInput("Message client (or test 'pay me cash direct')...")
         dialogLayout.addView(msgInput)
 
         AlertDialog.Builder(this)
@@ -258,11 +325,7 @@ class ContractorMainActivity : AppCompatActivity() {
                 val body = msgInput.text.toString()
                 if (body.isNotBlank()) {
                     uiScope.launch {
-                        val res = AlistoKernelClient.sendModeratedChatMessageRpc(
-                            bookingId = booking.id,
-                            senderLabel = "Contractor",
-                            messageBody = body
-                        )
+                        val res = AlistoKernelClient.sendModeratedChatMessageRpc(booking.id, body)
                         res.onSuccess {
                             Toast.makeText(this@ContractorMainActivity, "Message sent.", Toast.LENGTH_SHORT).show()
                         }.onFailure { err ->
@@ -279,14 +342,32 @@ class ContractorMainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun sectionTitle(title: String): TextView {
-        return TextView(this).apply {
-            text = title
-            setTextColor(Color.parseColor("#00E5FF"))
-            textSize = 15f
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 22, 0, 10)
-        }
+    private fun sectionTitle(title: String): TextView = TextView(this).apply {
+        text = title
+        setTextColor(Color.parseColor("#00F2FE"))
+        textSize = 15f
+        setTypeface(null, Typeface.BOLD)
+        setPadding(0, 22, 0, 10)
+    }
+
+    private fun styledInput(hintText: String): EditText = EditText(this).apply {
+        hint = hintText
+        setHintTextColor(Color.parseColor("#64748B"))
+        setTextColor(Color.WHITE)
+        setBackgroundColor(Color.parseColor("#1E293B"))
+        setPadding(20, 16, 20, 16)
+    }
+
+    private fun labeledField(label: String, field: View): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(0, 0, 0, 16)
+        addView(TextView(this@ContractorMainActivity).apply {
+            text = label
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 12f
+            setPadding(0, 0, 0, 4)
+        })
+        addView(field)
     }
 
     override fun onDestroy() {

@@ -3,11 +3,13 @@ package ph.alisto.customer
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
+import android.text.InputType
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.*
+import ph.alisto.kernel.AlistoBrandHeaderView
 import ph.alisto.kernel.AlistoKernelClient
 import ph.alisto.kernel.BookingRecord
 
@@ -16,40 +18,168 @@ class CustomerMainActivity : AppCompatActivity() {
     private val uiScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var selectedVerticalKey = "skills_marketplace"
 
-    private lateinit var verticalSelectorLayout: LinearLayout
-    private lateinit var skillCategorySpinner: Spinner
-    private lateinit var dropoffInput: EditText
-    private lateinit var bookingsListLayout: LinearLayout
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (AlistoKernelClient.currentSessionUser == null) {
+            showLoginGate()
+        } else {
+            showAuthenticatedCustomerPortal()
+        }
+    }
 
-        val rootScroll = ScrollView(this).apply {
-            setBackgroundColor(Color.parseColor("#070D19"))
+    private fun showLoginGate() {
+        val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor("#070A12")) }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(42, 64, 42, 64)
         }
 
+        container.addView(
+            AlistoBrandHeaderView(
+                this,
+                "ALISTO APP • CUSTOMER",
+                "Engine 01 Database Authentication Gate"
+            ).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(0, 0, 0, 32) }
+            }
+        )
+
+        val idInput = styledInput("Username, Mobile Phone (+63...), or Email")
+        container.addView(labeledField("Customer Login Identifier (public.users)", idInput))
+
+        val pwInput = styledInput("Password").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        container.addView(labeledField("Account Password", pwInput))
+
+        val loginBtn = Button(this).apply {
+            text = "SIGN IN TO ALISTO CUSTOMER APP"
+            setBackgroundColor(Color.parseColor("#00F2FE"))
+            setTextColor(Color.parseColor("#070A12"))
+            setTypeface(null, Typeface.BOLD)
+            setOnClickListener {
+                val idStr = idInput.text.toString()
+                val pwStr = pwInput.text.toString()
+                isEnabled = false
+                text = "AUTHENTICATING AGAINST SUPABASE..."
+                uiScope.launch {
+                    val res = AlistoKernelClient.authenticateUserRpc(idStr, pwStr, "customer")
+                    isEnabled = true
+                    text = "SIGN IN TO ALISTO CUSTOMER APP"
+                    res.onSuccess {
+                        showAuthenticatedCustomerPortal()
+                    }.onFailure { err ->
+                        AlertDialog.Builder(this@CustomerMainActivity)
+                            .setTitle("Authentication Denied")
+                            .setMessage(err.message)
+                            .setPositiveButton("OK", null)
+                            .show()
+                    }
+                }
+            }
+        }
+        container.addView(loginBtn)
+
+        scroll.addView(container)
+        setContentView(scroll)
+    }
+
+    private fun showAuthenticatedCustomerPortal() {
+        val user = AlistoKernelClient.currentSessionUser ?: return showLoginGate()
+
+        val rootScroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor("#070D19")) }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(36, 42, 36, 64)
         }
 
-        container.addView(TextView(this).apply {
-            text = "ALISTO APP • CUSTOMER"
-            setTextColor(Color.parseColor("#00E5FF"))
-            textSize = 20f
-            setTypeface(null, Typeface.BOLD)
-        })
-        container.addView(TextView(this).apply {
-            text = "Alisto Network PH • Angeles City & Magalang (Region III)\nArchitect: D. A. Cortez"
-            setTextColor(Color.parseColor("#94A3B8"))
-            textSize = 12f
-            setPadding(0, 4, 0, 24)
-        })
+        container.addView(
+            AlistoBrandHeaderView(
+                this,
+                "ALISTO APP • CUSTOMER",
+                "${user.fullName} (@${user.username})"
+            ).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(0, 0, 0, 16) }
+            }
+        )
+
+        val sessionBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, 20)
+            addView(Button(this@CustomerMainActivity).apply {
+                text = "Refresh Live Kernel"
+                setBackgroundColor(Color.parseColor("#1E293B"))
+                setTextColor(Color.WHITE)
+                setOnClickListener {
+                    uiScope.launch {
+                        AlistoKernelClient.syncServiceVerticals()
+                        showAuthenticatedCustomerPortal()
+                    }
+                }
+            })
+            addView(Button(this@CustomerMainActivity).apply {
+                text = "Sign Out"
+                setBackgroundColor(Color.parseColor("#7F1D1D"))
+                setTextColor(Color.WHITE)
+                setOnClickListener {
+                    AlistoKernelClient.signOut()
+                    showLoginGate()
+                }
+            })
+        }
+        container.addView(sessionBar)
 
         container.addView(sectionTitle("1. Select Service Vertical (Engine 10 Penetration Flags)"))
-        verticalSelectorLayout = LinearLayout(this).apply {
+        val verticalSelectorLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, 8, 0, 20)
+        }
+        AlistoKernelClient.verticals.forEach { v ->
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(24, 20, 24, 20)
+                val bg = when {
+                    !v.isEnabled -> "#111827"
+                    selectedVerticalKey == v.key -> "#164E63"
+                    else -> "#1E293B"
+                }
+                setBackgroundColor(Color.parseColor(bg))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(0, 0, 0, 14) }
+
+                setOnClickListener {
+                    if (!v.isEnabled) {
+                        Toast.makeText(
+                            this@CustomerMainActivity,
+                            "${v.displayName} is currently toggled OFF by SuperAdmin penetration policy.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } else {
+                        selectedVerticalKey = v.key
+                        showAuthenticatedCustomerPortal()
+                    }
+                }
+            }
+            card.addView(TextView(this).apply {
+                text = "${v.displayName}  [${if (v.isEnabled) "ENABLED" else "LOCKED BY SUPERADMIN"}]"
+                setTextColor(if (v.isEnabled) Color.parseColor("#00F2FE") else Color.parseColor("#EF4444"))
+                setTypeface(null, Typeface.BOLD)
+                textSize = 14f
+            })
+            card.addView(TextView(this).apply {
+                text = v.description
+                setTextColor(Color.parseColor("#CBD5E1"))
+                textSize = 12f
+            })
+            verticalSelectorLayout.addView(card)
         }
         container.addView(verticalSelectorLayout)
 
@@ -59,7 +189,7 @@ class CustomerMainActivity : AppCompatActivity() {
             adapter = ArrayAdapter(
                 this@CustomerMainActivity,
                 android.R.layout.simple_spinner_dropdown_item,
-                listOf("Angeles City, Pampanga", "Magalang, Pampanga")
+                listOf("Angeles City", "Magalang")
             )
             setBackgroundColor(Color.parseColor("#1E293B"))
         }
@@ -69,13 +199,13 @@ class CustomerMainActivity : AppCompatActivity() {
             adapter = ArrayAdapter(
                 this@CustomerMainActivity,
                 android.R.layout.simple_spinner_dropdown_item,
-                listOf("Brgy. Malabanias", "Brgy. Balibago", "Brgy. Sto. Rosario", "Brgy. Pampang", "Brgy. San Nicolas (Magalang)")
+                listOf("Malabanias", "Balibago", "Sto. Rosario", "Pampang", "Cutcut", "San Nicolas (Magalang)")
             )
             setBackgroundColor(Color.parseColor("#1E293B"))
         }
         container.addView(labeledField("Barangay Zone", barangaySpinner))
 
-        skillCategorySpinner = Spinner(this).apply {
+        val skillCategorySpinner = Spinner(this).apply {
             adapter = ArrayAdapter(
                 this@CustomerMainActivity,
                 android.R.layout.simple_spinner_dropdown_item,
@@ -83,7 +213,9 @@ class CustomerMainActivity : AppCompatActivity() {
             )
             setBackgroundColor(Color.parseColor("#1E293B"))
         }
-        container.addView(labeledField("Skill / Trade Category (Phase 1 Marketplace)", skillCategorySpinner))
+        if (selectedVerticalKey == "skills_marketplace") {
+            container.addView(labeledField("Skill / Trade Category", skillCategorySpinner))
+        }
 
         val titleInput = styledInput("Service Title (e.g., Split-Type Aircon Cleaning)")
         container.addView(labeledField("Service Request Summary", titleInput))
@@ -91,27 +223,29 @@ class CustomerMainActivity : AppCompatActivity() {
         val pickupInput = styledInput("House No., Street, Subdivision, Barangay")
         container.addView(labeledField("Service / Pickup Address", pickupInput))
 
-        dropoffInput = styledInput("Drop-off Address (Sub-400cc Non-Expressway Verified)")
-        container.addView(labeledField("Drop-off Destination (Delivery / Ride-Hailing Only)", dropoffInput))
+        val dropoffInput = styledInput("Drop-off Address (Sub-400cc Non-Expressway Verified)")
+        if (selectedVerticalKey != "skills_marketplace") {
+            container.addView(labeledField("Drop-off Destination", dropoffInput))
+        }
 
         val feeInput = styledInput("1200").apply {
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
         }
         container.addView(labeledField("Quoted Service Fee (PHP)", feeInput))
 
         val tipInput = styledInput("100").apply {
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
         }
         container.addView(labeledField("Optional Client Tip (PHP - 0% Platform Commission)", tipInput))
 
         val submitBtn = Button(this).apply {
             text = "DISPATCH BOOKING TO MICRO-KERNEL"
-            setBackgroundColor(Color.parseColor("#00E5FF"))
+            setBackgroundColor(Color.parseColor("#00F2FE"))
             setTextColor(Color.parseColor("#070D19"))
             setTypeface(null, Typeface.BOLD)
             setOnClickListener {
                 val title = titleInput.text.toString().ifBlank { "On-Demand Household Service" }
-                val addr = pickupInput.text.toString().ifBlank { "Brgy. Malabanias, Angeles City" }
+                val addr = pickupInput.text.toString().ifBlank { "${user.barangayZone}, ${user.municipality}" }
                 val drop = dropoffInput.text.toString()
                 val fee = feeInput.text.toString().toDoubleOrNull() ?: 1200.0
                 val tip = tipInput.text.toString().toDoubleOrNull() ?: 0.0
@@ -121,7 +255,6 @@ class CustomerMainActivity : AppCompatActivity() {
 
                 uiScope.launch {
                     val res = AlistoKernelClient.createBookingRpc(
-                        clientId = "44444444-4444-4444-4444-444444444444",
                         verticalKey = selectedVerticalKey,
                         municipality = muni,
                         barangayZone = brgy,
@@ -134,11 +267,10 @@ class CustomerMainActivity : AppCompatActivity() {
                     )
                     res.onSuccess {
                         Toast.makeText(this@CustomerMainActivity, "Booking ${it.bookingRef} Dispatched!", Toast.LENGTH_SHORT).show()
-                        titleInput.setText("")
-                        renderCustomerScreen()
+                        showAuthenticatedCustomerPortal()
                     }.onFailure { err ->
                         AlertDialog.Builder(this@CustomerMainActivity)
-                            .setTitle("Vertical Penetration Guard")
+                            .setTitle("Booking Guard")
                             .setMessage(err.message)
                             .setPositiveButton("OK", null)
                             .show()
@@ -148,75 +280,16 @@ class CustomerMainActivity : AppCompatActivity() {
         }
         container.addView(submitBtn)
 
-        container.addView(sectionTitle("3. Active Bookings & RLS-Protected In-App Chat"))
-        bookingsListLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        container.addView(sectionTitle("3. My Bookings & RLS-Protected In-App Chat"))
+        val myBookings = AlistoKernelClient.bookings.filter {
+            user.role == "super_admin" || it.clientId == user.id
         }
-        container.addView(bookingsListLayout)
+        myBookings.forEach { b ->
+            container.addView(buildBookingCard(b))
+        }
 
         rootScroll.addView(container)
         setContentView(rootScroll)
-
-        uiScope.launch {
-            AlistoKernelClient.syncServiceVerticals()
-            renderCustomerScreen()
-        }
-    }
-
-    private fun renderCustomerScreen() {
-        verticalSelectorLayout.removeAllViews()
-        AlistoKernelClient.verticals.forEach { v ->
-            val card = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(24, 20, 24, 20)
-                val bg = when {
-                    !v.isEnabled -> "#111827"
-                    selectedVerticalKey == v.key -> "#164E63"
-                    else -> "#1E293B"
-                }
-                setBackgroundColor(Color.parseColor(bg))
-                val lp = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, 0, 0, 14) }
-                layoutParams = lp
-
-                setOnClickListener {
-                    if (!v.isEnabled) {
-                        Toast.makeText(
-                            this@CustomerMainActivity,
-                            "${v.displayName} is currently toggled OFF by SuperAdmin penetration policy.",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    } else {
-                        selectedVerticalKey = v.key
-                        renderCustomerScreen()
-                    }
-                }
-            }
-
-            card.addView(TextView(this).apply {
-                text = "${v.displayName}  [${if (v.isEnabled) "ENABLED" else "LOCKED BY SUPERADMIN"}]"
-                setTextColor(if (v.isEnabled) Color.parseColor("#00E5FF") else Color.parseColor("#EF4444"))
-                setTypeface(null, Typeface.BOLD)
-                textSize = 14f
-            })
-            card.addView(TextView(this).apply {
-                text = v.description
-                setTextColor(Color.parseColor("#CBD5E1"))
-                textSize = 12f
-            })
-            verticalSelectorLayout.addView(card)
-        }
-
-        val isSkills = selectedVerticalKey == "skills_marketplace"
-        skillCategorySpinner.visibility = if (isSkills) View.VISIBLE else View.GONE
-        dropoffInput.visibility = if (isSkills) View.GONE else View.VISIBLE
-
-        bookingsListLayout.removeAllViews()
-        AlistoKernelClient.bookings.forEach { b ->
-            bookingsListLayout.addView(buildBookingCard(b))
-        }
     }
 
     private fun buildBookingCard(b: BookingRecord): View {
@@ -232,7 +305,7 @@ class CustomerMainActivity : AppCompatActivity() {
 
         card.addView(TextView(this).apply {
             text = "${b.bookingRef} • ${b.status}"
-            setTextColor(Color.parseColor("#FFB300"))
+            setTextColor(Color.parseColor("#FBBF24"))
             setTypeface(null, Typeface.BOLD)
             textSize = 14f
         })
@@ -263,7 +336,7 @@ class CustomerMainActivity : AppCompatActivity() {
         val transcriptView = TextView(this).apply {
             val msgs = AlistoKernelClient.chatTranscripts[booking.id] ?: emptyList()
             text = if (msgs.isEmpty()) {
-                "Anti-Circumvention Moderation Trigger Active.\nOff-platform phrases ('pay me cash direct', 'cancel the booking', 'text me outside') are automatically blocked and logged."
+                "Anti-Circumvention Moderation Trigger Active.\nOff-platform phrases ('pay me cash direct', 'cancel the booking') are automatically blocked and logged."
             } else {
                 msgs.joinToString("\n\n") { "${it.senderName}: ${it.body}" }
             }
@@ -283,11 +356,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 val body = msgInput.text.toString()
                 if (body.isNotBlank()) {
                     uiScope.launch {
-                        val res = AlistoKernelClient.sendModeratedChatMessageRpc(
-                            bookingId = booking.id,
-                            senderLabel = "Customer",
-                            messageBody = body
-                        )
+                        val res = AlistoKernelClient.sendModeratedChatMessageRpc(booking.id, body)
                         res.onSuccess {
                             Toast.makeText(this@CustomerMainActivity, "Message sent.", Toast.LENGTH_SHORT).show()
                         }.onFailure { err ->
@@ -304,38 +373,32 @@ class CustomerMainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun sectionTitle(title: String): TextView {
-        return TextView(this).apply {
-            text = title
-            setTextColor(Color.parseColor("#FFB300"))
-            textSize = 15f
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 20, 0, 8)
-        }
+    private fun sectionTitle(title: String): TextView = TextView(this).apply {
+        text = title
+        setTextColor(Color.parseColor("#FBBF24"))
+        textSize = 15f
+        setTypeface(null, Typeface.BOLD)
+        setPadding(0, 20, 0, 8)
     }
 
-    private fun styledInput(hintText: String): EditText {
-        return EditText(this).apply {
-            hint = hintText
-            setHintTextColor(Color.parseColor("#64748B"))
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#1E293B"))
-            setPadding(20, 16, 20, 16)
-        }
+    private fun styledInput(hintText: String): EditText = EditText(this).apply {
+        hint = hintText
+        setHintTextColor(Color.parseColor("#64748B"))
+        setTextColor(Color.WHITE)
+        setBackgroundColor(Color.parseColor("#1E293B"))
+        setPadding(20, 16, 20, 16)
     }
 
-    private fun labeledField(label: String, field: View): View {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 0, 0, 16)
-            addView(TextView(this@CustomerMainActivity).apply {
-                text = label
-                setTextColor(Color.parseColor("#94A3B8"))
-                textSize = 12f
-                setPadding(0, 0, 0, 4)
-            })
-            addView(field)
-        }
+    private fun labeledField(label: String, field: View): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(0, 0, 0, 16)
+        addView(TextView(this@CustomerMainActivity).apply {
+            text = label
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 12f
+            setPadding(0, 0, 0, 4)
+        })
+        addView(field)
     }
 
     override fun onDestroy() {

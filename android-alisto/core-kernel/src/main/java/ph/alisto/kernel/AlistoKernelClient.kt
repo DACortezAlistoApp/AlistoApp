@@ -10,6 +10,22 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
+data class AuthenticatedUser(
+    val id: String,
+    val username: String,
+    val fullName: String,
+    val phone: String,
+    val email: String,
+    val role: String,
+    val municipality: String,
+    val barangayZone: String,
+    val kycVerified: Boolean,
+    val lguPesoEndorsed: Boolean,
+    val creditBalance: Double,
+    val heldCredits: Double,
+    val customCommissionRate: Double?
+)
+
 data class ServiceVertical(
     val key: String,
     val displayName: String,
@@ -23,6 +39,8 @@ data class BookingRecord(
     val id: String,
     val bookingRef: String,
     val verticalKey: String,
+    val clientId: String,
+    val contractorId: String?,
     val municipality: String,
     val barangayZone: String,
     val skillCategory: String,
@@ -62,18 +80,94 @@ object AlistoKernelClient {
     var supabaseUrl: String = BuildConfig.SUPABASE_URL
     var supabaseKey: String = BuildConfig.SUPABASE_ANON_KEY
 
-    const val DEFAULT_CLIENT_UUID = "44444444-4444-4444-4444-444444444444"
-    const val DEFAULT_CONTRACTOR_UUID = "33333333-3333-3333-3333-333333333333"
+    var currentSessionUser: AuthenticatedUser? = null
 
     val verticals = mutableListOf<ServiceVertical>()
     val bookings = mutableListOf<BookingRecord>()
     val ledgerHistory = mutableListOf<LedgerEntry>()
     val chatTranscripts = mutableMapOf<String, MutableList<ChatMessage>>()
 
-    var contractorAvailableCredits: Double = 600.00
+    var contractorAvailableCredits: Double = 0.00
     var contractorHeldCredits: Double = 0.00
-    var contractorKycVerified: Boolean = true
-    var contractorLguEndorsed: Boolean = true
+    var contractorKycVerified: Boolean = false
+    var contractorLguEndorsed: Boolean = false
+    var effectiveCommissionRate: Double = 0.12
+
+    suspend fun authenticateUserRpc(
+        identifier: String,
+        password: String,
+        expectedAppRole: String
+    ): Result<AuthenticatedUser> = withContext(Dispatchers.IO) {
+        try {
+            val payload = JSONObject().apply {
+                put("p_identifier", identifier.trim())
+                put("p_password", password)
+            }
+            val req = Request.Builder()
+                .url("$supabaseUrl/rest/v1/rpc/authenticate_user_rpc")
+                .addHeader("apikey", supabaseKey)
+                .addHeader("Authorization", "Bearer $supabaseKey")
+                .post(payload.toString().toRequestBody(jsonMedia))
+                .build()
+
+            http.newCall(req).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: "{}"
+                val json = JSONObject(bodyStr)
+                val status = json.optString("status")
+                if (status != "SUCCESS" || !json.has("user")) {
+                    return@withContext Result.failure(
+                        SecurityException(json.optString("message", "Invalid credentials."))
+                    )
+                }
+                val u = json.getJSONObject("user")
+                val role = u.getString("role")
+
+                // Enforce strict role isolation per APK (super_admin permitted on both for architect testing)
+                if (role != expectedAppRole && role != "super_admin") {
+                    return@withContext Result.failure(
+                        SecurityException("ROLE ISOLATION BLOCK: Your account role is [$role]. This application requires [$expectedAppRole] privileges.")
+                    )
+                }
+
+                val customComm = if (u.isNull("custom_commission_rate")) null else u.optDouble("custom_commission_rate")
+                val authUser = AuthenticatedUser(
+                    id = u.getString("id"),
+                    username = u.optString("username", ""),
+                    fullName = u.getString("full_name"),
+                    phone = u.getString("phone"),
+                    email = u.optString("email", ""),
+                    role = role,
+                    municipality = u.optString("municipality", "Angeles City"),
+                    barangayZone = u.optString("barangay_zone", "Sto. Rosario"),
+                    kycVerified = u.optBoolean("kyc_verified", true),
+                    lguPesoEndorsed = u.optBoolean("lgu_peso_endorsed", false),
+                    creditBalance = u.optDouble("credit_balance", 0.0),
+                    heldCredits = u.optDouble("held_credits", 0.0),
+                    customCommissionRate = customComm
+                )
+                currentSessionUser = authUser
+                contractorAvailableCredits = authUser.creditBalance
+                contractorHeldCredits = authUser.heldCredits
+                contractorKycVerified = authUser.kycVerified
+                contractorLguEndorsed = authUser.lguPesoEndorsed
+                if (customComm != null) {
+                    effectiveCommissionRate = customComm
+                }
+
+                syncServiceVerticals()
+                return@withContext Result.success(authUser)
+            }
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
+    fun signOut() {
+        currentSessionUser = null
+        bookings.clear()
+        ledgerHistory.clear()
+        chatTranscripts.clear()
+    }
 
     suspend fun syncServiceVerticals(): List<ServiceVertical> = withContext(Dispatchers.IO) {
         try {
@@ -111,8 +205,8 @@ object AlistoKernelClient {
     }
 
     suspend fun syncBookingsAndWallet() = withContext(Dispatchers.IO) {
+        val activeUser = currentSessionUser ?: return@withContext
         try {
-            // Sync active bookings
             val bReq = Request.Builder()
                 .url("$supabaseUrl/rest/v1/bookings?select=*&order=created_at.desc")
                 .addHeader("apikey", supabaseKey)
@@ -131,6 +225,8 @@ object AlistoKernelClient {
                                 id = o.getString("id"),
                                 bookingRef = o.getString("booking_ref"),
                                 verticalKey = o.getString("vertical_key"),
+                                clientId = o.getString("client_id"),
+                                contractorId = if (o.isNull("contractor_id")) null else o.getString("contractor_id"),
                                 municipality = o.optString("municipality", "Angeles City"),
                                 barangayZone = o.getString("barangay_zone"),
                                 skillCategory = o.optString("skill_category", "General Service"),
@@ -141,16 +237,16 @@ object AlistoKernelClient {
                                 tipAmount = o.optDouble("tip_amount", 0.0),
                                 commissionLocked = o.optDouble("commission_locked", 0.0),
                                 status = o.getString("status"),
-                                contractorName = if (o.isNull("contractor_id")) null else "Engr. Marco Pineda (LGU Verified)"
+                                contractorName = if (o.isNull("contractor_id")) null else "Assigned LGU Contractor"
                             )
                         )
                     }
                 }
             }
 
-            // Sync Contractor Wallet
+            // Sync logged-in user's fresh wallet & KYC status
             val uReq = Request.Builder()
-                .url("$supabaseUrl/rest/v1/users?id=eq.$DEFAULT_CONTRACTOR_UUID&select=*")
+                .url("$supabaseUrl/rest/v1/users?id=eq.${activeUser.id}&select=*")
                 .addHeader("apikey", supabaseKey)
                 .addHeader("Authorization", "Bearer $supabaseKey")
                 .get()
@@ -161,17 +257,20 @@ object AlistoKernelClient {
                     val arr = JSONArray(resp.body?.string() ?: "[]")
                     if (arr.length() > 0) {
                         val u = arr.getJSONObject(0)
-                        contractorAvailableCredits = u.optDouble("credit_balance", 600.0)
+                        contractorAvailableCredits = u.optDouble("credit_balance", 0.0)
                         contractorHeldCredits = u.optDouble("held_credits", 0.0)
                         contractorKycVerified = u.optBoolean("kyc_verified", true)
-                        contractorLguEndorsed = u.optBoolean("lgu_peso_endorsed", true)
+                        contractorLguEndorsed = u.optBoolean("lgu_peso_endorsed", false)
+                        if (!u.isNull("custom_commission_rate")) {
+                            effectiveCommissionRate = u.optDouble("custom_commission_rate", 0.12)
+                        }
                     }
                 }
             }
 
-            // Sync Append-Only Credit Ledger
+            // Sync Append-Only Credit Ledger for logged-in user
             val lReq = Request.Builder()
-                .url("$supabaseUrl/rest/v1/credit_ledger?user_id=eq.$DEFAULT_CONTRACTOR_UUID&select=*&order=created_at.desc")
+                .url("$supabaseUrl/rest/v1/credit_ledger?user_id=eq.${activeUser.id}&select=*&order=created_at.desc")
                 .addHeader("apikey", supabaseKey)
                 .addHeader("Authorization", "Bearer $supabaseKey")
                 .get()
@@ -200,7 +299,6 @@ object AlistoKernelClient {
     }
 
     suspend fun createBookingRpc(
-        clientId: String,
         verticalKey: String,
         municipality: String,
         barangayZone: String,
@@ -211,15 +309,17 @@ object AlistoKernelClient {
         quotedFee: Double,
         tipAmount: Double
     ): Result<BookingRecord> = withContext(Dispatchers.IO) {
+        val activeUser = currentSessionUser
+            ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
             val payload = JSONObject().apply {
-                put("p_client_id", clientId)
+                put("p_client_id", activeUser.id)
                 put("p_vertical_key", verticalKey)
                 put("p_municipality", municipality)
                 put("p_barangay_zone", barangayZone)
                 put("p_skill_category", skillCategory)
                 put("p_service_title", serviceTitle)
-                put("p_service_notes", "Dispatched via Alisto Native Android Kotlin App")
+                put("p_service_notes", "Dispatched by ${activeUser.fullName} (@${activeUser.username})")
                 put("p_pickup_address", pickupAddress)
                 put("p_dropoff_address", dropoffAddress)
                 put("p_quoted_fee", quotedFee)
@@ -248,11 +348,13 @@ object AlistoKernelClient {
         return@withContext Result.failure(IllegalStateException("Unable to dispatch booking."))
     }
 
-    suspend fun claimBookingRpc(bookingId: String, contractorId: String): Result<BookingRecord> = withContext(Dispatchers.IO) {
+    suspend fun claimBookingRpc(bookingId: String): Result<BookingRecord> = withContext(Dispatchers.IO) {
+        val activeUser = currentSessionUser
+            ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
             val payload = JSONObject().apply {
                 put("p_booking_id", bookingId)
-                put("p_contractor_id", contractorId)
+                put("p_contractor_id", activeUser.id)
             }
             val req = Request.Builder()
                 .url("$supabaseUrl/rest/v1/rpc/claim_booking_rpc")
@@ -268,6 +370,7 @@ object AlistoKernelClient {
                     return@withContext Result.failure(IllegalStateException(json.optString("message", "Unable to claim job.")))
                 }
             }
+            recordTelemetryPingRpc(bookingId, activeUser.id)
             syncBookingsAndWallet()
             val updated = bookings.find { it.id == bookingId }
             if (updated != null) return@withContext Result.success(updated)
@@ -278,10 +381,12 @@ object AlistoKernelClient {
     }
 
     suspend fun advanceBookingStateRpc(bookingId: String, nextStatus: String): Result<BookingRecord> = withContext(Dispatchers.IO) {
+        val activeUser = currentSessionUser
+            ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
             val payload = JSONObject().apply {
                 put("p_booking_id", bookingId)
-                put("p_actor_id", DEFAULT_CONTRACTOR_UUID)
+                put("p_actor_id", activeUser.id)
                 put("p_next_status", nextStatus)
             }
             val req = Request.Builder()
@@ -297,6 +402,7 @@ object AlistoKernelClient {
                     return@withContext Result.failure(IllegalStateException(json.optString("message", "Transition failed.")))
                 }
             }
+            recordTelemetryPingRpc(bookingId, activeUser.id)
             syncBookingsAndWallet()
             val updated = bookings.find { it.id == bookingId }
             if (updated != null) return@withContext Result.success(updated)
@@ -306,10 +412,34 @@ object AlistoKernelClient {
         return@withContext Result.failure(IllegalStateException("State transition error."))
     }
 
+    private fun recordTelemetryPingRpc(bookingId: String, contractorId: String) {
+        try {
+            val lat = 15.1450 + (Math.random() * 0.012)
+            val lng = 120.5887 + (Math.random() * 0.012)
+            val payload = JSONObject().apply {
+                put("p_booking_id", bookingId)
+                put("p_contractor_id", contractorId)
+                put("p_lat", lat)
+                put("p_lng", lng)
+                put("p_speed_kph", 28.5)
+                put("p_heading", 45.0)
+            }
+            val req = Request.Builder()
+                .url("$supabaseUrl/rest/v1/rpc/record_booking_telemetry_rpc")
+                .addHeader("apikey", supabaseKey)
+                .addHeader("Authorization", "Bearer $supabaseKey")
+                .post(payload.toString().toRequestBody(jsonMedia))
+                .build()
+            http.newCall(req).execute().close()
+        } catch (_: Exception) {}
+    }
+
     suspend fun topUpCreditsQrPhRpc(amount: Double): Result<Double> = withContext(Dispatchers.IO) {
+        val activeUser = currentSessionUser
+            ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
             val payload = JSONObject().apply {
-                put("p_user_id", DEFAULT_CONTRACTOR_UUID)
+                put("p_user_id", activeUser.id)
                 put("p_amount", amount)
                 put("p_qrph_ref", "QRPH-${System.currentTimeMillis()}")
             }
@@ -330,18 +460,14 @@ object AlistoKernelClient {
 
     suspend fun sendModeratedChatMessageRpc(
         bookingId: String,
-        senderLabel: String,
         messageBody: String
     ): Result<ChatMessage> = withContext(Dispatchers.IO) {
-        val senderUuid = if (senderLabel.contains("Contractor", ignoreCase = true)) {
-            DEFAULT_CONTRACTOR_UUID
-        } else {
-            DEFAULT_CLIENT_UUID
-        }
+        val activeUser = currentSessionUser
+            ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
             val payload = JSONObject().apply {
                 put("p_booking_id", bookingId)
-                put("p_sender_id", senderUuid)
+                put("p_sender_id", activeUser.id)
                 put("p_message_body", messageBody)
             }
             val req = Request.Builder()
@@ -358,7 +484,7 @@ object AlistoKernelClient {
                     return@withContext Result.failure(SecurityException(json.optString("message", "Message blocked by moderation trigger.")))
                 }
             }
-            val msg = ChatMessage(senderLabel, messageBody.trim(), "Live")
+            val msg = ChatMessage(activeUser.fullName, messageBody.trim(), "Live")
             val list = chatTranscripts.getOrPut(bookingId) { mutableListOf() }
             list.add(msg)
             return@withContext Result.success(msg)
