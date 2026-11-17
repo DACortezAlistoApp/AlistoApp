@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Alisto Command Console | Alisto Network PH — SuperAdmin & LGU Governance</title>
+  <title>Alisto Command Console | Alisto Network PH — SuperAdmin, Operator & LGU Governance</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
@@ -78,11 +78,14 @@
 
   <section class="role-bar">
     <div class="role-tabs">
-      <button class="role-tab active" data-view="superadmin" onclick="switchConsoleView('superadmin')">
-        SUPERADMIN CONSOLE (Service Penetration & Chat Moderation)
+      <button class="role-tab active" data-view="operator_ops" onclick="switchConsoleView('operator_ops')">
+        ADMIN OPERATOR DASHBOARD (Onboarding, Accounts, Commissions & Forensic History)
+      </button>
+      <button class="role-tab" data-view="superadmin" onclick="switchConsoleView('superadmin')">
+        SUPERADMIN CONSOLE (Vertical Penetration & Moderation Rules)
       </button>
       <button class="role-tab" data-view="lgu_admin" onclick="switchConsoleView('lgu_admin')">
-        LGU / PESO & ENGINE 09 DISPUTE VAULT
+        LGU / PESO & OPERATOR AUDIT TRAIL
       </button>
       <button class="role-tab" data-view="apk_portal" onclick="switchConsoleView('apk_portal')">
         NATIVE ANDROID KOTLIN APKs (Download Portal)
@@ -97,8 +100,232 @@
   <section class="vertical-status-strip" id="verticalStatusStrip"></section>
 
   <main class="workspace">
-    <!-- 1. SUPERADMIN VIEW -->
-    <section id="view-superadmin" class="role-view active">
+    <!-- ==================================================================== -->
+    <!-- 1. ADMIN OPERATOR DASHBOARD (ONBOARDING, ACCOUNTS, BOOKINGS, FORENSICS) -->
+    <!-- ==================================================================== -->
+    <section id="view-operator_ops" class="role-view active">
+      <!-- KPI METRICS STRIP -->
+      <div class="kpi-strip" id="operatorKpiStrip"></div>
+
+      <div class="grid-2">
+        <!-- ONBOARDING DESK (CONTRACTORS & CUSTOMERS) -->
+        <div class="card">
+          <div class="card-header">
+            <h2>1. Operator Onboarding Desk (Contractors & Customers)</h2>
+            <span class="engine-tag">ENGINE 01 + ENGINE 03</span>
+          </div>
+          <p class="muted-note">
+            Register verified households, businesses, LGU/PESO skilled technicians, and sub-400cc transit operators directly into the Supabase micro-kernel.
+          </p>
+          <div class="form-stack">
+            <div class="form-row">
+              <div>
+                <label>Account Role</label>
+                <select id="onbRole" onchange="toggleOnboardContractorFields()">
+                  <option value="contractor">Contractor (Technician / Sub-400cc Operator)</option>
+                  <option value="customer">Customer (Household / Business Client)</option>
+                </select>
+              </div>
+              <div>
+                <label>Full Name / Business Entity</label>
+                <input type="text" id="onbName" placeholder="e.g., Juan Dela Cruz (Licensed Electrician)" />
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div>
+                <label>Mobile Phone Number (Unique ID)</label>
+                <input type="text" id="onbPhone" placeholder="+63917XXXXXXX" />
+              </div>
+              <div>
+                <label>Email Address</label>
+                <input type="email" id="onbEmail" placeholder="user@alisto.ph" />
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div>
+                <label>Municipality (Region III)</label>
+                <select id="onbMunicipality">
+                  <option value="Angeles City">Angeles City, Pampanga</option>
+                  <option value="Magalang">Magalang, Pampanga</option>
+                </select>
+              </div>
+              <div>
+                <label>Barangay Zone</label>
+                <select id="onbBarangay">
+                  <option value="Malabanias">Brgy. Malabanias</option>
+                  <option value="Balibago">Brgy. Balibago</option>
+                  <option value="Sto. Rosario">Brgy. Sto. Rosario</option>
+                  <option value="Pampang">Brgy. Pampang</option>
+                  <option value="Cutcut">Brgy. Cutcut</option>
+                  <option value="Pulung Maragul">Brgy. Pulung Maragul</option>
+                  <option value="San Nicolas (Magalang)">Brgy. San Nicolas (Magalang)</option>
+                  <option value="San Pedro I (Magalang)">Brgy. San Pedro I (Magalang)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div>
+                <label>Initial Account Password</label>
+                <input type="text" id="onbPassword" value="Alisto2026!" />
+              </div>
+              <div>
+                <label>Barangay KYC Status</label>
+                <select id="onbKyc">
+                  <option value="true">KYC Verified (Government ID + Brgy Clearance)</option>
+                  <option value="false">Pending Verification</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- CONTRACTOR-SPECIFIC ONBOARDING FIELDS -->
+            <div id="onbContractorSection" class="contractor-onb-box">
+              <div class="form-row">
+                <div>
+                  <label>Skill Categories (Comma-Separated)</label>
+                  <input type="text" id="onbSkills" value="Aircon & HVAC, Electrical Repair" />
+                </div>
+                <div>
+                  <label>LGU / PESO Endorsement</label>
+                  <select id="onbLguEndorsed">
+                    <option value="true">LGU / PESO Endorsed (Authorized to Claim Jobs)</option>
+                    <option value="false">Pending PESO Endorsement</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row" style="margin-top:0.65rem;">
+                <div>
+                  <label>Starter Prepaid Service Credits (PHP - QR Ph / OTC)</label>
+                  <input type="number" id="onbCredits" value="500" min="0" step="100" />
+                </div>
+                <div>
+                  <label>Custom Commission Rate (% — Leave Blank for Global Default)</label>
+                  <input type="number" id="onbCustomComm" placeholder="Default (12%)" min="0" max="50" step="0.5" />
+                </div>
+              </div>
+            </div>
+
+            <button class="btn-primary" onclick="operatorOnboardUser()">+ Onboard Account into Micro-Kernel</button>
+          </div>
+        </div>
+
+        <!-- COMMISSION CONTROL & QUICK GOVERNANCE -->
+        <div class="card">
+          <div class="card-header">
+            <h2>2. Platform & Per-Contractor Commission Rate Control</h2>
+            <span class="engine-tag">ENGINE 03 + ENGINE 10</span>
+          </div>
+          <p class="muted-note">
+            Adjust the platform-wide baseline commission rate or set promotional/tier commission overrides for individual contractors.
+          </p>
+          <div class="commission-control-box">
+            <div class="form-row">
+              <div>
+                <label>Global Default Contractor Commission Rate (%)</label>
+                <input type="number" id="opGlobalCommInput" value="12" min="1" max="30" step="0.5" />
+              </div>
+              <div style="display:flex;align-items:flex-end;">
+                <button class="btn-primary" style="width:100%;" onclick="operatorUpdateGlobalCommission()">
+                  Update Global Commission Rate
+                </button>
+              </div>
+            </div>
+            <small style="display:block;margin-top:0.4rem;color:var(--text-muted);">
+              Note: Commission is locked from contractor Prepaid Service Credits upon job acceptance and settled upon completion (client tips are 100% exempt).
+            </small>
+          </div>
+
+          <h3 class="subhead" style="margin-top:1.1rem;">Individual Contractor Commission Overrides & Quick Credit Top-Up</h3>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Contractor</th>
+                <th>Prepaid Wallet</th>
+                <th>Effective Commission</th>
+                <th>Adjust Contractor Rate / Top-Up</th>
+              </tr>
+            </thead>
+            <tbody id="operatorContractorCommTable"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ACCOUNT LOOKUP, PROFILE DRAWER, PASSWORD RESET & SUSPENSION -->
+      <div class="card" style="margin-top: 1.25rem;">
+        <div class="card-header">
+          <h2>3. Account Directory & Lookup (Contractors & Customers) — Profile, Password Reset & Suspension</h2>
+          <span class="engine-tag">ENGINE 01 GOVERNANCE</span>
+        </div>
+        <div class="filter-bar">
+          <input type="text" id="userSearchInput" placeholder="Search by name, phone (+63...), email, or barangay..." oninput="renderOperatorUsersTable()" />
+          <select id="userRoleFilter" onchange="renderOperatorUsersTable()">
+            <option value="ALL">All Roles (Contractors & Customers)</option>
+            <option value="contractor">Contractors Only</option>
+            <option value="customer">Customers Only</option>
+            <option value="FROZEN">Suspended / Frozen Accounts</option>
+          </select>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Full Name & Role</th>
+              <th>Phone / Email</th>
+              <th>Zone (Region III)</th>
+              <th>Wallet / Commission</th>
+              <th>Circumvention Risk</th>
+              <th>Account Status</th>
+              <th>Operator Actions (Profile / Reset PW / Suspend)</th>
+            </tr>
+          </thead>
+          <tbody id="operatorUsersTable"></tbody>
+        </table>
+      </div>
+
+      <!-- COMPREHENSIVE BOOKINGS HISTORY & FORENSIC INVESTIGATION EXPLORER -->
+      <div class="card" style="margin-top: 1.25rem;">
+        <div class="card-header">
+          <h2>4. Master Bookings History & Forensic Investigation Explorer (All States)</h2>
+          <span class="engine-tag">ENGINE 02 + 05 + 08 + 09</span>
+        </div>
+        <div class="filter-bar">
+          <input type="text" id="bookingSearchInput" placeholder="Search by Booking Ref (ALISTO-...), service title, client, contractor, or barangay..." oninput="renderOperatorBookingsTable()" />
+          <select id="bookingStatusFilter" onchange="renderOperatorBookingsTable()">
+            <option value="ALL">All Lifecycle States (Requested, Active, Completed, Cancelled)</option>
+            <option value="SEARCHING">Requested / Searching (SEARCHING)</option>
+            <option value="ACTIVE">Active In-Field (ACCEPTED / ARRIVED / IN_PROGRESS)</option>
+            <option value="COMPLETED">Completed (COMPLETED)</option>
+            <option value="CANCELLED">Cancelled / Disputed (CANCELLED / EXPIRED)</option>
+          </select>
+          <select id="bookingVerticalFilter" onchange="renderOperatorBookingsTable()">
+            <option value="ALL">All 3 Service Verticals</option>
+            <option value="skills_marketplace">On-Demand Skills Marketplace</option>
+            <option value="delivery_logistics">Delivery & Logistics</option>
+            <option value="ride_hailing">Ride-Hailing (Sub-400cc)</option>
+          </select>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Booking Ref & Vertical</th>
+              <th>Service & Barangay</th>
+              <th>Customer & Contractor</th>
+              <th>Fee / Tip / Hold</th>
+              <th>Lifecycle Timestamps</th>
+              <th>State</th>
+              <th>Forensic Investigation</th>
+            </tr>
+          </thead>
+          <tbody id="operatorBookingsTable"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ==================================================================== -->
+    <!-- 2. SUPERADMIN VIEW -->
+    <!-- ==================================================================== -->
+    <section id="view-superadmin" class="role-view">
       <div class="grid-2">
         <div class="card">
           <div class="card-header">
@@ -119,7 +346,7 @@
           <div class="param-grid">
             <div class="param-item">
               <label>Platform Commission Hold Rate (%)</label>
-              <input type="number" id="cfgCommission" value="12" min="1" max="30" />
+              <input type="number" id="cfgCommission" value="12" min="1" max="30" step="0.5" />
               <small>Locked from contractor prepaid service credits upon job acceptance (excludes tips).</small>
             </div>
             <div class="param-item">
@@ -174,7 +401,7 @@
               <tr>
                 <th>Timestamp</th>
                 <th>Booking ID</th>
-                <th>Sender ID</th>
+                <th>Sender</th>
                 <th>Flagged Message</th>
                 <th>Matched Rule</th>
               </tr>
@@ -185,7 +412,9 @@
       </div>
     </section>
 
-    <!-- 2. LGU / PESO ADMIN & ENGINE 09 DISPUTE VIEW -->
+    <!-- ==================================================================== -->
+    <!-- 3. LGU / PESO ADMIN & OPERATOR AUDIT LOGS VIEW -->
+    <!-- ==================================================================== -->
     <section id="view-lgu_admin" class="role-view">
       <div class="grid-2">
         <div class="card">
@@ -210,28 +439,26 @@
 
         <div class="card">
           <div class="card-header">
-            <h2>Engine 02, 08 & 09: Live Bookings & Verified Credit Reversal</h2>
-            <span class="engine-tag">STATE & DISPUTE KERNEL</span>
+            <h2>Immutable Operator Action Audit Trail (`operator_audit_logs`)</h2>
+            <span class="engine-tag">COMPLIANCE LEDGER</span>
           </div>
           <table class="data-table">
             <thead>
               <tr>
-                <th>Booking Ref</th>
-                <th>Vertical</th>
-                <th>Barangay Zone</th>
-                <th>Quoted Fee / Tip</th>
-                <th>12% Hold</th>
-                <th>Status</th>
-                <th>Engine 09 Action</th>
+                <th>Timestamp</th>
+                <th>Action Type</th>
+                <th>Summary & Justification</th>
               </tr>
             </thead>
-            <tbody id="liveBookingsTable"></tbody>
+            <tbody id="operatorAuditLogsTable"></tbody>
           </table>
         </div>
       </div>
     </section>
 
-    <!-- 3. NATIVE ANDROID KOTLIN APK DOWNLOAD PORTAL -->
+    <!-- ==================================================================== -->
+    <!-- 4. NATIVE ANDROID KOTLIN APK DOWNLOAD PORTAL -->
+    <!-- ==================================================================== -->
     <section id="view-apk_portal" class="role-view">
       <div class="grid-2">
         <div class="card">
@@ -288,7 +515,7 @@
           </div>
           <ul style="font-size:0.84rem;color:var(--text-main);padding-left:1.2rem;line-height:1.8;margin:1rem 0 1.2rem;">
             <li><strong>Engine 01 KYC & LGU/PESO Guard:</strong> Enforces barangay KYC and PESO endorsement verification before job acceptance.</li>
-            <li><strong>Engine 03 Closed-Loop Credit Wallet:</strong> Tracks non-withdrawable Prepaid Service Credits, PayMongo QR Ph top-ups, and atomic <strong>12% commission holds</strong>.</li>
+            <li><strong>Engine 03 Closed-Loop Credit Wallet:</strong> Tracks non-withdrawable Prepaid Service Credits, PayMongo QR Ph top-ups, and atomic commission holds.</li>
             <li><strong>Engine 04 & 05 Dispatch + Sub-400cc Routing:</strong> Barangay Job Board (48–72h maturity) for Phase 1 + expanding radius loop for Region III transit.</li>
           </ul>
           <a href="alisto-contractor.apk" download class="btn-primary" style="display:inline-block;text-decoration:none;">
@@ -298,6 +525,32 @@
       </div>
     </section>
   </main>
+
+  <!-- ==================================================================== -->
+  <!-- MODAL 1: FORENSIC BOOKING INVESTIGATION DOSSIER (TIMESTAMPS, CHAT, GPS) -->
+  <!-- ==================================================================== -->
+  <div id="forensicModal" class="modal-backdrop" style="display:none;">
+    <div class="modal-panel modal-wide">
+      <div class="card-header">
+        <h2 id="forensicModalTitle">Forensic Booking Investigation Dossier</h2>
+        <button class="btn-outline" onclick="closeForensicModal()">Close Dossier [X]</button>
+      </div>
+      <div id="forensicModalBody" class="forensic-body"></div>
+    </div>
+  </div>
+
+  <!-- ==================================================================== -->
+  <!-- MODAL 2: USER PROFILE & LEDGER INSPECTOR -->
+  <!-- ==================================================================== -->
+  <div id="profileModal" class="modal-backdrop" style="display:none;">
+    <div class="modal-panel modal-wide">
+      <div class="card-header">
+        <h2 id="profileModalTitle">Account Profile & History Inspector</h2>
+        <button class="btn-outline" onclick="closeProfileModal()">Close Profile [X]</button>
+      </div>
+      <div id="profileModalBody" class="forensic-body"></div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>
