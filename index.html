@@ -175,10 +175,10 @@
     <section class="role-bar">
       <div class="role-tabs">
         <button id="tabBtnOperatorOps" class="role-tab" data-view="operator_ops" onclick="switchConsoleView('operator_ops')">
-          ADMIN OPERATOR DASHBOARD (Onboarding, Accounts, Commissions & Forensic History)
+          ADMIN & OPERATOR CONSOLE (User Lookup, Onboarding & Forensic History)
         </button>
         <button id="tabBtnSuperAdmin" class="role-tab" data-view="superadmin" onclick="switchConsoleView('superadmin')">
-          SUPERADMIN CONSOLE (Vertical Penetration & Moderation Rules)
+          SUPERADMIN CONSOLE (Service Verticals, Global Commission & Moderation)
         </button>
         <button id="tabBtnLguAdmin" class="role-tab" data-view="lgu_admin" onclick="switchConsoleView('lgu_admin')">
           LGU / PESO & OPERATOR AUDIT TRAIL
@@ -197,20 +197,57 @@
 
     <main class="workspace">
       <!-- ==================================================================== -->
-      <!-- 1. ADMIN OPERATOR DASHBOARD (SUPER_ADMIN & ADMIN ONLY)               -->
+      <!-- 1. ADMIN & OPERATOR CONSOLE (USER LOOKUP, ONBOARDING, FORENSICS)     -->
       <!-- ==================================================================== -->
       <section id="view-operator_ops" class="role-view">
         <div class="kpi-strip" id="operatorKpiStrip"></div>
 
+        <!-- SECTION 1: USERNAME OR FIRST/LAST NAME COMBO LOOKUP -->
+        <div class="card" style="margin-bottom: 1.25rem; border-color: var(--cyan-accent);">
+          <div class="card-header">
+            <h2>1. User Account Lookup (Search by `@username` or First Name / Last Name Combo)</h2>
+            <span class="engine-tag">CLICK @USERNAME TO OPEN FULL PROFILE COMMAND</span>
+          </div>
+          <p class="muted-note">
+            Type a <strong>username</strong> (e.g., <code>marco</code>, <code>clarisse</code>) or a <strong>First Name / Last Name combination</strong> (e.g., <code>Marco Pineda</code>, <code>Clarisse Dizon</code>). Click on any matching <strong><code>@username</code></strong> badge below to open the user's full profile, reset password, update phone/skills, attach scanned certificates/licenses, manually suspend/reinstate, credit/debit their wallet, set a manual user commission rate, or inspect Contractor CSAT.
+          </p>
+          <div class="lookup-search-bar">
+            <input type="text" id="userLookupQueryInput" placeholder="Enter @username or First Name / Last Name combo (e.g. 'marco' or 'Marco Pineda')..." oninput="renderOperatorUsersTable()" />
+            <select id="userRoleFilter" onchange="renderOperatorUsersTable()">
+              <option value="ALL">All Roles (Contractors, Customers, Admins)</option>
+              <option value="contractor">Contractors Only</option>
+              <option value="customer">Customers Only</option>
+              <option value="admin">Admin Operators</option>
+              <option value="FROZEN">Suspended / Frozen Accounts</option>
+            </select>
+            <button class="btn-primary" onclick="renderOperatorUsersTable()">Lookup Accounts</button>
+          </div>
+          <div id="userLookupMatchCount" style="font-size:0.78rem;color:var(--amber-core);margin-bottom:0.65rem;font-weight:700;"></div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Clickable `@username`</th>
+                <th>First & Last Name / Role</th>
+                <th>Phone / Barangay Zone</th>
+                <th>Prepaid Wallet & Commission Rate</th>
+                <th>CSAT / Certs / Risk</th>
+                <th>Account Standing</th>
+                <th>Quick Profile Command</th>
+              </tr>
+            </thead>
+            <tbody id="operatorUsersTable"></tbody>
+          </table>
+        </div>
+
         <div class="grid-2">
-          <!-- ONBOARDING DESK -->
+          <!-- SECTION 2: ONBOARDING DESK -->
           <div class="card">
             <div class="card-header">
-              <h2>1. Operator Onboarding Desk (Contractors, Customers & Staff)</h2>
+              <h2>2. Operator Onboarding Desk (New Contractors & Customers)</h2>
               <span class="engine-tag">ENGINE 01 + ENGINE 03</span>
             </div>
             <p class="muted-note">
-              Register verified accounts into <code>public.users</code> and <code>public.user_credentials</code>. Role options adapt automatically to your privilege level.
+              Onboard verified households, businesses, LGU/PESO technicians, and sub-400cc transit operators into <code>public.users</code>.
             </p>
             <div class="form-stack">
               <div class="form-row">
@@ -230,12 +267,12 @@
 
               <div class="form-row">
                 <div>
-                  <label>Full Name / Business Entity</label>
-                  <input type="text" id="onbName" placeholder="e.g., Juan Dela Cruz (Licensed Electrician)" />
+                  <label>First Name</label>
+                  <input type="text" id="onbFirstName" placeholder="e.g., Juan" />
                 </div>
                 <div>
-                  <label>Initial Account Password</label>
-                  <input type="text" id="onbPassword" value="Alisto2026!" />
+                  <label>Last Name</label>
+                  <input type="text" id="onbLastName" placeholder="e.g., Dela Cruz" />
                 </div>
               </div>
 
@@ -245,31 +282,32 @@
                   <input type="text" id="onbPhone" placeholder="+63917XXXXXXX" />
                 </div>
                 <div>
-                  <label>Email Address</label>
-                  <input type="email" id="onbEmail" placeholder="user@alisto.ph" />
+                  <label>Initial Account Password</label>
+                  <input type="text" id="onbPassword" value="Alisto2026!" />
                 </div>
               </div>
 
               <div class="form-row">
                 <div>
-                  <label>Municipality (Region III)</label>
-                  <select id="onbMunicipality">
-                    <option value="Angeles City">Angeles City, Pampanga</option>
-                    <option value="Magalang">Magalang, Pampanga</option>
-                  </select>
+                  <label>Email Address</label>
+                  <input type="email" id="onbEmail" placeholder="user@alisto.ph" />
                 </div>
                 <div>
-                  <label>Barangay Zone</label>
-                  <select id="onbBarangay">
-                    <option value="Malabanias">Brgy. Malabanias</option>
-                    <option value="Balibago">Brgy. Balibago</option>
-                    <option value="Sto. Rosario">Brgy. Sto. Rosario</option>
-                    <option value="Pampang">Brgy. Pampang</option>
-                    <option value="Cutcut">Brgy. Cutcut</option>
-                    <option value="Pulung Maragul">Brgy. Pulung Maragul</option>
-                    <option value="San Nicolas (Magalang)">Brgy. San Nicolas (Magalang)</option>
-                    <option value="San Pedro I (Magalang)">Brgy. San Pedro I (Magalang)</option>
-                  </select>
+                  <label>Municipality & Barangay Zone (Region III)</label>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.4rem;">
+                    <select id="onbMunicipality">
+                      <option value="Angeles City">Angeles City</option>
+                      <option value="Magalang">Magalang</option>
+                    </select>
+                    <select id="onbBarangay">
+                      <option value="Malabanias">Brgy. Malabanias</option>
+                      <option value="Balibago">Brgy. Balibago</option>
+                      <option value="Sto. Rosario">Brgy. Sto. Rosario</option>
+                      <option value="Pampang">Brgy. Pampang</option>
+                      <option value="Cutcut">Brgy. Cutcut</option>
+                      <option value="San Nicolas (Magalang)">Brgy. San Nicolas</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -283,19 +321,19 @@
                   <div>
                     <label>LGU / PESO Endorsement</label>
                     <select id="onbLguEndorsed">
-                      <option value="true">LGU / PESO Endorsed (Authorized to Claim Jobs)</option>
+                      <option value="true">LGU / PESO Endorsed (Authorized)</option>
                       <option value="false">Pending PESO Endorsement</option>
                     </select>
                   </div>
                 </div>
                 <div class="form-row" style="margin-top:0.65rem;">
                   <div>
-                    <label>Starter Prepaid Service Credits (PHP - QR Ph / OTC)</label>
+                    <label>Starter Prepaid Service Credits (PHP)</label>
                     <input type="number" id="onbCredits" value="500" min="0" step="100" />
                   </div>
                   <div>
-                    <label>Custom Commission Rate (% — Leave Blank for Global Default)</label>
-                    <input type="number" id="onbCustomComm" placeholder="Default (12%)" min="0" max="50" step="0.5" />
+                    <label>Manual User Commission Rate (% — Blank for Global Default)</label>
+                    <input type="number" id="onbCustomComm" placeholder="Global Default" min="0" max="50" step="0.5" />
                   </div>
                 </div>
               </div>
@@ -304,40 +342,34 @@
             </div>
           </div>
 
-          <!-- COMMISSION CONTROL -->
+          <!-- SECTION 3: MANUAL USER COMMISSION RATE & GOVERNANCE SUMMARY -->
           <div class="card">
             <div class="card-header">
-              <h2>2. Platform & Per-Contractor Commission Rate Control</h2>
-              <span class="engine-tag">ENGINE 03 + ENGINE 10</span>
+              <h2>3. Commission Governance (SuperAdmin Global vs. Operator User Override)</h2>
+              <span class="engine-tag">ROLE-ISOLATED COMMISSION ENGINE</span>
             </div>
-            <p class="muted-note">
-              Adjust the platform-wide baseline commission rate or set promotional/tier commission overrides for individual contractors.
-            </p>
-            <div class="commission-control-box">
-              <div class="form-row">
+            <div class="commission-control-box" style="margin-bottom:0.9rem;">
+              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;">
                 <div>
-                  <label>Global Default Contractor Commission Rate (%)</label>
-                  <input type="number" id="opGlobalCommInput" value="12" min="1" max="30" step="0.5" />
+                  <div style="font-size:0.78rem;color:var(--text-muted);">Global Platform Commission Rate (SuperAdmin Exclusive)</div>
+                  <div id="opGlobalCommReadonlyDisplay" style="font-size:1.35rem;font-weight:800;color:var(--amber-core);">12.0%</div>
                 </div>
-                <div style="display:flex;align-items:flex-end;">
-                  <button class="btn-primary" style="width:100%;" onclick="operatorUpdateGlobalCommission()">
-                    Update Global Commission Rate
-                  </button>
-                </div>
+                <div id="opSuperAdminJumpWrap"></div>
               </div>
-              <small style="display:block;margin-top:0.4rem;color:var(--text-muted);">
-                Locked from contractor Prepaid Service Credits upon job acceptance and settled upon completion (client tips are 100% exempt).
+              <small style="display:block;margin-top:0.35rem;color:var(--text-muted);">
+                <strong>Privilege Rule:</strong> Only <code>super_admin</code> can enable/disable Service Verticals and set the Global Commission Rate. Both <code>super_admin</code> and <code>admin</code> can set the <strong>Manual Commission Rate</strong> of a specific user below or inside their `@username` profile.
               </small>
             </div>
 
-            <h3 class="subhead" style="margin-top:1.1rem;">Individual Contractor Commission Overrides & Quick Credit Top-Up</h3>
+            <h3 class="subhead">Contractor Manual Commission Rates, CSAT & Wallet Overview</h3>
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>Contractor</th>
-                  <th>Prepaid Wallet</th>
+                  <th>Contractor (`@username`)</th>
+                  <th>Wallet Balance</th>
+                  <th>CSAT Score</th>
                   <th>Effective Commission</th>
-                  <th>Adjust Contractor Rate / Top-Up</th>
+                  <th>Manual Rate Action</th>
                 </tr>
               </thead>
               <tbody id="operatorContractorCommTable"></tbody>
@@ -345,45 +377,10 @@
           </div>
         </div>
 
-        <!-- ACCOUNT DIRECTORY & LOOKUP -->
+        <!-- SECTION 4: MASTER BOOKINGS HISTORY & FORENSIC INVESTIGATION EXPLORER -->
         <div class="card" style="margin-top: 1.25rem;">
           <div class="card-header">
-            <h2>3. Account Directory & Lookup (All Roles) — Profile, Password Reset & Suspension</h2>
-            <span class="engine-tag">ENGINE 01 RBAC GOVERNANCE</span>
-          </div>
-          <div class="filter-bar">
-            <input type="text" id="userSearchInput" placeholder="Search by username, name, phone (+63...), email, or barangay..." oninput="renderOperatorUsersTable()" />
-            <select id="userRoleFilter" onchange="renderOperatorUsersTable()">
-              <option value="ALL">All Roles</option>
-              <option value="contractor">Contractors Only</option>
-              <option value="customer">Customers Only</option>
-              <option value="admin">Admin Operators</option>
-              <option value="FROZEN">Suspended / Frozen Accounts</option>
-            </select>
-            <div style="display:flex;align-items:center;font-size:0.78rem;color:var(--text-muted);">
-              Role Protection: Admin Operators cannot modify SuperAdmin credentials.
-            </div>
-          </div>
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Full Name, Username & Role</th>
-                <th>Phone / Email</th>
-                <th>Zone (Region III)</th>
-                <th>Wallet / Commission</th>
-                <th>Circumvention Risk</th>
-                <th>Account Status</th>
-                <th>Operator Actions (Profile / Reset PW / Suspend)</th>
-              </tr>
-            </thead>
-            <tbody id="operatorUsersTable"></tbody>
-          </table>
-        </div>
-
-        <!-- MASTER BOOKINGS HISTORY & FORENSIC INVESTIGATION EXPLORER -->
-        <div class="card" style="margin-top: 1.25rem;">
-          <div class="card-header">
-            <h2>4. Master Bookings History & Forensic Investigation Explorer (All States)</h2>
+            <h2>4. Master Bookings History & Forensic Investigation Explorer (Requested, Active, Completed & Cancelled)</h2>
             <span class="engine-tag">ENGINE 02 + 05 + 08 + 09</span>
           </div>
           <div class="filter-bar">
@@ -426,25 +423,25 @@
         <div class="grid-2">
           <div class="card">
             <div class="card-header">
-              <h2>Engine 10: Master Service Vertical Toggles (Penetration Strategy)</h2>
-              <span class="engine-tag">SUPERADMIN EXCLUSIVE</span>
+              <h2>Engine 10: Master Service Vertical Toggles (SuperAdmin Exclusive)</h2>
+              <span class="engine-tag">SUPERADMIN ONLY</span>
             </div>
             <p class="muted-note">
-              Toggle any of the 3 core verticals ON or OFF in real time. Both Native Android Kotlin apps (<code>alisto-customer.apk</code> & <code>alisto-contractor.apk</code>) sync with this table directly via Supabase.
+              Only <strong>SuperAdmin</strong> can enable or disable the 3 core service verticals. Both Native Android Kotlin apps (<code>alisto-customer.apk</code> & <code>alisto-contractor.apk</code>) sync with this table in real time.
             </p>
             <div id="superAdminVerticalList" class="vertical-toggle-list"></div>
           </div>
 
           <div class="card">
             <div class="card-header">
-              <h2>Engine 10: Runtime Micro-Kernel Parameters (`system_config`)</h2>
-              <span class="engine-tag">DYNAMIC KV STORE</span>
+              <h2>Engine 10: Global Commission Rate & Runtime Parameters (SuperAdmin Exclusive)</h2>
+              <span class="engine-tag">SUPERADMIN ONLY</span>
             </div>
             <div class="param-grid">
               <div class="param-item">
-                <label>Platform Commission Hold Rate (%)</label>
+                <label>Global Default Platform Commission Hold Rate (%)</label>
                 <input type="number" id="cfgCommission" value="12" min="1" max="30" step="0.5" />
-                <small>Locked from contractor prepaid service credits upon job acceptance (excludes tips).</small>
+                <small>Locked from contractor prepaid service credits upon job acceptance (unless overridden by a user-specific manual commission rate).</small>
               </div>
               <div class="param-item">
                 <label>Phase 1 Skills Board Maturity Window (Hours)</label>
@@ -457,7 +454,7 @@
                 <small>Engine 04 + Engine 05 road-network dispatch loop for Delivery & Ride-Hailing.</small>
               </div>
             </div>
-            <button class="btn-primary" onclick="saveRuntimeConfig()">Commit Runtime Parameters to PostgreSQL</button>
+            <button class="btn-primary" onclick="saveRuntimeConfig()">Commit Global Commission & Runtime Parameters</button>
           </div>
         </div>
 
@@ -522,9 +519,9 @@
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>Contractor</th>
+                  <th>Contractor (`@username`)</th>
                   <th>Barangay Zone</th>
-                  <th>Skills / Sub-400cc</th>
+                  <th>Skills & Certs</th>
                   <th>Prepaid Credits</th>
                   <th>KYC & PESO Status</th>
                   <th>Action</th>
@@ -640,12 +637,12 @@
   </div>
 
   <!-- ==================================================================== -->
-  <!-- MODAL 2: USER PROFILE & LEDGER INSPECTOR                             -->
+  <!-- MODAL 2: UNIFIED USER PROFILE & GOVERNANCE COMMAND MODAL             -->
   <!-- ==================================================================== -->
   <div id="profileModal" class="modal-backdrop" style="display:none;">
     <div class="modal-panel modal-wide">
       <div class="card-header">
-        <h2 id="profileModalTitle">Account Profile & History Inspector</h2>
+        <h2 id="profileModalTitle">User Profile & Governance Command Center</h2>
         <button class="btn-outline" onclick="closeProfileModal()">Close Profile [X]</button>
       </div>
       <div id="profileModalBody" class="forensic-body"></div>
