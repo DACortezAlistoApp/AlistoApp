@@ -498,6 +498,59 @@
           <div class="kpi-strip" id="universalLedgerHealthStrip" style="margin-bottom:0;"></div>
         </div>
 
+                <!-- DYNAMIC SERVICE CLASS PRICING & ECONOMIC MULTIPLIER CONTROL (ALL VERTICALS) -->
+        <div class="card" style="margin-bottom: 1.25rem; border-color: var(--cyan-accent);">
+          <div class="card-header">
+            <h2>Dynamic Service Class Pricing & Economic Multiplier Control (`public.service_pricing_matrix` — SuperAdmin Exclusive)</h2>
+            <span class="engine-tag">ALL 7 VERTICAL & VEHICLE CLASSES</span>
+          </div>
+          <p class="muted-note">
+            Adjust Base / Call-Out Fees, Included Base Kilometers, Per-KM Rates, Post-Arrival Cancellation Fees, Dispatch Radii, and Economic/Fuel Multipliers across all service classes in real time. Changes sync immediately to both Native Android Kotlin APKs.
+          </p>
+
+          <!-- MACRO ECONOMIC / FUEL INDEX MULTIPLIER BAR -->
+          <div class="commission-control-box" style="margin-bottom: 1rem;">
+            <div style="display:grid;grid-template-columns: 1.2fr 150px 1.5fr auto auto;gap:0.55rem;align-items:end;">
+              <div>
+                <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:0.2rem;">Target Vertical Scope</label>
+                <select id="econTargetVertical" style="width:100%;padding:0.45rem;border-radius:6px;border:1px solid var(--border-subtle);background:#090d16;color:var(--text-main);">
+                  <option value="ALL">All Verticals & Service Classes (Platform-Wide)</option>
+                  <option value="skills_marketplace">On-Demand Skills Marketplace Only</option>
+                  <option value="delivery_logistics">Delivery & Logistics Only</option>
+                  <option value="ride_hailing">Ride-Hailing (Sub-400cc) Only</option>
+                </select>
+              </div>
+              <div>
+                <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:0.2rem;">Economy Multiplier</label>
+                <input type="number" id="econMultiplierInput" value="1.00" min="0.50" max="3.00" step="0.05" />
+              </div>
+              <div>
+                <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:0.2rem;">Economic / Fuel Adjustment Note</label>
+                <input type="text" id="econReasonInput" placeholder="e.g., Region III fuel pump price index adjustment" />
+              </div>
+              <button class="btn-primary" onclick="applyBlanketEconomyMultiplier()">Apply Multiplier</button>
+              <button class="btn-outline" onclick="resetBlanketEconomyMultiplier()">Reset 1.00x</button>
+            </div>
+          </div>
+
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Service Class & Vertical</th>
+                <th>Radius (m)</th>
+                <th>Base / Call-Out Fee (PHP)</th>
+                <th>Included Base KM</th>
+                <th>Per-KM Rate (PHP)</th>
+                <th>Economy Multiplier</th>
+                <th>Arrival Cancel Fee</th>
+                <th>Effective 5km Sample Fare</th>
+                <th>SuperAdmin Action</th>
+              </tr>
+            </thead>
+            <tbody id="superAdminPricingMatrixTable"></tbody>
+          </table>
+        </div>
+
         <!-- HYBRID MONETIZATION & 4-TIER SUBSCRIPTION PASS CONTROL -->
         <div class="card" style="margin-bottom: 1.25rem;">
           <div class="card-header">

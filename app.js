@@ -16,6 +16,7 @@ const consoleState = {
   maturityHours: 72,
   ledgerHealth: null,
   verticals: [],
+  servicePricingMatrix: [],
   subscriptionTiers: [],
   contractorSubscriptions: [],
   contractorProfiles: [],
@@ -237,10 +238,11 @@ async function syncFromSupabase() {
   if (!supabaseClient || !currentAuthUser) return;
   try {
     const [
-      vRes, cfgRes, healthRes, subTiersRes, subActRes, cProfRes,
+      vRes, priceRes, cfgRes, healthRes, subTiersRes, subActRes, cProfRes,
       uRes, bRes, lRes, ratRes, mRes, tRes, rRes, aRes, opRes
     ] = await Promise.all([
       supabaseClient.from('service_verticals').select('*').order('vertical_key'),
+      supabaseClient.from('service_pricing_matrix').select('*').order('vertical_key'),
       supabaseClient.from('system_config').select('*'),
       supabaseClient.from('v_universal_ledger_health').select('*').limit(1),
       supabaseClient.from('subscription_tiers').select('*').order('monthly_fee', { ascending: true }),
@@ -258,6 +260,7 @@ async function syncFromSupabase() {
     ]);
 
     if (vRes.data) consoleState.verticals = vRes.data;
+    if (priceRes && priceRes.data) consoleState.servicePricingMatrix = priceRes.data;
     if (cfgRes.data) {
       const commRow = cfgRes.data.find(c => c.config_key === 'platform_commission_rate');
       const matRow = cfgRes.data.find(c => c.config_key === 'skills_maturity_window_hours');
@@ -309,6 +312,7 @@ function subscribeRealtimeKernel() {
   supabaseClient
     .channel('alisto-v3-live')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'service_verticals' }, () => syncFromSupabase())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'service_pricing_matrix' }, () => syncFromSupabase())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => syncFromSupabase())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'contractor_profiles' }, () => syncFromSupabase())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'subscription_tiers' }, () => syncFromSupabase())
@@ -1808,6 +1812,58 @@ function renderSuperAdmin() {
     `;
   }
 
+
+  // Render Dynamic Service Class Pricing Matrix Table
+  const pBody = document.getElementById('superAdminPricingMatrixTable');
+  if (pBody) {
+    pBody.innerHTML = consoleState.servicePricingMatrix.map(p => {
+      const baseFee = Number(p.base_or_callout_fee || 0);
+      const incKm = Number(p.base_included_km || 0);
+      const perKm = Number(p.per_km_rate || 0);
+      const mult = Number(p.economy_multiplier || 1.0);
+      const cancelFee = Number(p.arrival_cancellation_fee || 0);
+      const extraKm = p.vertical_key === 'skills_marketplace' ? 0 : Math.max(0, 5.0 - incKm);
+      const sample5km = ((baseFee + (extraKm * perKm)) * mult).toFixed(2);
+
+      return `
+        <tr>
+          <td>
+            <strong>${p.class_name}</strong><br/>
+            <code>${p.class_code}</code> • <small style="color:var(--cyan-accent)">${p.vertical_key}</small><br/>
+            <small style="color:var(--text-muted)">${p.vehicle_or_trade_type}</small>
+          </td>
+          <td>
+            <input type="number" class="tier-input" style="width:75px;" id="pr_rad_${p.class_code}" value="${p.dispatch_radius_m}" step="100" />
+          </td>
+          <td>
+            PHP <input type="number" class="tier-input" style="width:85px;" id="pr_base_${p.class_code}" value="${baseFee.toFixed(2)}" step="5" />
+          </td>
+          <td>
+            <input type="number" class="tier-input" style="width:65px;" id="pr_inckm_${p.class_code}" value="${incKm.toFixed(1)}" step="0.5" /> km
+          </td>
+          <td>
+            PHP <input type="number" class="tier-input" style="width:75px;" id="pr_km_${p.class_code}" value="${perKm.toFixed(2)}" step="1" />
+          </td>
+          <td>
+            <input type="number" class="tier-input" style="width:70px;color:var(--amber-core);" id="pr_mult_${p.class_code}" value="${mult.toFixed(2)}" step="0.05" min="0.50" max="3.00" />x
+          </td>
+          <td>
+            PHP <input type="number" class="tier-input" style="width:75px;" id="pr_canc_${p.class_code}" value="${cancelFee.toFixed(2)}" step="5" />
+          </td>
+          <td>
+            <strong style="color:var(--emerald-ok)">PHP ${sample5km}</strong><br/>
+            <small style="color:var(--text-muted)">${p.vertical_key === 'skills_marketplace' ? 'Base Call-Out' : '5.0 km Trip'}</small>
+          </td>
+          <td>
+            <button class="btn-primary" style="padding:0.4rem 0.7rem;font-size:0.76rem;" onclick="saveServicePricingRow('${p.class_code}')">
+              Save Pricing
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
   // 2. Render Editable 4-Tier Subscription Pass Table
   const subBody = document.getElementById('superAdminSubscriptionTiersTable');
   if (subBody) {
@@ -2128,3 +2184,68 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   }
 });
+
+
+async function saveServicePricingRow(classCode) {
+  if (!currentAuthUser || currentAuthUser.role !== 'super_admin') {
+    alert('UNAUTHORIZED: Only SuperAdmin can modify service class pricing.');
+    return;
+  }
+  const rad = parseInt(document.getElementById('pr_rad_' + classCode).value, 10) || 1500;
+  const baseFee = parseFloat(document.getElementById('pr_base_' + classCode).value) || 0;
+  const incKm = parseFloat(document.getElementById('pr_inckm_' + classCode).value) || 0;
+  const perKm = parseFloat(document.getElementById('pr_km_' + classCode).value) || 0;
+  const mult = parseFloat(document.getElementById('pr_mult_' + classCode).value) || 1.0;
+  const cancelFee = parseFloat(document.getElementById('pr_canc_' + classCode).value) || 0;
+
+  const { data, error } = await supabaseClient.rpc('admin_update_service_pricing_rpc', {
+    p_actor_id: currentAuthUser.id,
+    p_class_code: classCode,
+    p_base_fee: baseFee,
+    p_included_km: incKm,
+    p_per_km_rate: perKm,
+    p_economy_multiplier: mult,
+    p_cancellation_fee: cancelFee,
+    p_dispatch_radius_m: rad
+  });
+
+  if (error || (data && data.status === 'ERROR')) {
+    alert('Pricing Update Error (Ensure Step 1 SQL 07_alisto_dynamic_pricing_matrix.sql is executed in Supabase): ' + (error ? error.message : data.message));
+    return;
+  }
+
+  alert(`Pricing for [${classCode}] committed live to PostgreSQL!`);
+  await syncFromSupabase();
+}
+
+async function applyBlanketEconomyMultiplier() {
+  if (!currentAuthUser || currentAuthUser.role !== 'super_admin') {
+    alert('UNAUTHORIZED: Only SuperAdmin can apply platform economic multipliers.');
+    return;
+  }
+  const targetVert = document.getElementById('econTargetVertical').value;
+  const mult = parseFloat(document.getElementById('econMultiplierInput').value) || 1.00;
+  const reason = document.getElementById('econReasonInput').value.trim() || 'SuperAdmin economic/fuel index adjustment';
+
+  const { data, error } = await supabaseClient.rpc('admin_apply_economy_multiplier_rpc', {
+    p_actor_id: currentAuthUser.id,
+    p_target_vertical: targetVert,
+    p_multiplier: mult,
+    p_reason: reason
+  });
+
+  if (error || (data && data.status === 'ERROR')) {
+    alert('Multiplier RPC Error: ' + (error ? error.message : data.message));
+    return;
+  }
+
+  alert(`Applied ${mult.toFixed(2)}x Economy Multiplier across [${targetVert}]!`);
+  await syncFromSupabase();
+}
+
+async function resetBlanketEconomyMultiplier() {
+  document.getElementById('econTargetVertical').value = 'ALL';
+  document.getElementById('econMultiplierInput').value = '1.00';
+  document.getElementById('econReasonInput').value = 'Reset to 1.00x baseline pricing';
+  await applyBlanketEconomyMultiplier();
+}

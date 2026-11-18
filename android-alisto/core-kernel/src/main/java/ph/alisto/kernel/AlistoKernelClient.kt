@@ -52,6 +52,26 @@ data class ActiveSubscriptionPass(
     val expiresAt: String
 )
 
+
+data class ServicePricingClass(
+    val classCode: String,
+    val verticalKey: String,
+    val className: String,
+    val vehicleOrTradeType: String,
+    val dispatchRadiusM: Int,
+    val baseOrCalloutFee: Double,
+    val baseIncludedKm: Double,
+    val perKmRate: Double,
+    val economyMultiplier: Double,
+    val arrivalCancellationFee: Double
+) {
+    fun computeEffectiveFare(distanceKm: Double = 3.0): Double {
+        val extraKm = if (verticalKey == "skills_marketplace") 0.0 else (distanceKm - baseIncludedKm).coerceAtLeast(0.0)
+        val raw = baseOrCalloutFee + (extraKm * perKmRate)
+        return Math.round(raw * economyMultiplier * 100.0) / 100.0
+    }
+}
+
 data class ServiceVertical(
     val key: String,
     val displayName: String,
@@ -110,6 +130,7 @@ object AlistoKernelClient {
     var currentSubscriptionPass: ActiveSubscriptionPass? = null
 
     val verticals = mutableListOf<ServiceVertical>()
+    val pricingClasses = mutableListOf<ServicePricingClass>()
     val bookings = mutableListOf<BookingRecord>()
     val ledgerHistory = mutableListOf<LedgerEntry>()
     val chatTranscripts = mutableMapOf<String, MutableList<ChatMessage>>()
@@ -440,6 +461,40 @@ object AlistoKernelClient {
                 }
             }
         } catch (_: Exception) {}
+
+            val pReq = Request.Builder()
+                .url("$supabaseUrl/rest/v1/service_pricing_matrix?select=*&order=vertical_key.asc")
+                .addHeader("apikey", supabaseKey)
+                .addHeader("Authorization", "Bearer $supabaseKey")
+                .get()
+                .build()
+
+            http.newCall(pReq).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val arr = JSONArray(resp.body?.string() ?: "[]")
+                    if (arr.length() > 0) {
+                        pricingClasses.clear()
+                        for (i in 0 until arr.length()) {
+                            val o = arr.getJSONObject(i)
+                            pricingClasses.add(
+                                ServicePricingClass(
+                                    classCode = o.getString("class_code"),
+                                    verticalKey = o.getString("vertical_key"),
+                                    className = o.getString("class_name"),
+                                    vehicleOrTradeType = o.optString("vehicle_or_trade_type", ""),
+                                    dispatchRadiusM = o.optInt("dispatch_radius_m", 1500),
+                                    baseOrCalloutFee = o.optDouble("base_or_callout_fee", 350.0),
+                                    baseIncludedKm = o.optDouble("base_included_km", 0.0),
+                                    perKmRate = o.optDouble("per_km_rate", 0.0),
+                                    economyMultiplier = o.optDouble("economy_multiplier", 1.0),
+                                    arrivalCancellationFee = o.optDouble("arrival_cancellation_fee", 100.0)
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+
         syncBookingsAndWallet()
         return@withContext verticals
     }
@@ -551,7 +606,41 @@ object AlistoKernelClient {
                     return@withContext Result.failure(IllegalStateException(json.optString("message")))
                 }
             }
-            syncBookingsAndWallet()
+    
+            val pReq = Request.Builder()
+                .url("$supabaseUrl/rest/v1/service_pricing_matrix?select=*&order=vertical_key.asc")
+                .addHeader("apikey", supabaseKey)
+                .addHeader("Authorization", "Bearer $supabaseKey")
+                .get()
+                .build()
+
+            http.newCall(pReq).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val arr = JSONArray(resp.body?.string() ?: "[]")
+                    if (arr.length() > 0) {
+                        pricingClasses.clear()
+                        for (i in 0 until arr.length()) {
+                            val o = arr.getJSONObject(i)
+                            pricingClasses.add(
+                                ServicePricingClass(
+                                    classCode = o.getString("class_code"),
+                                    verticalKey = o.getString("vertical_key"),
+                                    className = o.getString("class_name"),
+                                    vehicleOrTradeType = o.optString("vehicle_or_trade_type", ""),
+                                    dispatchRadiusM = o.optInt("dispatch_radius_m", 1500),
+                                    baseOrCalloutFee = o.optDouble("base_or_callout_fee", 350.0),
+                                    baseIncludedKm = o.optDouble("base_included_km", 0.0),
+                                    perKmRate = o.optDouble("per_km_rate", 0.0),
+                                    economyMultiplier = o.optDouble("economy_multiplier", 1.0),
+                                    arrivalCancellationFee = o.optDouble("arrival_cancellation_fee", 100.0)
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+
+        syncBookingsAndWallet()
             val newest = bookings.firstOrNull()
             if (newest != null) return@withContext Result.success(newest)
         } catch (e: Exception) {
