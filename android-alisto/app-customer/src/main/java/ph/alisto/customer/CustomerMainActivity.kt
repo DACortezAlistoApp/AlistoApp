@@ -269,7 +269,7 @@ class CustomerMainActivity : AppCompatActivity() {
 
         // Sequential Numbered Waypoints Builder (1, 2, 3...)
         val waypointsStatus = TextView(this).apply {
-            text = if (sequentialWaypoints.isEmpty()) "Numbered Waypoints: None (Single Job Site Pin)" else "Waypoints: ${sequentialWaypoints.length()}"
+            text = if (sequentialWaypoints.isEmpty()) "Numbered Waypoints: None (Single Job Site Pin)" else "Waypoints: ${sequentialWaypoints.size}"
             setTextColor(Color.parseColor("#00F2FE"))
             textSize = 12f
             setPadding(0, 4, 0, 6)
@@ -328,7 +328,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 val errandCost = errandCostInput.text.toString().toDoubleOrNull() ?: 0.0
                 val deadheadKm = deadheadKmInput.text.toString().toDoubleOrNull() ?: 0.0
                 val tip = tipInput.text.toString().toDoubleOrNull() ?: 0.0
-                val wpArr = JSONArray(sequentialWaypoints)
+                val wpArr = JSONArray().apply { sequentialWaypoints.forEach { put(it) } }
 
                 uiScope.launch {
                     val res = AlistoKernelClient.createBookingV2Rpc(
