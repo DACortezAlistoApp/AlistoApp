@@ -11,8 +11,8 @@ android {
         applicationId = "ph.alisto.contractor"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0-nexus"
+        versionCode = 3
+        versionName = "3.0.0-nexus-v3"
     }
 
     buildTypes {
@@ -34,6 +34,7 @@ dependencies {
     implementation(project(":core-kernel"))
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("androidx.biometric:biometric:1.1.0")
     implementation("com.google.android.material:material:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }

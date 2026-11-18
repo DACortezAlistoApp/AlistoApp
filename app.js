@@ -1025,12 +1025,12 @@ function openProfileInspector(userId) {
       <!-- PANEL 1: EDIT PROFILE DETAILS, NICKNAME, GPS HOME PIN & SKILLS -->
       <div class="forensic-box">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
-          <h4>1. Profile, Phone, GPS Home Anchor & Skills (\`@${u.username || u.role}\`)</h4>
+          <h4>1. Profile, Phone, GPS Home Anchor & Skills (@${u.username || u.role})</h4>
           ${u.profile_photo_url ? `<img src="${u.profile_photo_url}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid var(--cyan-accent);" title="Compressed VGA Profile Photo" />` : ''}
         </div>
         <div class="profile-input-grid">
           <div>
-            <label>Username (\`@username\`)</label>
+            <label>Username (@username)</label>
             <input type="text" id="profUsername" value="${u.username || ''}" ${!canEditTarget ? 'disabled' : ''} />
           </div>
           <div>
@@ -1104,7 +1104,7 @@ function openProfileInspector(userId) {
         <!-- Permanent Non-Expiring Password Reset -->
         <div style="padding-bottom:0.65rem;margin-bottom:0.65rem;border-bottom:1px solid var(--border-subtle);">
           <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:0.25rem;">
-            Reset Permanent Password (\`public.user_credentials\`)
+            Reset Permanent Password (public.user_credentials)
           </label>
           <div style="display:grid;grid-template-columns:1fr auto;gap:0.45rem;">
             <input type="text" id="profNewPasswordInput" placeholder="Enter new permanent password"
@@ -1119,7 +1119,7 @@ function openProfileInspector(userId) {
         <!-- Manual Suspension & Lift Suspension -->
         <div style="padding-bottom:0.65rem;margin-bottom:0.65rem;border-bottom:1px solid var(--border-subtle);">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem;">
-            <span style="font-size:0.76rem;color:var(--text-muted);">Account State (\`account_status\`):</span>
+            <span style="font-size:0.76rem;color:var(--text-muted);">Account State (account_status):</span>
             <span class="${accStatus === 'ACTIVE' ? 'pill-clean' : 'pill-risk'}">${accStatus}</span>
           </div>
           <div style="display:grid;grid-template-columns:1fr auto;gap:0.45rem;">
@@ -1203,7 +1203,7 @@ function openProfileInspector(userId) {
     <!-- PANEL 6: WALLET CREDIT / DEBIT & PAYMONGO QR PH TOP-UP (+P25 BONUS) -->
     <div class="forensic-box">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.65rem;">
-        <h4>6. Prepaid Wallet Credit / Debit & PayMongo QR Ph Top-Up (\`public.credit_ledger\`)</h4>
+        <h4>6. Prepaid Wallet Credit / Debit & PayMongo QR Ph Top-Up (public.credit_ledger)</h4>
         <div>
           <span style="font-size:0.85rem;margin-right:0.8rem;">
             Available Balance: <strong style="color:var(--emerald-ok);font-size:1.05rem;">PHP ${Number(u.credit_balance || 0).toFixed(2)}</strong>
