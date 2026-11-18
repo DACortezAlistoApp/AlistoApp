@@ -16,6 +16,8 @@ const consoleState = {
   maturityHours: 72,
   ledgerHealth: null,
   verticals: [],
+  heatmapClusters: [],
+  bookingBids: [],
   servicePricingMatrix: [],
   subscriptionTiers: [],
   contractorSubscriptions: [],
@@ -238,11 +240,13 @@ async function syncFromSupabase() {
   if (!supabaseClient || !currentAuthUser) return;
   try {
     const [
-      vRes, priceRes, cfgRes, healthRes, subTiersRes, subActRes, cProfRes,
+      vRes, priceRes, heatRes, bidsRes, cfgRes, healthRes, subTiersRes, subActRes, cProfRes,
       uRes, bRes, lRes, ratRes, mRes, tRes, rRes, aRes, opRes
     ] = await Promise.all([
       supabaseClient.from('service_verticals').select('*').order('vertical_key'),
       supabaseClient.from('service_pricing_matrix').select('*').order('vertical_key'),
+      supabaseClient.from('v_demand_heatmap_clusters').select('*'),
+      supabaseClient.from('booking_bids').select('*').order('created_at', { ascending: false }),
       supabaseClient.from('system_config').select('*'),
       supabaseClient.from('v_universal_ledger_health').select('*').limit(1),
       supabaseClient.from('subscription_tiers').select('*').order('monthly_fee', { ascending: true }),
@@ -261,6 +265,8 @@ async function syncFromSupabase() {
 
     if (vRes.data) consoleState.verticals = vRes.data;
     if (priceRes && priceRes.data) consoleState.servicePricingMatrix = priceRes.data;
+    if (heatRes && heatRes.data) consoleState.heatmapClusters = heatRes.data;
+    if (bidsRes && bidsRes.data) consoleState.bookingBids = bidsRes.data;
     if (cfgRes.data) {
       const commRow = cfgRes.data.find(c => c.config_key === 'platform_commission_rate');
       const matRow = cfgRes.data.find(c => c.config_key === 'skills_maturity_window_hours');
@@ -558,7 +564,7 @@ function renderOperatorUsersTable() {
           ${u.role === 'contractor'
             ? `<span class="csat-badge">★ ${avgStars} CSAT (${ratingCnt})</span> • <small>${certs.length} Cert(s)</small><br/>
                <small style="color:var(--text-muted)">Vehicle: ${cProf ? cProf.vehicle_type + ' (' + cProf.dispatch_radius_m + 'm)' : 'motorcycle (1500m)'}</small>`
-            : `<small style="color:var(--text-muted)">Household / Business Client</small>`}
+            : `<span class="csat-badge">UP: ${u.thumbs_up_count ?? 5} / DOWN: ${u.thumbs_down_count ?? 0} (${Number(u.customer_trust_score ?? 100).toFixed(0)}% Trust)</span>${u.trust_deposit_required ? "<br/><span class=\"pill-risk\">DEPOSIT GATE ACTIVE</span>" : ""}${Number(u.clearing_fee_due_php || 0) > 0 ? "<br/><small style=\"color:#fca5a5\">Clearing Fee: PHP " + Number(u.clearing_fee_due_php).toFixed(2) + "</small>" : ""}`}
         </td>
         <td>${stateBadge}</td>
         <td>
@@ -1734,6 +1740,8 @@ function openForensicDossier(bookingId) {
         ${contractor
           ? `<button class="btn-danger" onclick="closeForensicModal();openProfileInspector('${contractor.id}')">Open Contractor Profile to Suspend/Debit</button>`
           : ''}
+        <button class="btn-xs" style="border-color:var(--amber-core);color:var(--amber-core);" onclick="operatorTriggerMutualCancel('${b.id}', '${b.booking_ref}')">50/50 Mutual Cancel</button>
+        <button class="btn-xs" style="border-color:var(--crimson-err);color:#fca5a5;" onclick="operatorTriggerNoShowCancel('${b.id}', '${b.booking_ref}')">30m No-Show Strike</button>
         <button class="btn-outline" onclick="window.print()">Print / Export Dossier PDF</button>
       </div>
     </div>
@@ -2161,6 +2169,7 @@ function renderAll() {
     renderOperatorUsersTable();
     renderOperatorKycQueue();
     renderOperatorContractorCommissionTable();
+    renderOperatorHeatmapTable();
     renderOperatorBookingsTable();
     renderLguAdmin();
   }
@@ -2248,4 +2257,69 @@ async function resetBlanketEconomyMultiplier() {
   document.getElementById('econMultiplierInput').value = '1.00';
   document.getElementById('econReasonInput').value = 'Reset to 1.00x baseline pricing';
   await applyBlanketEconomyMultiplier();
+}
+
+
+function renderOperatorHeatmapTable() {
+  const tbody = document.getElementById('operatorHeatmapTable');
+  if (!tbody) return;
+  if (!consoleState.heatmapClusters || consoleState.heatmapClusters.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text-muted)">No demand clusters recorded yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = consoleState.heatmapClusters.map(h => {
+    const badgeClass = h.heat_intensity === 'HIGH_SURGE_ZONE'
+      ? 'pill-risk'
+      : (h.heat_intensity === 'MODERATE_DEMAND' ? 'pill-watch' : 'pill-clean');
+    const navUrl = `https://www.google.com/maps/dir/?api=1&destination=${h.center_lat},${h.center_lng}&travelmode=driving&avoid=highways,tolls`;
+    return `
+      <tr>
+        <td><strong>${h.barangay_zone}, ${h.municipality}</strong></td>
+        <td><code>${h.vertical_key}</code></td>
+        <td>
+          <a href="${navUrl}" target="_blank" class="username-link" title="Launch Google Maps with avoid=ht (No Expressways/Tolls)">
+            NAV (${h.center_lat}, ${h.center_lng} • avoid=ht)
+          </a>
+        </td>
+        <td><strong>${h.total_bookings_volume}</strong></td>
+        <td><strong style="color:var(--cyan-accent)">${h.active_demand_count} Active</strong></td>
+        <td><span class="${badgeClass}">${h.heat_intensity}</span></td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function operatorTriggerMutualCancel(bookingId, bookingRef) {
+  const reason = prompt(`Execute Mutual Cancellation (50/50 Commission Recovery Split) for ${bookingRef}:`, 'Counterparty-confirmed mutual cancellation');
+  if (!reason || !currentAuthUser) return;
+  const { data, error } = await supabaseClient.rpc('execute_mutual_or_noshow_cancel_rpc', {
+    p_booking_id: bookingId,
+    p_actor_id: currentAuthUser.id,
+    p_cancel_mode: 'MUTUAL_CONFIRMED',
+    p_reason: reason
+  });
+  if (error || (data && data.status === 'ERROR')) {
+    alert('Mutual Cancel Error: ' + (error ? error.message : data.message));
+    return;
+  }
+  alert(`Mutual Cancellation Executed! Mode: ${data.mode} (Contractor 50% Split: PHP ${data.contractor_deducted_php || 0} | Customer 50% Clearing Fee: PHP ${data.customer_clearing_fee_php || 0})`);
+  closeForensicModal();
+  await syncFromSupabase();
+}
+
+async function operatorTriggerNoShowCancel(bookingId, bookingRef) {
+  if (!confirm(`Confirm Contractor No-Show (>30 mins) on ${bookingRef}? This unlocks penalty-free customer cancellation and logs 1 accountability strike on the contractor.`)) return;
+  const { data, error } = await supabaseClient.rpc('execute_mutual_or_noshow_cancel_rpc', {
+    p_booking_id: bookingId,
+    p_actor_id: currentAuthUser.id,
+    p_cancel_mode: 'CONTRACTOR_NO_SHOW_30MIN',
+    p_reason: 'Contractor no-show past 30 minutes'
+  });
+  if (error || (data && data.status === 'ERROR')) {
+    alert('No-Show Cancel Error: ' + (error ? error.message : data.message));
+    return;
+  }
+  alert('30-Minute No-Show Cancellation completed & accountability strike logged.');
+  closeForensicModal();
+  await syncFromSupabase();
 }

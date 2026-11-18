@@ -9,15 +9,19 @@ import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.*
+import org.json.JSONArray
+import org.json.JSONObject
 import ph.alisto.kernel.*
 
 class CustomerMainActivity : AppCompatActivity() {
 
     private val uiScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var selectedVerticalKey = "skills_marketplace"
-    private var entryMode = "LOGIN" // "LOGIN" or "SIGNUP"
+    private var selectedJobSubtype = "ON_SITE_SKILL"
+    private var entryMode = "LOGIN"
     private var compressedProfilePhotoDataUrl: String? = null
     private var compressedProfilePhotoMeta: String = "Optional (Not Attached)"
+    private val sequentialWaypoints = mutableListOf<JSONObject>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -38,16 +42,13 @@ class CustomerMainActivity : AppCompatActivity() {
                 uiScope.launch {
                     val res = AlistoKernelClient.fetchAppBootStateRpc(savedUid, "customer")
                     res.onSuccess {
-                        Toast.makeText(this@CustomerMainActivity, "Biometric Keystore Session Restored!", Toast.LENGTH_SHORT).show()
                         showAuthenticatedCustomerPortal()
                     }.onFailure {
                         showEntryPortalGate()
                     }
                 }
             },
-            onFallbackOrError = {
-                showEntryPortalGate()
-            }
+            onFallbackOrError = { showEntryPortalGate() }
         )
     }
 
@@ -62,31 +63,28 @@ class CustomerMainActivity : AppCompatActivity() {
             AlistoBrandHeaderView(
                 this,
                 "ALISTO APP • CUSTOMER",
-                "Separated Customer Portal • Biometric Keystore"
+                "Nationwide Local-Road (avoid=ht) • Biometric Keystore"
             ).apply {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, 0, 0, 24) }
+                ).apply { setMargins(0, 0, 0, 20) }
             }
         )
 
-        // Biometric Quick Unlock Banner if Keystore Session Exists
         if (AlistoBiometricVault.hasSavedSession(this, "customer")) {
-            val bioBtn = Button(this).apply {
+            container.addView(Button(this).apply {
                 text = "BIOMETRIC QUICK UNLOCK (${AlistoBiometricVault.getSavedUserLabel(this@CustomerMainActivity, "customer")})"
                 setBackgroundColor(Color.parseColor("#10B981"))
                 setTextColor(Color.parseColor("#070A12"))
                 setTypeface(null, Typeface.BOLD)
                 setOnClickListener { triggerFrictionlessBiometricEntry() }
-            }
-            container.addView(bioBtn)
+            })
         }
 
-        // Mode Switcher (Log In vs. Customer Sign-Up)
         val tabRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 16, 0, 24)
+            setPadding(0, 16, 0, 20)
             addView(Button(this@CustomerMainActivity).apply {
                 text = "LOG IN"
                 setBackgroundColor(Color.parseColor(if (entryMode == "LOGIN") "#00F2FE" else "#1E293B"))
@@ -94,7 +92,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 setOnClickListener { entryMode = "LOGIN"; showEntryPortalGate() }
             })
             addView(Button(this@CustomerMainActivity).apply {
-                text = "NEW CUSTOMER SIGN UP"
+                text = "CUSTOMER SIGN UP"
                 setBackgroundColor(Color.parseColor(if (entryMode == "SIGNUP") "#00F2FE" else "#1E293B"))
                 setTextColor(Color.parseColor(if (entryMode == "SIGNUP") "#070A12" else "#FFFFFF"))
                 setOnClickListener { entryMode = "SIGNUP"; showEntryPortalGate() }
@@ -117,157 +115,91 @@ class CustomerMainActivity : AppCompatActivity() {
                 setTextColor(Color.parseColor("#070A12"))
                 setTypeface(null, Typeface.BOLD)
                 setOnClickListener {
-                    val idStr = idInput.text.toString()
-                    val pwStr = pwInput.text.toString()
-                    isEnabled = false
                     uiScope.launch {
-                        val res = AlistoKernelClient.authenticateUserRpc(idStr, pwStr, "customer")
-                        isEnabled = true
+                        val res = AlistoKernelClient.authenticateUserRpc(idInput.text.toString(), pwInput.text.toString(), "customer")
                         res.onSuccess { user ->
-                            AlistoBiometricVault.saveEncryptedSession(
-                                this@CustomerMainActivity,
-                                "customer",
-                                user.id,
-                                "${user.nickname} (@${user.username})"
-                            )
+                            AlistoBiometricVault.saveEncryptedSession(this@CustomerMainActivity, "customer", user.id, "${user.nickname} (@${user.username})")
                             showAuthenticatedCustomerPortal()
                         }.onFailure { err ->
-                            AlertDialog.Builder(this@CustomerMainActivity)
-                                .setTitle("Authentication Denied")
-                                .setMessage(err.message)
-                                .setPositiveButton("OK", null)
-                                .show()
+                            AlertDialog.Builder(this@CustomerMainActivity).setTitle("Login Denied").setMessage(err.message).setPositiveButton("OK", null).show()
                         }
                     }
                 }
             })
         } else {
-            // SECTION 3 OF V2/V3 SPEC: CUSTOMER ONBOARDING & SIGN-UP WORKFLOW
             val fullNameInput = styledInput("Legal Full Name (e.g., Clarisse Dizon)")
             container.addView(labeledField("Full Name (Mandatory)", fullNameInput))
-
             val nicknameInput = styledInput("Preferred Nickname (e.g., Ate Clarisse)")
-            container.addView(labeledField("Preferred Nickname for Contractor Greetings (Mandatory)", nicknameInput))
-
+            container.addView(labeledField("Preferred Nickname for Contractor Greetings", nicknameInput))
             val phoneInput = styledInput("+63917XXXXXXX")
-            container.addView(labeledField("Mobile Phone Number (Mandatory — Must remain active for direct contractor coordination calls)", phoneInput))
-
+            container.addView(labeledField("Mobile Phone (Must remain active for contractor coordination calls)", phoneInput))
             val emailInput = styledInput("customer@email.com")
-            container.addView(labeledField("Email Address (Mandatory — Digital Receipts & Password Reset)", emailInput))
-
-            val pwInput = styledInput("Create Permanent Non-Expiring Password").apply {
+            container.addView(labeledField("Email Address", emailInput))
+            val pwInput = styledInput("Create Permanent Password").apply {
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             }
-            container.addView(labeledField("Permanent Password (Mandatory)", pwInput))
-
-            val addrInput = styledInput("House No., Street, Subdivision, Barangay, Angeles City")
-            container.addView(labeledField("Registered Address & Map Pin (Mandatory)", addrInput))
-
-            val gpsCoordText = TextView(this).apply {
-                text = "GPS Home Pin Anchor: 15.14500, 120.58870 (Angeles City)"
-                setTextColor(Color.parseColor("#34D399"))
-                textSize = 12f
-                setPadding(0, 0, 0, 8)
-            }
-            container.addView(gpsCoordText)
+            container.addView(labeledField("Permanent Password", pwInput))
+            val addrInput = styledInput("House No., Street, Barangay, Municipality")
+            container.addView(labeledField("Registered Address & Map Pin", addrInput))
 
             var homeLat = 15.1450
             var homeLng = 120.5887
+            val gpsCoordText = TextView(this).apply {
+                text = "Reverse-Geocoded Pin: ${AlistoSpatialEngine.reverseGeocodePin(this@CustomerMainActivity, homeLat, homeLng)}"
+                setTextColor(Color.parseColor("#34D399"))
+                textSize = 12f
+            }
+            container.addView(gpsCoordText)
 
             container.addView(Button(this).apply {
-                text = "USE CURRENT GPS LOCATION (SNAP HOME PIN)"
+                text = "USE CURRENT GPS LOCATION (REVERSE-GEOCODE PIN)"
                 setBackgroundColor(Color.parseColor("#1E293B"))
                 setTextColor(Color.parseColor("#00F2FE"))
                 setOnClickListener {
                     homeLat = 15.1450 + (Math.random() * 0.009)
                     homeLng = 120.5887 + (Math.random() * 0.009)
-                    gpsCoordText.text = "GPS Home Pin Snapped: ${"%.5f".format(homeLat)}, ${"%.5f".format(homeLng)}"
-                }
-            })
-
-            val photoAdvisory = TextView(this).apply {
-                text = "Optional Profile Picture: Helps assigned contractors easily identify you at pickup points or job sites ($compressedProfilePhotoMeta)."
-                setTextColor(Color.parseColor("#94A3B8"))
-                textSize = 12f
-                setPadding(0, 16, 0, 8)
-            }
-            container.addView(photoAdvisory)
-
-            container.addView(Button(this).apply {
-                text = "ATTACH VGA PROFILE PHOTO (640x480 • <80 KB COMPRESSED)"
-                setBackgroundColor(Color.parseColor("#334155"))
-                setTextColor(Color.WHITE)
-                setOnClickListener {
-                    val asset = AlistoMediaCompressor.generateCompressedCredentialStamp(
-                        "Customer Profile Photo",
-                        fullNameInput.text.toString().ifBlank { "Customer" },
-                        isProfilePhoto = true
-                    )
-                    compressedProfilePhotoDataUrl = asset.dataUrl
-                    compressedProfilePhotoMeta = asset.standardLabel
-                    photoAdvisory.text = "Profile Photo Compressed & Attached: ${asset.standardLabel}"
+                    val rev = AlistoSpatialEngine.reverseGeocodePin(this@CustomerMainActivity, homeLat, homeLng)
+                    addrInput.setText(rev)
+                    gpsCoordText.text = "Snapped & Reverse-Geocoded: $rev"
                 }
             })
 
             container.addView(Button(this).apply {
-                text = "COMPLETE CUSTOMER SIGN-UP & BIND BIOMETRIC KEYSTORE"
+                text = "COMPLETE SIGN-UP & BIND BIOMETRIC KEYSTORE"
                 setBackgroundColor(Color.parseColor("#00F2FE"))
                 setTextColor(Color.parseColor("#070A12"))
                 setTypeface(null, Typeface.BOLD)
                 setOnClickListener {
-                    val fn = fullNameInput.text.toString().trim()
-                    val nick = nicknameInput.text.toString().trim()
-                    val ph = phoneInput.text.toString().trim()
-                    val em = emailInput.text.toString().trim()
-                    val pw = pwInput.text.toString().trim()
-                    val ad = addrInput.text.toString().trim()
-
-                    if (fn.isEmpty() || nick.isEmpty() || ph.isEmpty() || em.isEmpty() || pw.isEmpty()) {
-                        Toast.makeText(this@CustomerMainActivity, "Please complete all mandatory customer fields.", Toast.LENGTH_LONG).show()
-                        return@setOnClickListener
-                    }
-
                     uiScope.launch {
                         val res = AlistoKernelClient.registerCustomerPortalRpc(
-                            fullName = fn,
-                            nickname = nick,
-                            phone = ph,
-                            email = em,
-                            password = pw,
+                            fullName = fullNameInput.text.toString().trim(),
+                            nickname = nicknameInput.text.toString().trim(),
+                            phone = phoneInput.text.toString().trim(),
+                            email = emailInput.text.toString().trim(),
+                            password = pwInput.text.toString().trim(),
                             municipality = "Angeles City",
                             barangayZone = "Malabanias",
-                            addressText = ad.ifEmpty { "Brgy. Malabanias, Angeles City" },
+                            addressText = addrInput.text.toString().ifBlank { "Angeles City" },
                             homeLat = homeLat,
                             homeLng = homeLng,
                             profilePhotoUrl = compressedProfilePhotoDataUrl
                         )
                         res.onSuccess { user ->
-                            AlistoBiometricVault.saveEncryptedSession(
-                                this@CustomerMainActivity,
-                                "customer",
-                                user.id,
-                                "${user.nickname} (@${user.username})"
-                            )
+                            AlistoBiometricVault.saveEncryptedSession(this@CustomerMainActivity, "customer", user.id, "${user.nickname} (@${user.username})")
                             showAuthenticatedCustomerPortal()
                         }.onFailure { err ->
-                            AlertDialog.Builder(this@CustomerMainActivity)
-                                .setTitle("Sign-Up Error")
-                                .setMessage(err.message)
-                                .setPositiveButton("OK", null)
-                                .show()
+                            AlertDialog.Builder(this@CustomerMainActivity).setTitle("Sign-Up Error").setMessage(err.message).setPositiveButton("OK", null).show()
                         }
                     }
                 }
             })
         }
-
         scroll.addView(container)
         setContentView(scroll)
     }
 
     private fun showAuthenticatedCustomerPortal() {
         val user = AlistoKernelClient.currentSessionUser ?: return showEntryPortalGate()
-
         val rootScroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor("#070D19")) }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -278,20 +210,20 @@ class CustomerMainActivity : AppCompatActivity() {
             AlistoBrandHeaderView(
                 this,
                 "Hi, ${user.nickname}! (@${user.username})",
-                "GPS Home Pin: ${"%.4f".format(user.homeLat)}, ${"%.4f".format(user.homeLng)}"
+                "Nationwide Scope • Local-Road Routing (avoid=ht)"
             ).apply {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, 0, 0, 16) }
+                ).apply { setMargins(0, 0, 0, 14) }
             }
         )
 
         val sessionBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 0, 0, 20)
+            setPadding(0, 0, 0, 16)
             addView(Button(this@CustomerMainActivity).apply {
-                text = "Sync Live Kernel"
+                text = "Refresh"
                 setBackgroundColor(Color.parseColor("#1E293B"))
                 setTextColor(Color.WHITE)
                 setOnClickListener {
@@ -302,115 +234,140 @@ class CustomerMainActivity : AppCompatActivity() {
                 }
             })
             addView(Button(this@CustomerMainActivity).apply {
-                text = "Lock (Keep Biometric)"
-                setBackgroundColor(Color.parseColor("#334155"))
-                setTextColor(Color.WHITE)
+                text = "Nav Home (avoid=ht)"
+                setBackgroundColor(Color.parseColor("#064E3B"))
+                setTextColor(Color.parseColor("#34D399"))
                 setOnClickListener {
-                    AlistoKernelClient.signOut()
-                    showEntryPortalGate()
+                    AlistoSpatialEngine.launchLocalRoadNavigation(this@CustomerMainActivity, user.homeLat, user.homeLng)
                 }
             })
             addView(Button(this@CustomerMainActivity).apply {
-                text = "Unbind Keystore"
-                setBackgroundColor(Color.parseColor("#7F1D1D"))
+                text = "Lock"
+                setBackgroundColor(Color.parseColor("#334155"))
                 setTextColor(Color.WHITE)
-                setOnClickListener {
-                    AlistoBiometricVault.clearSavedSession(this@CustomerMainActivity, "customer")
-                    AlistoKernelClient.signOut()
-                    showEntryPortalGate()
-                }
+                setOnClickListener { AlistoKernelClient.signOut(); showEntryPortalGate() }
             })
         }
         container.addView(sessionBar)
 
-        container.addView(sectionTitle("1. Select Service Vertical (Engine 10 Rollout Flags)"))
-        AlistoKernelClient.verticals.forEach { v ->
-            val card = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(24, 20, 24, 20)
-                val bg = when {
-                    !v.isEnabled -> "#111827"
-                    selectedVerticalKey == v.key -> "#164E63"
-                    else -> "#1E293B"
-                }
-                setBackgroundColor(Color.parseColor(bg))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, 0, 0, 14) }
-
-                setOnClickListener {
-                    if (!v.isEnabled) {
-                        Toast.makeText(this@CustomerMainActivity, "${v.displayName} is currently locked by SuperAdmin rollout sequence.", Toast.LENGTH_LONG).show()
-                    } else {
-                        selectedVerticalKey = v.key
-                        showAuthenticatedCustomerPortal()
-                    }
-                }
-            }
-            card.addView(TextView(this).apply {
-                text = "${v.displayName}  [${if (v.isEnabled) "ACTIVE" else "LOCKED"}]"
-                setTextColor(if (v.isEnabled) Color.parseColor("#00F2FE") else Color.parseColor("#EF4444"))
-                setTypeface(null, Typeface.BOLD)
-                textSize = 14f
-            })
-            card.addView(TextView(this).apply {
-                text = v.description
-                setTextColor(Color.parseColor("#CBD5E1"))
-                textSize = 12f
-            })
-            container.addView(card)
+        container.addView(sectionTitle("1. Select Service Vertical & Subtype (Master Spec v2.0)"))
+        val subtypeSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@CustomerMainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                listOf("ON_SITE_SKILL", "ERRAND_PURCHASING", "POINT_TO_POINT")
+            )
+            setBackgroundColor(Color.parseColor("#1E293B"))
         }
+        container.addView(labeledField("Workflow Subtype (On-Site Pin vs. Multi-Stop Errand Waypoints)", subtypeSpinner))
 
-        container.addView(sectionTitle("2. Dispatch Service Booking"))
-        val titleInput = styledInput("Service Title (e.g., Split-Type Aircon Cleaning)")
-        container.addView(labeledField("Service Request Summary", titleInput))
+        val titleInput = styledInput("e.g., Split-Type Aircon Cleaning OR Grocery/Hardware Errand Run")
+        container.addView(labeledField("Service / Errand Title", titleInput))
 
-        val pickupInput = styledInput(user.addressText.ifBlank { "${user.barangayZone}, ${user.municipality}" })
-        container.addView(labeledField("Pickup / Job Site Address (Synced to GPS Home Pin)", pickupInput))
+        val pickupInput = styledInput(user.addressText.ifBlank { "Origin / Job Site Pin (${user.barangayZone})" })
+        container.addView(labeledField("Origin / Job Site Pin (Reverse-Geocoded)", pickupInput))
 
-        val feeInput = styledInput("1200").apply {
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        // Sequential Numbered Waypoints Builder (1, 2, 3...)
+        val waypointsStatus = TextView(this).apply {
+            text = if (sequentialWaypoints.isEmpty()) "Numbered Waypoints: None (Single Job Site Pin)" else "Waypoints: ${sequentialWaypoints.length()}"
+            setTextColor(Color.parseColor("#00F2FE"))
+            textSize = 12f
+            setPadding(0, 4, 0, 6)
         }
-        container.addView(labeledField("Quoted Service Fee (PHP)", feeInput))
-
-        val tipInput = styledInput("100").apply {
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-        }
-        container.addView(labeledField("Optional Tip (PHP — 100% belongs to Contractor)", tipInput))
+        container.addView(waypointsStatus)
 
         container.addView(Button(this).apply {
-            text = "DISPATCH BOOKING TO 11-ENGINE KERNEL"
+            text = "+ DROP NUMBERED WAYPOINT PIN (#${sequentialWaypoints.size + 1}) & REVERSE-GEOCODE"
+            setBackgroundColor(Color.parseColor("#1E293B"))
+            setTextColor(Color.parseColor("#FBBF24"))
+            setOnClickListener {
+                val stopNum = sequentialWaypoints.size + 1
+                val wLat = user.homeLat + (stopNum * 0.003)
+                val wLng = user.homeLng + (stopNum * 0.003)
+                val addr = AlistoSpatialEngine.reverseGeocodePin(this@CustomerMainActivity, wLat, wLng)
+                sequentialWaypoints.add(JSONObject().apply {
+                    put("stop_number", stopNum)
+                    put("lat", wLat)
+                    put("lng", wLng)
+                    put("address", addr)
+                })
+                waypointsStatus.text = "Sequential Waypoints: " + sequentialWaypoints.joinToString(" -> ") { "#${it.getInt("stop_number")}: ${it.getString("address")}" }
+            }
+        })
+
+        val feeInput = styledInput("500").apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        container.addView(labeledField("Proposed Base Service Fee / Starting Bid (PHP)", feeInput))
+
+        val errandCostInput = styledInput("0").apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        container.addView(labeledField("Errand Item Reimbursement (PHP — <₱500 adds +₱10–₱15 GCash Buffer)", errandCostInput))
+
+        val deadheadKmInput = styledInput("0").apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        container.addView(labeledField("Out-of-Zone Return Distance (km — Optional ₱2.00/km Deadhead Offset, 100% to Rider)", deadheadKmInput))
+
+        val tipInput = styledInput("50").apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        container.addView(labeledField("Optional Tip (PHP — 100% Protected for Contractor/Rider)", tipInput))
+
+        container.addView(Button(this).apply {
+            text = "BROADCAST BOOKING / OPEN BIDDING (V2 KERNEL)"
             setBackgroundColor(Color.parseColor("#00F2FE"))
             setTextColor(Color.parseColor("#070D19"))
             setTypeface(null, Typeface.BOLD)
             setOnClickListener {
-                val title = titleInput.text.toString().ifBlank { "On-Demand Household Service" }
+                val subtype = subtypeSpinner.selectedItem.toString()
+                val title = titleInput.text.toString().ifBlank { "On-Demand Service / Errand" }
                 val addr = pickupInput.text.toString().ifBlank { user.addressText }
-                val fee = feeInput.text.toString().toDoubleOrNull() ?: 1200.0
+                val fee = feeInput.text.toString().toDoubleOrNull() ?: 500.0
+                val errandCost = errandCostInput.text.toString().toDoubleOrNull() ?: 0.0
+                val deadheadKm = deadheadKmInput.text.toString().toDoubleOrNull() ?: 0.0
                 val tip = tipInput.text.toString().toDoubleOrNull() ?: 0.0
+                val wpArr = JSONArray(sequentialWaypoints)
 
                 uiScope.launch {
-                    val res = AlistoKernelClient.createBookingRpc(
+                    val res = AlistoKernelClient.createBookingV2Rpc(
                         verticalKey = selectedVerticalKey,
+                        jobSubtype = subtype,
                         municipality = user.municipality,
                         barangayZone = user.barangayZone,
-                        skillCategory = "Aircon & HVAC",
+                        skillCategory = "General Service / Errand",
                         serviceTitle = title,
                         pickupAddress = addr,
-                        dropoffAddress = "",
+                        dropoffAddress = addr,
+                        waypointsJson = wpArr,
                         quotedFee = fee,
-                        tipAmount = tip
+                        tipAmount = tip,
+                        errandItemCostPhp = errandCost,
+                        deadheadReturnKm = deadheadKm
                     )
-                    res.onSuccess {
-                        Toast.makeText(this@CustomerMainActivity, "Booking ${it.bookingRef} Dispatched!", Toast.LENGTH_SHORT).show()
+                    res.onSuccess { json ->
+                        val buf = json.optDouble("gcash_cashout_buffer_php", 0.0)
+                        val dh = json.optDouble("deadhead_surcharge_php", 0.0)
+                        sequentialWaypoints.clear()
+                        Toast.makeText(
+                            this@CustomerMainActivity,
+                            "Broadcast Live! GCash Buffer: PHP $buf | Deadhead Offset: PHP $dh",
+                            Toast.LENGTH_LONG
+                        ).show()
                         showAuthenticatedCustomerPortal()
+                    }.onFailure { err ->
+                        AlertDialog.Builder(this@CustomerMainActivity)
+                            .setTitle("Booking / Trust Deposit Gate")
+                            .setMessage(err.message)
+                            .setPositiveButton("OK", null)
+                            .show()
                     }
                 }
             }
         })
 
-        container.addView(sectionTitle("3. Active Bookings & Engine 11 Moderated Chat"))
+        container.addView(sectionTitle("2. My Bookings, Live Map Navigation & Cancellation Controls"))
         AlistoKernelClient.bookings.filter { user.role == "super_admin" || it.clientId == user.id }.forEach { b ->
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -427,15 +384,44 @@ class CustomerMainActivity : AppCompatActivity() {
                 setTypeface(null, Typeface.BOLD)
             })
             card.addView(TextView(this).apply {
-                text = "Fee: PHP ${b.quotedFee} (+PHP ${b.tipAmount} Tip)"
+                text = "Address: ${b.pickupAddress}\nBase: PHP ${b.quotedFee} | Tip (100% Contractor): PHP ${b.tipAmount}"
                 setTextColor(Color.WHITE)
+                textSize = 12.5f
             })
-            card.addView(Button(this).apply {
-                text = "OPEN ENGINE 11 BOOKING CHAT"
-                setBackgroundColor(Color.parseColor("#334155"))
-                setTextColor(Color.WHITE)
-                setOnClickListener { openChatDialog(b) }
-            })
+
+            val btnRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, 10, 0, 0)
+                addView(Button(this@CustomerMainActivity).apply {
+                    text = "Chat (Engine 11)"
+                    setBackgroundColor(Color.parseColor("#334155"))
+                    setTextColor(Color.WHITE)
+                    setOnClickListener { openChatDialog(b) }
+                })
+                addView(Button(this@CustomerMainActivity).apply {
+                    text = "50/50 Mutual Cancel"
+                    setBackgroundColor(Color.parseColor("#7F1D1D"))
+                    setTextColor(Color.WHITE)
+                    setOnClickListener {
+                        uiScope.launch {
+                            AlistoKernelClient.executeMutualOrNoShowCancelRpc(b.id, "MUTUAL_CONFIRMED", "Customer & Contractor mutual cancel")
+                            showAuthenticatedCustomerPortal()
+                        }
+                    }
+                })
+                addView(Button(this@CustomerMainActivity).apply {
+                    text = "30m No-Show"
+                    setBackgroundColor(Color.parseColor("#451A03"))
+                    setTextColor(Color.parseColor("#FBBF24"))
+                    setOnClickListener {
+                        uiScope.launch {
+                            AlistoKernelClient.executeMutualOrNoShowCancelRpc(b.id, "CONTRACTOR_NO_SHOW_30MIN", "Contractor >30m no-show")
+                            showAuthenticatedCustomerPortal()
+                        }
+                    }
+                })
+            }
+            card.addView(btnRow)
             container.addView(card)
         }
 
@@ -449,7 +435,7 @@ class CustomerMainActivity : AppCompatActivity() {
             setPadding(32, 24, 32, 16)
             setBackgroundColor(Color.parseColor("#0F172A"))
         }
-        val msgInput = styledInput("Type message to contractor...")
+        val msgInput = styledInput("Negotiate bid / approve errand price adjustment...")
         dialogLayout.addView(msgInput)
 
         AlertDialog.Builder(this)
@@ -461,11 +447,7 @@ class CustomerMainActivity : AppCompatActivity() {
                     uiScope.launch {
                         val res = AlistoKernelClient.sendModeratedChatMessageRpc(booking.id, body)
                         res.onFailure { err ->
-                            AlertDialog.Builder(this@CustomerMainActivity)
-                                .setTitle("Engine 11 Moderation Block")
-                                .setMessage(err.message)
-                                .setPositiveButton("OK", null)
-                                .show()
+                            AlertDialog.Builder(this@CustomerMainActivity).setTitle("Moderation Block").setMessage(err.message).setPositiveButton("OK", null).show()
                         }
                     }
                 }

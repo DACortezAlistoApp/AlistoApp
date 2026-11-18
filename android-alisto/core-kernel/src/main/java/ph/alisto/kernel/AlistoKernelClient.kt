@@ -768,4 +768,204 @@ object AlistoKernelClient {
             return@withContext Result.failure(e)
         }
     }
+
+    fun recordTelemetryPingRpc(
+        bookingId: String,
+        contractorId: String,
+        lat: Double = 15.1450 + (Math.random() * 0.01),
+        lng: Double = 120.5887 + (Math.random() * 0.01),
+        speedKph: Double = 26.5
+    ) {
+        try {
+            val payload = JSONObject().apply {
+                put("p_booking_id", bookingId)
+                put("p_contractor_id", contractorId)
+                put("p_lat", lat)
+                put("p_lng", lng)
+                put("p_speed_kph", speedKph)
+                put("p_heading", 45.0)
+            }
+            val req = Request.Builder()
+                .url("$supabaseUrl/rest/v1/rpc/record_booking_telemetry_rpc")
+                .addHeader("apikey", supabaseKey)
+                .addHeader("Authorization", "Bearer $supabaseKey")
+                .post(payload.toString().toRequestBody(jsonMedia))
+                .build()
+            http.newCall(req).execute().close()
+        } catch (_: Exception) {}
+    }
+
+    suspend fun createBookingV2Rpc(
+        verticalKey: String,
+        jobSubtype: String,
+        municipality: String,
+        barangayZone: String,
+        skillCategory: String,
+        serviceTitle: String,
+        pickupAddress: String,
+        dropoffAddress: String,
+        waypointsJson: JSONArray,
+        quotedFee: Double,
+        tipAmount: Double,
+        errandItemCostPhp: Double,
+        deadheadReturnKm: Double
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
+        try {
+            val payload = JSONObject().apply {
+                put("p_client_id", activeUser.id)
+                put("p_vertical_key", verticalKey)
+                put("p_job_subtype", jobSubtype)
+                put("p_municipality", municipality)
+                put("p_barangay_zone", barangayZone)
+                put("p_skill_category", skillCategory)
+                put("p_service_title", serviceTitle)
+                put("p_service_notes", "Nationwide Local-Road (avoid=ht) • Client: ${activeUser.nickname}")
+                put("p_pickup_address", pickupAddress)
+                put("p_dropoff_address", dropoffAddress)
+                put("p_pickup_lat", activeUser.homeLat)
+                put("p_pickup_lng", activeUser.homeLng)
+                put("p_dropoff_lat", activeUser.homeLat + 0.012)
+                put("p_dropoff_lng", activeUser.homeLng + 0.012)
+                put("p_waypoints", waypointsJson)
+                put("p_quoted_fee", quotedFee)
+                put("p_tip_amount", tipAmount)
+                put("p_errand_item_cost", errandItemCostPhp)
+                put("p_deadhead_return_km", deadheadReturnKm)
+            }
+            val req = Request.Builder()
+                .url("$supabaseUrl/rest/v1/rpc/create_booking_v2_rpc")
+                .addHeader("apikey", supabaseKey)
+                .addHeader("Authorization", "Bearer $supabaseKey")
+                .post(payload.toString().toRequestBody(jsonMedia))
+                .build()
+
+            http.newCall(req).execute().use { resp ->
+                val json = JSONObject(resp.body?.string() ?: "{}")
+                val st = json.optString("status")
+                if (st != "SUCCESS") {
+                    return@withContext Result.failure(IllegalStateException(json.optString("message", "Booking blocked.")))
+                }
+                syncBookingsAndWallet()
+                return@withContext Result.success(json)
+            }
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
+    suspend fun submitContractorBidRpc(
+        bookingId: String,
+        bidAmountPhp: Double,
+        etaMin: Int,
+        notes: String
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
+        try {
+            val payload = JSONObject().apply {
+                put("p_booking_id", bookingId)
+                put("p_contractor_id", activeUser.id)
+                put("p_bid_amount_php", bidAmountPhp)
+                put("p_eta_min", etaMin)
+                put("p_notes", notes)
+            }
+            val req = Request.Builder()
+                .url("$supabaseUrl/rest/v1/rpc/submit_contractor_bid_rpc")
+                .addHeader("apikey", supabaseKey)
+                .addHeader("Authorization", "Bearer $supabaseKey")
+                .post(payload.toString().toRequestBody(jsonMedia))
+                .build()
+
+            http.newCall(req).execute().use { resp ->
+                val json = JSONObject(resp.body?.string() ?: "{}")
+                if (json.optString("status") != "SUCCESS") {
+                    return@withContext Result.failure(IllegalStateException(json.optString("message", "Pre-bid wallet check failed.")))
+                }
+                return@withContext Result.success(json)
+            }
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
+    suspend fun toggleContractorDispatchModeRpc(
+        isOnline: Boolean,
+        autoAccept: Boolean
+    ): Result<Boolean> = withContext(Dispatchers.IO) {
+        val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
+        try {
+            val payload = JSONObject().apply {
+                put("p_contractor_id", activeUser.id)
+                put("p_is_online", isOnline)
+                put("p_auto_accept", autoAccept)
+            }
+            val req = Request.Builder()
+                .url("$supabaseUrl/rest/v1/rpc/toggle_contractor_dispatch_mode_rpc")
+                .addHeader("apikey", supabaseKey)
+                .addHeader("Authorization", "Bearer $supabaseKey")
+                .post(payload.toString().toRequestBody(jsonMedia))
+                .build()
+            http.newCall(req).execute().close()
+            return@withContext Result.success(true)
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
+    suspend fun executeMutualOrNoShowCancelRpc(
+        bookingId: String,
+        cancelMode: String,
+        reason: String
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
+        try {
+            val payload = JSONObject().apply {
+                put("p_booking_id", bookingId)
+                put("p_actor_id", activeUser.id)
+                put("p_cancel_mode", cancelMode)
+                put("p_reason", reason)
+            }
+            val req = Request.Builder()
+                .url("$supabaseUrl/rest/v1/rpc/execute_mutual_or_noshow_cancel_rpc")
+                .addHeader("apikey", supabaseKey)
+                .addHeader("Authorization", "Bearer $supabaseKey")
+                .post(payload.toString().toRequestBody(jsonMedia))
+                .build()
+            http.newCall(req).execute().use { resp ->
+                val json = JSONObject(resp.body?.string() ?: "{}")
+                syncBookingsAndWallet()
+                return@withContext Result.success(json)
+            }
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
+    suspend fun submitContractorThumbReviewRpc(
+        bookingId: String,
+        thumbVote: String,
+        feedbackNote: String
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
+        try {
+            val payload = JSONObject().apply {
+                put("p_booking_id", bookingId)
+                put("p_contractor_id", activeUser.id)
+                put("p_thumb_vote", thumbVote)
+                put("p_feedback_note", feedbackNote)
+            }
+            val req = Request.Builder()
+                .url("$supabaseUrl/rest/v1/rpc/submit_contractor_thumb_review_rpc")
+                .addHeader("apikey", supabaseKey)
+                .addHeader("Authorization", "Bearer $supabaseKey")
+                .post(payload.toString().toRequestBody(jsonMedia))
+                .build()
+            http.newCall(req).execute().use { resp ->
+                val json = JSONObject(resp.body?.string() ?: "{}")
+                return@withContext Result.success(json)
+            }
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
 }

@@ -443,6 +443,30 @@
           </div>
         </div>
 
+        <!-- DEMAND HEAT MAP CLUSTERS & NATIONWIDE LOCAL-ROAD TELEMETRY (MASTER SPEC V2.0) -->
+        <div class="card" style="margin-top: 1.25rem; border-color: var(--emerald-ok);">
+          <div class="card-header">
+            <h2>6. Nationwide Demand Heat Map Clusters & Local-Road Telemetry (`v_demand_heatmap_clusters`)</h2>
+            <span class="engine-tag">AVOID=HT LOCAL-ROAD ROUTING • 10S GPS HEARTBEAT</span>
+          </div>
+          <p class="muted-note">
+            Real-time and historical pickup clustering across nationwide corridors (zero municipal geofencing lockouts). Clicking any cluster center launches Google Maps with <code>avoid=highways,tolls</code> (<code>avoid=ht</code>).
+          </p>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Corridor / Barangay Zone</th>
+                <th>Vertical</th>
+                <th>Cluster Center (`avoid=ht` Nav)</th>
+                <th>Total Volume</th>
+                <th>Active Live Demand</th>
+                <th>Heat Map Intensity</th>
+              </tr>
+            </thead>
+            <tbody id="operatorHeatmapTable"></tbody>
+          </table>
+        </div>
+
         <!-- SECTION 5: MASTER BOOKINGS HISTORY & FORENSIC INVESTIGATION EXPLORER -->
         <div class="card" style="margin-top: 1.25rem;">
           <div class="card-header">
