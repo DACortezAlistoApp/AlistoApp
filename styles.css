@@ -516,3 +516,50 @@ body {
   color: var(--text-main);
   font-size: 0.8rem;
 }
+
+
+/* --- V3 HYBRID MONETIZATION, KYC PIPELINE & COMPRESSION BADGES --- */
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+  background: #090d16;
+  padding: 0.65rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+}
+.checkbox-grid label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--text-main);
+  cursor: pointer;
+  margin: 0;
+}
+.checkbox-grid input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--cyan-accent);
+}
+.vip-badge {
+  display: inline-block;
+  background: linear-gradient(90deg, #f59e0b 0%, #fbbf24 100%);
+  color: #070a12;
+  padding: 0.12rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+.tier-input {
+  width: 95px;
+  padding: 0.35rem 0.5rem;
+  border-radius: 5px;
+  border: 1px solid var(--border-subtle);
+  background: #090d16;
+  color: var(--cyan-accent);
+  font-weight: 700;
+  font-size: 0.8rem;
+}

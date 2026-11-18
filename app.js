@@ -1,5 +1,6 @@
 // ============================================================================
-// ALISTO NETWORK PH - AUTHENTICATED RBAC MASTER COMMAND & PROFILE CONSOLE
+// ALISTO NETWORK PH - V3 11-ENGINE MASTER COMMAND & HYBRID MONETIZATION CONSOLE
+// Doc Refs: ALISTO-ARCH-WORKFLOW-2026-V2 & ALISTO-ARCH-MASTER-SPEC-2026-V3
 // Author & Chief Systems Architect: D. A. Cortez
 // ============================================================================
 
@@ -13,7 +14,11 @@ const SESSION_STORAGE_KEY = 'ALISTO_AUTH_SESSION_V1';
 const consoleState = {
   globalCommissionRate: 0.12,
   maturityHours: 72,
+  ledgerHealth: null,
   verticals: [],
+  subscriptionTiers: [],
+  contractorSubscriptions: [],
+  contractorProfiles: [],
   users: [],
   bookings: [],
   ledger: [],
@@ -131,7 +136,6 @@ function applyRoleBasedAccessControl() {
     if (onbAdminOpt) onbAdminOpt.disabled = false;
     switchConsoleView('operator_ops');
   } else if (role === 'admin') {
-    // Admin Operator: Can lookup/manage users & set manual user commission rates, but CANNOT access SuperAdmin Console (Verticals / Global Commission)
     tabOp.style.display = 'inline-block';
     tabSuper.style.display = 'none';
     tabLgu.style.display = 'inline-block';
@@ -166,7 +170,7 @@ function switchConsoleView(viewKey) {
   const role = currentAuthUser.role;
 
   if (viewKey === 'superadmin' && role !== 'super_admin') {
-    alert('RBAC Restriction: Only SuperAdmin can enable/disable Service Verticals and set Global Commission Rates.');
+    alert('RBAC Restriction: Only SuperAdmin can access the Universal Ledger Health, Subscription Pricing & Vertical Rollout Control Center.');
     return;
   }
   if ((viewKey === 'operator_ops' || viewKey === 'lgu_admin') && !['super_admin', 'admin'].includes(role)) {
@@ -197,6 +201,19 @@ function getUserById(uid) {
   return consoleState.users.find(u => u.id === uid) || null;
 }
 
+function getContractorProfile(uid) {
+  if (!uid) return null;
+  return consoleState.contractorProfiles.find(p => p.user_id === uid) || null;
+}
+
+function getActiveSubscription(uid) {
+  if (!uid) return null;
+  const now = new Date();
+  return consoleState.contractorSubscriptions.find(
+    s => s.contractor_id === uid && s.status === 'ACTIVE' && new Date(s.expires_at) > now
+  ) || null;
+}
+
 function getUserLabel(uid) {
   const u = getUserById(uid);
   return u ? `${u.full_name} (@${u.username || u.role})` : (uid ? uid.slice(0, 8) : 'Unassigned');
@@ -220,10 +237,15 @@ async function syncFromSupabase() {
   if (!supabaseClient || !currentAuthUser) return;
   try {
     const [
-      vRes, cfgRes, uRes, bRes, lRes, ratRes, mRes, tRes, rRes, aRes, opRes
+      vRes, cfgRes, healthRes, subTiersRes, subActRes, cProfRes,
+      uRes, bRes, lRes, ratRes, mRes, tRes, rRes, aRes, opRes
     ] = await Promise.all([
       supabaseClient.from('service_verticals').select('*').order('vertical_key'),
       supabaseClient.from('system_config').select('*'),
+      supabaseClient.from('v_universal_ledger_health').select('*').limit(1),
+      supabaseClient.from('subscription_tiers').select('*').order('monthly_fee', { ascending: true }),
+      supabaseClient.from('contractor_subscriptions').select('*').order('started_at', { ascending: false }),
+      supabaseClient.from('contractor_profiles').select('*'),
       supabaseClient.from('users').select('*').order('created_at', { ascending: false }),
       supabaseClient.from('bookings').select('*').order('created_at', { ascending: false }),
       supabaseClient.from('credit_ledger').select('*').order('created_at', { ascending: false }),
@@ -249,6 +271,11 @@ async function syncFromSupabase() {
         if (document.getElementById('cfgMaturity')) document.getElementById('cfgMaturity').value = consoleState.maturityHours;
       }
     }
+    if (healthRes.data && healthRes.data.length > 0) consoleState.ledgerHealth = healthRes.data[0];
+    if (subTiersRes.data) consoleState.subscriptionTiers = subTiersRes.data;
+    if (subActRes.data) consoleState.contractorSubscriptions = subActRes.data;
+    if (cProfRes.data) consoleState.contractorProfiles = cProfRes.data;
+
     if (uRes.data) {
       consoleState.users = uRes.data;
       const freshSelf = consoleState.users.find(u => u.id === currentAuthUser.id);
@@ -280,14 +307,16 @@ function subscribeRealtimeKernel() {
   if (!supabaseClient || realtimeSubscribed) return;
   realtimeSubscribed = true;
   supabaseClient
-    .channel('alisto-operator-live')
+    .channel('alisto-v3-live')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'service_verticals' }, () => syncFromSupabase())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => syncFromSupabase())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'contractor_profiles' }, () => syncFromSupabase())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'subscription_tiers' }, () => syncFromSupabase())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'contractor_subscriptions' }, () => syncFromSupabase())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, () => syncFromSupabase())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'credit_ledger' }, () => syncFromSupabase())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'booking_ratings' }, () => syncFromSupabase())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'booking_messages' }, () => syncFromSupabase())
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'booking_telemetry' }, () => syncFromSupabase())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'moderation_audit_logs' }, () => syncFromSupabase())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'operator_audit_logs' }, () => syncFromSupabase())
     .subscribe();
@@ -300,13 +329,62 @@ function renderVerticalStrip() {
     <div class="v-pill">
       <span class="v-dot ${v.is_enabled ? 'on' : 'off'}"></span>
       <strong>${v.display_name}:</strong>
-      <span>${v.is_enabled ? 'ENABLED ON KOTLIN APKs' : 'DISABLED (SUPERADMIN OFF)'}</span>
+      <span>${v.is_enabled ? 'ACTIVE ON KOTLIN APKs' : 'LOCKED / DEACTIVATED'}</span>
     </div>
   `).join('');
 }
 
 // ============================================================================
-// 3. USERNAME & FIRST/LAST NAME COMBO LOOKUP + ONBOARDING + COMMISSION
+// 3. CLIENT-SIDE MEDIA COMPRESSION (SECTION 4.2 OF V2/V3 SPEC)
+// - Profile Pictures: VGA Standard (640 x 480 px), JPEG 68% quality (<80 KB)
+// - Compliance Docs: Low-to-Medium Readable (Max 1024 px long edge), JPEG 65% quality (120-250 KB)
+// ============================================================================
+
+function compressMediaBySpec(file, assetCategory = 'COMPLIANCE_DOC') {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        let targetW = img.width;
+        let targetH = img.height;
+        let quality = 0.65;
+
+        if (assetCategory === 'PROFILE_VGA') {
+          const maxW = 640;
+          const maxH = 480;
+          const scale = Math.min(1, maxW / img.width, maxH / img.height);
+          targetW = Math.round(img.width * scale);
+          targetH = Math.round(img.height * scale);
+          quality = 0.68;
+        } else {
+          const maxEdge = 1024;
+          const longest = Math.max(img.width, img.height);
+          const scale = Math.min(1, maxEdge / longest);
+          targetW = Math.round(img.width * scale);
+          targetH = Math.round(img.height * scale);
+          quality = 0.65;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        const approxKb = Math.round((dataUrl.length * 0.75) / 1024);
+        resolve({ dataUrl, width: targetW, height: targetH, approxKb });
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// ============================================================================
+// 4. USERNAME & FIRST/LAST NAME COMBO LOOKUP + KYC PIPELINE + ONBOARDING
 // ============================================================================
 
 function toggleOnboardContractorFields() {
@@ -315,40 +393,60 @@ function toggleOnboardContractorFields() {
   if (sec) sec.style.display = role === 'contractor' ? 'block' : 'none';
 }
 
+function toggleConditionalTransportFields() {
+  const del = document.getElementById('onbOptDelivery')?.checked;
+  const ride = document.getElementById('onbOptRideHailing')?.checked;
+  const box = document.getElementById('onbTransportCredentialsBox');
+  if (box) box.style.display = (del || ride) ? 'block' : 'none';
+}
+
+function useDeviceGpsForOnboarding() {
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(pos => {
+      document.getElementById('onbHomeLat').value = pos.coords.latitude.toFixed(5);
+      document.getElementById('onbHomeLng').value = pos.coords.longitude.toFixed(5);
+      alert(`Snapped Home Pin to real-time GPS: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`);
+    }, () => {
+      document.getElementById('onbHomeLat').value = (15.1450 + Math.random() * 0.008).toFixed(5);
+      document.getElementById('onbHomeLng').value = (120.5887 + Math.random() * 0.008).toFixed(5);
+    });
+  }
+}
+
 function renderOperatorKpis() {
   const strip = document.getElementById('operatorKpiStrip');
   if (!strip) return;
   const contractors = consoleState.users.filter(u => u.role === 'contractor');
+  const pendingKyc = contractors.filter(c => c.account_status === 'PENDING_REVIEW' || c.account_status === 'RESUBMISSION_REQUIRED');
   const customers = consoleState.users.filter(u => u.role === 'customer');
-  const suspended = consoleState.users.filter(u => u.account_frozen);
-  const activeJobs = consoleState.bookings.filter(b => ['SEARCHING', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS'].includes(b.status));
+  const activeSubs = consoleState.contractorSubscriptions.filter(s => s.status === 'ACTIVE' && new Date(s.expires_at) > new Date());
   const globalPct = (consoleState.globalCommissionRate * 100).toFixed(1);
 
   strip.innerHTML = `
     <div class="kpi-card">
-      <div class="kpi-label">Onboarded Contractors</div>
+      <div class="kpi-label">Registered Contractors</div>
       <div class="kpi-value">${contractors.length}</div>
-      <div class="kpi-sub">${contractors.filter(c => c.lgu_peso_endorsed).length} LGU/PESO Endorsed</div>
+      <div class="kpi-sub">${contractors.filter(c => c.account_status === 'ACTIVE').length} ACTIVE | ${pendingKyc.length} Pending KYC</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">Onboarded Customers</div>
+      <div class="kpi-label">Registered Customers</div>
       <div class="kpi-value">${customers.length}</div>
-      <div class="kpi-sub">Households & Businesses</div>
+      <div class="kpi-sub">GPS Home Anchors Saved</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">Total Bookings (All States)</div>
-      <div class="kpi-value">${consoleState.bookings.length}</div>
-      <div class="kpi-sub">${activeJobs.length} Requested / Active In-Field</div>
+      <div class="kpi-label">Active Subscription Passes</div>
+      <div class="kpi-value" style="color:var(--emerald-ok)">${activeSubs.length}</div>
+      <div class="kpi-sub">0.00% Commission Window Active</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">Global Default Commission</div>
-      <div class="kpi-value">${globalPct}%</div>
-      <div class="kpi-sub">SuperAdmin Controlled</div>
+      <div class="kpi-label">Pay-As-You-Go Cap</div>
+      <div class="kpi-value" style="color:var(--amber-core)">≤ ${globalPct}%</div>
+      <div class="kpi-sub">+₱25 Bonus on ≥₱500 Top-Up</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">Suspended / Flagged</div>
-      <div class="kpi-value" style="color:${suspended.length > 0 ? 'var(--crimson-err)' : 'var(--emerald-ok)'}">${suspended.length}</div>
-      <div class="kpi-sub">${consoleState.moderationAuditLogs.length} Blocked Chat Infractions</div>
+      <div class="kpi-label">Pending KYC / Resubmit</div>
+      <div class="kpi-value" style="color:${pendingKyc.length > 0 ? 'var(--amber-core)' : 'var(--emerald-ok)'}">${pendingKyc.length}</div>
+      <div class="kpi-sub">Manual Call & Doc Review</div>
     </div>
   `;
 }
@@ -364,21 +462,23 @@ function renderOperatorUsersTable() {
   const globalPct = (consoleState.globalCommissionRate * 100).toFixed(1);
 
   const filtered = consoleState.users.filter(u => {
-    if (roleFilter === 'FROZEN' && !u.account_frozen) return false;
-    if (roleFilter !== 'ALL' && roleFilter !== 'FROZEN' && u.role !== roleFilter) return false;
+    if (roleFilter === 'FROZEN' && !u.account_frozen && u.account_status !== 'SUSPENDED') return false;
+    if (roleFilter === 'PENDING_KYC' && !['PENDING_REVIEW', 'RESUBMISSION_REQUIRED'].includes(u.account_status)) return false;
+    if (!['ALL', 'FROZEN', 'PENDING_KYC'].includes(roleFilter) && u.role !== roleFilter) return false;
     if (!cleanQuery) return true;
 
     const { firstName, lastName } = splitFirstLastName(u);
     const uname = (u.username || '').toLowerCase();
+    const nick = (u.nickname || '').toLowerCase();
     const fullCombo = `${firstName} ${lastName}`.toLowerCase().trim();
     const revCombo = `${lastName} ${firstName}`.toLowerCase().trim();
     const fullName = (u.full_name || '').toLowerCase();
     const phone = (u.phone || '').toLowerCase();
 
-    // Match by username OR First/Last Name combo (or individual tokens)
     const tokens = cleanQuery.split(/\s+/).filter(Boolean);
     const tokenMatch = tokens.every(t =>
       uname.includes(t) ||
+      nick.includes(t) ||
       firstName.toLowerCase().includes(t) ||
       lastName.toLowerCase().includes(t) ||
       fullName.includes(t) ||
@@ -394,13 +494,14 @@ function renderOperatorUsersTable() {
 
   if (countEl) {
     countEl.textContent = cleanQuery
-      ? `Showing ${filtered.length} matching user(s) for query "${rawQuery}" — Click any @username below to open their full Profile Command Modal:`
-      : `Showing all ${filtered.length} registered user account(s) — Click any @username below to open their full Profile Command Modal:`;
+      ? `Showing ${filtered.length} matching account(s) for query "${rawQuery}" — Click any @username badge to open their full Profile Command Modal:`
+      : `Showing all ${filtered.length} account(s) — Click any @username badge to open their full Profile Command Modal:`;
   }
 
   tbody.innerHTML = filtered.map(u => {
     const { firstName, lastName } = splitFirstLastName(u);
-    const infractions = getInfractionCount(u.id);
+    const cProf = getContractorProfile(u.id);
+    const activeSub = getActiveSubscription(u.id);
     const certs = Array.isArray(u.certifications_docs) ? u.certifications_docs : [];
     const userRatings = consoleState.ratings.filter(r => r.ratee_id === u.id);
     const avgStars = userRatings.length > 0
@@ -408,15 +509,26 @@ function renderOperatorUsersTable() {
       : Number(u.rating_avg || 5.0).toFixed(2);
     const ratingCnt = userRatings.length > 0 ? userRatings.length : Number(u.rating_count || 0);
 
-    const commText = u.role === 'contractor'
-      ? (u.custom_commission_rate != null
-          ? `<strong style="color:var(--amber-core)">${(Number(u.custom_commission_rate) * 100).toFixed(1)}% (Manual Override)</strong>`
-          : `${globalPct}% (Global Default)`)
-      : '0% (Customer/Staff)';
+    let commText = '0% (Customer/Staff)';
+    if (u.role === 'contractor') {
+      if (activeSub) {
+        commText = `<span style="color:var(--emerald-ok);font-weight:700;">0.00% (${activeSub.tier_code})</span>`;
+      } else if (u.custom_commission_rate != null) {
+        commText = `<strong style="color:var(--amber-core)">${(Number(u.custom_commission_rate) * 100).toFixed(1)}% (Manual Override)</strong>`;
+      } else {
+        commText = `${globalPct}% (Pay-As-You-Go)`;
+      }
+    }
 
-    const statusHtml = u.account_frozen
-      ? `<span class="pill-risk">SUSPENDED</span><br/><small style="color:#fca5a5">${u.suspension_reason || 'Rule Violation'}</small>`
-      : `<span class="pill-clean">ACTIVE</span>${u.role === 'contractor' ? `<br/><small>${u.lgu_peso_endorsed ? 'LGU Endorsed' : 'Pending LGU'}</small>` : ''}`;
+    const accStatus = u.account_frozen ? 'SUSPENDED' : (u.account_status || 'ACTIVE');
+    let stateBadge = `<span class="pill-clean">ACTIVE</span>`;
+    if (accStatus === 'PENDING_REVIEW') {
+      stateBadge = `<span class="pill-watch">PENDING_REVIEW</span>`;
+    } else if (accStatus === 'RESUBMISSION_REQUIRED') {
+      stateBadge = `<span class="pill-risk">RESUBMISSION_REQUIRED</span>`;
+    } else if (accStatus === 'SUSPENDED') {
+      stateBadge = `<span class="pill-risk">SUSPENDED</span><br/><small style="color:#fca5a5">${u.suspension_reason || ''}</small>`;
+    }
 
     return `
       <tr>
@@ -424,27 +536,27 @@ function renderOperatorUsersTable() {
           <button type="button" class="username-link" onclick="openProfileInspector('${u.id}')" title="Click to open Full User Profile & Governance Modal">
             @${u.username || u.role}
           </button>
+          ${u.vip_grind_badge ? `<div style="margin-top:0.25rem;"><span class="vip-badge">★ VIP GRIND</span></div>` : ''}
         </td>
         <td>
-          <strong>${firstName} ${lastName}</strong><br/>
-          <small style="color:var(--text-muted)">${u.full_name}</small> • <span class="engine-tag">${u.role.toUpperCase()}</span>
+          <strong>${firstName} ${lastName}</strong> ${u.nickname ? `<small style="color:var(--cyan-accent)">("${u.nickname}")</small>` : ''}<br/>
+          <span class="engine-tag">${u.role.toUpperCase()}</span>
         </td>
         <td>
-          <code>${u.phone}</code><br/>
-          <small style="color:var(--text-muted)">${u.barangay_zone}, ${u.municipality || 'Angeles City'}</small>
+          <code><strong>${u.phone}</strong></code><br/>
+          <small style="color:var(--text-muted)">${u.barangay_zone}, ${u.municipality || 'Angeles City'} (${Number(u.home_lat || 15.145).toFixed(4)}, ${Number(u.home_lng || 120.588).toFixed(4)})</small>
         </td>
         <td>
-          Wallet: <strong style="color:var(--emerald-ok)">PHP ${Number(u.credit_balance || 0).toFixed(2)}</strong>
-          ${u.role === 'contractor' ? `<small style="color:var(--amber-core)">(Held: PHP ${Number(u.held_credits || 0).toFixed(2)})</small>` : ''}<br/>
-          <small>Commission: ${commText}</small>
+          Wallet: <strong style="color:var(--emerald-ok)">PHP ${Number(u.credit_balance || 0).toFixed(2)}</strong><br/>
+          <small>Rate: ${commText}</small>
         </td>
         <td>
           ${u.role === 'contractor'
-            ? `<span class="csat-badge">★ ${avgStars} CSAT (${ratingCnt})</span> • <small>${certs.length} Cert(s)</small><br/>`
-            : ''}
-          <small style="color:${infractions > 0 ? '#fca5a5' : 'var(--text-muted)'}">Chat Flags: ${infractions}</small>
+            ? `<span class="csat-badge">★ ${avgStars} CSAT (${ratingCnt})</span> • <small>${certs.length} Cert(s)</small><br/>
+               <small style="color:var(--text-muted)">Vehicle: ${cProf ? cProf.vehicle_type + ' (' + cProf.dispatch_radius_m + 'm)' : 'motorcycle (1500m)'}</small>`
+            : `<small style="color:var(--text-muted)">Household / Business Client</small>`}
         </td>
-        <td>${statusHtml}</td>
+        <td>${stateBadge}</td>
         <td>
           <button class="btn-xs" onclick="openProfileInspector('${u.id}')">
             Open Profile & Controls
@@ -455,53 +567,59 @@ function renderOperatorUsersTable() {
   }).join('');
 }
 
-function renderOperatorContractorCommissionTable() {
-  const tbody = document.getElementById('operatorContractorCommTable');
-  const globalDisp = document.getElementById('opGlobalCommReadonlyDisplay');
-  const jumpWrap = document.getElementById('opSuperAdminJumpWrap');
-  if (!tbody || !currentAuthUser) return;
-
-  const globalPct = (consoleState.globalCommissionRate * 100).toFixed(1);
-  if (globalDisp) globalDisp.textContent = `${globalPct}% (Default)`;
-
-  if (jumpWrap) {
-    if (currentAuthUser.role === 'super_admin') {
-      jumpWrap.innerHTML = `<button class="btn-outline" onclick="switchConsoleView('superadmin')">Edit Global Rate in SuperAdmin Console →</button>`;
-    } else {
-      jumpWrap.innerHTML = `<span class="engine-tag">SUPERADMIN ONLY (READ-ONLY FOR ADMIN)</span>`;
-    }
-  }
-
+function renderOperatorKycQueue() {
+  const tbody = document.getElementById('operatorKycQueueTable');
+  if (!tbody) return;
   const contractors = consoleState.users.filter(u => u.role === 'contractor');
+
   tbody.innerHTML = contractors.map(c => {
-    const hasCustom = c.custom_commission_rate !== null && c.custom_commission_rate !== undefined;
-    const effPct = hasCustom
-      ? `${(Number(c.custom_commission_rate) * 100).toFixed(1)}% (Manual User Rate)`
-      : `${globalPct}% (Global Default)`;
-    const userRatings = consoleState.ratings.filter(r => r.ratee_id === c.id);
-    const avgStars = userRatings.length > 0
-      ? (userRatings.reduce((acc, r) => acc + Number(r.stars || 5), 0) / userRatings.length).toFixed(2)
-      : Number(c.rating_avg || 5.0).toFixed(2);
+    const cProf = getContractorProfile(c.id) || {};
+    const certs = Array.isArray(c.certifications_docs) ? c.certifications_docs : [];
+    const verticals = [];
+    if (cProf.offers_skills !== false) verticals.push('Skills Marketplace');
+    if (cProf.offers_delivery) verticals.push('Delivery Rider');
+    if (cProf.offers_ride_hailing) verticals.push('Ride-Hailing Rider');
+
+    const accStatus = c.account_frozen ? 'SUSPENDED' : (c.account_status || 'ACTIVE');
+    const flaggedList = Array.isArray(cProf.flagged_docs) && cProf.flagged_docs.length > 0
+      ? `<div style="color:#fca5a5;font-size:0.72rem;margin-top:0.2rem;">Flagged: ${cProf.flagged_docs.join(', ')} (${cProf.resubmission_notes || ''})</div>`
+      : '';
 
     return `
       <tr>
         <td>
           <button type="button" class="username-link" onclick="openProfileInspector('${c.id}')">@${c.username || 'contractor'}</button><br/>
-          <small>${c.full_name}</small>
+          <strong>${c.full_name}</strong>
         </td>
         <td>
-          <strong style="color:var(--emerald-ok)">PHP ${Number(c.credit_balance || 0).toFixed(2)}</strong><br/>
-          <small style="color:var(--amber-core)">Held: PHP ${Number(c.held_credits || 0).toFixed(2)}</small>
+          <strong style="color:var(--amber-core)">Call: ${c.phone}</strong><br/>
+          <small style="color:var(--text-muted)">${c.address_text || (c.barangay_zone + ', ' + c.municipality)}</small>
         </td>
-        <td><span class="csat-badge">★ ${avgStars}</span></td>
-        <td><span class="engine-tag">${effPct}</span></td>
+        <td>
+          <strong>${verticals.join(' + ')}</strong><br/>
+          <small style="color:var(--cyan-accent)">Unit: ${cProf.vehicle_type || 'motorcycle'} (${cProf.dispatch_radius_m || 1500}m radius)</small>
+        </td>
+        <td>
+          <span class="engine-tag">${certs.length} Scanned Doc(s)</span>
+          ${cProf.license_doc_url ? `<span class="engine-tag">Driver License</span>` : ''}
+          ${cProf.orcr_doc_url ? `<span class="engine-tag">OR/CR</span>` : ''}
+          ${flaggedList}
+        </td>
+        <td>
+          <span class="${accStatus === 'ACTIVE' ? 'pill-clean' : (accStatus === 'PENDING_REVIEW' ? 'pill-watch' : 'pill-risk')}">
+            ${accStatus}
+          </span>
+        </td>
         <td>
           <div class="action-cluster">
-            <button class="btn-xs" onclick="promptContractorCommissionOverride('${c.id}', '${c.full_name.replace(/'/g, "")}')">
-              Set Manual %
+            <button class="btn-xs" style="border-color:var(--emerald-ok);color:var(--emerald-ok);" onclick="operatorQuickKycDecision('${c.id}', 'ACTIVATE')">
+              Approve & Activate
+            </button>
+            <button class="btn-xs" style="border-color:var(--amber-core);color:var(--amber-core);" onclick="promptFlagDocResubmission('${c.id}', '${c.full_name.replace(/'/g, "")}')">
+              Flag Doc Resubmit
             </button>
             <button class="btn-xs" onclick="openProfileInspector('${c.id}')">
-              Wallet / Profile
+              Inspect Docs
             </button>
           </div>
         </td>
@@ -510,35 +628,163 @@ function renderOperatorContractorCommissionTable() {
   }).join('');
 }
 
+async function operatorQuickKycDecision(contractorId, decision) {
+  if (!currentAuthUser) return;
+  const notes = decision === 'ACTIVATE'
+    ? 'Verified via manual operator voice call & compliance document inspection'
+    : prompt('Enter notes:', 'Verification update');
+  if (notes === null) return;
+
+  const { data, error } = await supabaseClient.rpc('operator_review_contractor_kyc_rpc', {
+    p_operator_id: currentAuthUser.id,
+    p_contractor_id: contractorId,
+    p_decision: decision,
+    p_flagged_docs: [],
+    p_notes: notes
+  });
+  if (error || (data && data.status === 'ERROR')) {
+    alert('KYC Review RPC Error: ' + (error ? error.message : data.message));
+    return;
+  }
+  await syncFromSupabase();
+}
+
+async function promptFlagDocResubmission(contractorId, contractorName) {
+  if (!currentAuthUser) return;
+  const docNames = prompt(
+    `Flag blurry/incomplete document(s) for ${contractorName} (comma-separated, e.g., Driver License, OR/CR, Vehicle Photo, Trade Certificate):`,
+    'Driver License, Vehicle OR/CR'
+  );
+  if (!docNames) return;
+  const notes = prompt('Enter resubmission instructions for the contractor:', 'Please re-upload a clearer 1024px photo where license/plate numbers are legible.');
+  if (notes === null) return;
+
+  const flaggedArr = docNames.split(',').map(s => s.trim()).filter(Boolean);
+  const { data, error } = await supabaseClient.rpc('operator_review_contractor_kyc_rpc', {
+    p_operator_id: currentAuthUser.id,
+    p_contractor_id: contractorId,
+    p_decision: 'FLAG_RESUBMISSION',
+    p_flagged_docs: flaggedArr,
+    p_notes: notes
+  });
+  if (error || (data && data.status === 'ERROR')) {
+    alert('Resubmission Flag Error: ' + (error ? error.message : data.message));
+    return;
+  }
+  await syncFromSupabase();
+}
+
 async function operatorOnboardUser() {
   if (!currentAuthUser) return;
   const role = document.getElementById('onbRole').value;
   const username = document.getElementById('onbUsername').value.trim();
   const firstName = document.getElementById('onbFirstName').value.trim();
   const lastName = document.getElementById('onbLastName').value.trim();
+  const nickname = document.getElementById('onbNickname').value.trim() || firstName;
+  const birthDate = document.getElementById('onbBirthDate').value || '1992-05-15';
   const fullName = `${firstName} ${lastName}`.trim();
   const phone = document.getElementById('onbPhone').value.trim();
   const email = document.getElementById('onbEmail').value.trim();
   const municipality = document.getElementById('onbMunicipality').value;
   const barangay = document.getElementById('onbBarangay').value;
+  const addressText = document.getElementById('onbAddressText').value.trim() || `${barangay}, ${municipality}`;
+  const homeLat = parseFloat(document.getElementById('onbHomeLat').value) || 15.1450;
+  const homeLng = parseFloat(document.getElementById('onbHomeLng').value) || 120.5887;
   const password = document.getElementById('onbPassword').value.trim() || 'Alisto2026!';
 
   if (!firstName || !phone) {
-    alert('First Name and Mobile Phone Number are required to onboard an account.');
+    alert('First Name and Active Mobile Phone Number are required.');
     return;
   }
 
-  const skillsRaw = document.getElementById('onbSkills').value;
-  const skillArr = role === 'contractor'
-    ? skillsRaw.split(',').map(s => s.trim()).filter(Boolean)
-    : [];
-  const lguEndorsed = role === 'contractor' ? (document.getElementById('onbLguEndorsed').value === 'true') : false;
-  const initCredits = role === 'contractor' ? (parseFloat(document.getElementById('onbCredits').value) || 0) : 0;
-  const customCommRaw = document.getElementById('onbCustomComm').value.trim();
-  const customCommDecimal = (role === 'contractor' && customCommRaw !== '')
-    ? (parseFloat(customCommRaw) / 100.0)
-    : null;
+  if (role === 'customer') {
+    const { data, error } = await supabaseClient.rpc('register_customer_portal_rpc', {
+      p_full_name: fullName,
+      p_nickname: nickname,
+      p_phone: phone,
+      p_email: email || `${firstName.toLowerCase()}@alisto.ph`,
+      p_password: password,
+      p_municipality: municipality,
+      p_barangay_zone: barangay,
+      p_address_text: addressText,
+      p_home_lat: homeLat,
+      p_home_lng: homeLng,
+      p_profile_photo_url: null
+    });
+    if (error || (data && data.status === 'ERROR')) {
+      alert('Customer Onboarding Error: ' + (error ? error.message : data.message));
+      return;
+    }
+    alert(`Customer Onboarded: ${fullName} (@${data.user.username})`);
+    await syncFromSupabase();
+    return;
+  }
 
+  if (role === 'contractor') {
+    const checkedSkills = Array.from(document.querySelectorAll('#onbSkillsCheckboxes input[type="checkbox"]:checked')).map(cb => cb.value);
+    const optDelivery = document.getElementById('onbOptDelivery')?.checked || false;
+    const optRide = document.getElementById('onbOptRideHailing')?.checked || false;
+    const vehicleType = document.getElementById('onbVehicleType')?.value || 'motorcycle';
+    const initStatus = document.getElementById('onbInitialStatus')?.value || 'PENDING_REVIEW';
+    const initCredits = parseFloat(document.getElementById('onbCredits').value) || 0;
+    const customCommRaw = document.getElementById('onbCustomComm').value.trim();
+    const customCommDecimal = customCommRaw !== '' ? (parseFloat(customCommRaw) / 100.0) : null;
+
+    const { data, error } = await supabaseClient.rpc('register_contractor_portal_rpc', {
+      p_first_name: firstName,
+      p_last_name: lastName,
+      p_birth_date: birthDate,
+      p_phone: phone,
+      p_email: email || `${firstName.toLowerCase()}@alisto.ph`,
+      p_password: password,
+      p_municipality: municipality,
+      p_barangay_zone: barangay,
+      p_address_text: addressText,
+      p_home_lat: homeLat,
+      p_home_lng: homeLng,
+      p_offers_skills: checkedSkills.length > 0,
+      p_skill_tags: checkedSkills,
+      p_offers_delivery: optDelivery,
+      p_offers_ride_hailing: optRide,
+      p_vehicle_type: vehicleType
+    });
+
+    if (error || (data && data.status === 'ERROR')) {
+      alert('Contractor Onboarding Error: ' + (error ? error.message : data.message));
+      return;
+    }
+
+    const newUid = data.user.id;
+    if (initStatus === 'ACTIVE') {
+      await supabaseClient.rpc('operator_review_contractor_kyc_rpc', {
+        p_operator_id: currentAuthUser.id,
+        p_contractor_id: newUid,
+        p_decision: 'ACTIVATE',
+        p_flagged_docs: [],
+        p_notes: 'Verified on-site at Alisto Onboarding Clinic'
+      });
+    }
+    if (initCredits > 0) {
+      await supabaseClient.rpc('topup_prepaid_credits_rpc', {
+        p_user_id: newUid,
+        p_amount: initCredits,
+        p_qrph_ref: 'CLINIC-INIT-' + Date.now()
+      });
+    }
+    if (customCommDecimal !== null) {
+      await supabaseClient.rpc('operator_set_contractor_commission_rpc', {
+        p_operator_id: currentAuthUser.id,
+        p_contractor_id: newUid,
+        p_custom_rate_decimal: customCommDecimal
+      });
+    }
+
+    alert(`Contractor Onboarded: ${fullName} (@${data.user.username}) [State: ${initStatus}]`);
+    await syncFromSupabase();
+    return;
+  }
+
+  // Admin role onboarding (SuperAdmin only)
   const { data, error } = await supabaseClient.rpc('operator_onboard_user_rpc', {
     p_operator_id: currentAuthUser.id,
     p_full_name: fullName,
@@ -549,60 +795,92 @@ async function operatorOnboardUser() {
     p_barangay_zone: barangay,
     p_password: password,
     p_kyc_verified: true,
-    p_lgu_endorsed: lguEndorsed,
-    p_skill_categories: skillArr,
+    p_lgu_endorsed: false,
+    p_skill_categories: [],
     p_sub_400cc: true,
-    p_initial_credits: initCredits,
-    p_custom_commission_rate: customCommDecimal,
+    p_initial_credits: 0,
+    p_custom_commission_rate: null,
     p_username: username || null
   });
-
   if (error || (data && data.status === 'ERROR')) {
-    alert('Onboarding Error: ' + (error ? error.message : data.message));
+    alert('Admin Onboarding Error: ' + (error ? error.message : data.message));
     return;
   }
+  alert(`Admin Operator Onboarded: ${fullName} (@${data.user.username})`);
+  await syncFromSupabase();
+}
 
-  // Sync explicit first_name & last_name on the newly created record
-  if (data && data.user && data.user.id) {
-    await supabaseClient.rpc('operator_update_user_profile_rpc', {
-      p_operator_id: currentAuthUser.id,
-      p_target_user_id: data.user.id,
-      p_username: data.user.username,
-      p_first_name: firstName,
-      p_last_name: lastName,
-      p_full_name: fullName,
-      p_phone: phone,
-      p_email: email,
-      p_municipality: municipality,
-      p_barangay_zone: barangay,
-      p_kyc_verified: true,
-      p_lgu_endorsed: lguEndorsed,
-      p_skill_categories: skillArr,
-      p_certifications_docs: []
-    });
+function renderOperatorContractorCommissionTable() {
+  const tbody = document.getElementById('operatorContractorCommTable');
+  const globalDisp = document.getElementById('opGlobalCommReadonlyDisplay');
+  const jumpWrap = document.getElementById('opSuperAdminJumpWrap');
+  if (!tbody || !currentAuthUser) return;
+
+  const globalPct = (consoleState.globalCommissionRate * 100).toFixed(1);
+  if (globalDisp) globalDisp.textContent = `≤ ${globalPct}% (Default)`;
+
+  if (jumpWrap) {
+    if (currentAuthUser.role === 'super_admin') {
+      jumpWrap.innerHTML = `<button class="btn-outline" onclick="switchConsoleView('superadmin')">Open SuperAdmin Pricing & Ledger Control →</button>`;
+    } else {
+      jumpWrap.innerHTML = `<span class="engine-tag">SUPERADMIN ONLY (READ-ONLY FOR ADMIN)</span>`;
+    }
   }
 
-  document.getElementById('onbUsername').value = '';
-  document.getElementById('onbFirstName').value = '';
-  document.getElementById('onbLastName').value = '';
-  document.getElementById('onbPhone').value = '';
-  document.getElementById('onbEmail').value = '';
-  alert(`Successfully onboarded ${role.toUpperCase()}: ${fullName} (Username: @${data.user.username})`);
-  await syncFromSupabase();
+  const contractors = consoleState.users.filter(u => u.role === 'contractor');
+  tbody.innerHTML = contractors.map(c => {
+    const cProf = getContractorProfile(c.id) || {};
+    const activeSub = getActiveSubscription(c.id);
+    const hasCustom = c.custom_commission_rate !== null && c.custom_commission_rate !== undefined;
+    let effPct = `${globalPct}% (Pay-As-You-Go)`;
+    if (activeSub) {
+      effPct = `0.00% (${activeSub.tier_code})`;
+    } else if (hasCustom) {
+      effPct = `${(Number(c.custom_commission_rate) * 100).toFixed(1)}% (Manual Rate)`;
+    }
+
+    return `
+      <tr>
+        <td>
+          <button type="button" class="username-link" onclick="openProfileInspector('${c.id}')">@${c.username || 'contractor'}</button>
+          ${c.vip_grind_badge ? `<span class="vip-badge">VIP</span>` : ''}<br/>
+          <small>${c.full_name}</small>
+        </td>
+        <td>
+          <strong style="color:var(--emerald-ok)">PHP ${Number(c.credit_balance || 0).toFixed(2)}</strong><br/>
+          <small style="color:var(--cyan-accent)">${activeSub ? activeSub.tier_code : 'STANDARD_PAYG'}</small>
+        </td>
+        <td>
+          <span class="engine-tag">${cProf.vehicle_type || 'motorcycle'} (${cProf.dispatch_radius_m || 1500}m)</span>
+        </td>
+        <td><span class="engine-tag">${effPct}</span></td>
+        <td>
+          <div class="action-cluster">
+            <button class="btn-xs" onclick="promptContractorCommissionOverride('${c.id}', '${c.full_name.replace(/'/g, "")}')">
+              Set Manual %
+            </button>
+            <button class="btn-xs" onclick="openProfileInspector('${c.id}')">
+              Pass / Profile
+            </button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
 }
 
 async function promptContractorCommissionOverride(contractorId, contractorName) {
   if (!currentAuthUser) return;
   const input = prompt(
-    `Set Manual Commission Rate (%) for ${contractorName} (e.g., enter 8 for 8%, or leave blank to restore Global Default):`,
+    `Set Manual Commission Rate (%) for ${contractorName} (Capped <= 12%, e.g., enter 8 for 8%, or leave blank for Global Default):`,
     ''
   );
   if (input === null) return;
   const trimmed = input.trim();
   const decimalVal = trimmed === '' ? null : (parseFloat(trimmed) / 100.0);
 
-  if (decimalVal !== null && (isNaN(decimalVal) || decimalVal < 0 || decimalVal > 0.5)) {
-    alert('Invalid rate. Enter a percentage between 0 and 50.');
+  if (decimalVal !== null && (isNaN(decimalVal) || decimalVal < 0 || decimalVal > 0.12)) {
+    alert('Per V3 Spec, commission rates are capped at <= 12.0%. Enter a value between 0 and 12.');
     return;
   }
 
@@ -619,7 +897,7 @@ async function promptContractorCommissionOverride(contractorId, contractorName) 
 }
 
 // ============================================================================
-// 4. UNIFIED USER PROFILE & GOVERNANCE COMMAND MODAL (CLICKING @USERNAME)
+// 5. UNIFIED USER PROFILE & GOVERNANCE COMMAND MODAL (CLICKING @USERNAME)
 // ============================================================================
 
 function openProfileInspector(userId) {
@@ -628,13 +906,14 @@ function openProfileInspector(userId) {
   activeProfileModalUserId = u.id;
 
   const { firstName, lastName } = splitFirstLastName(u);
+  const cProf = getContractorProfile(u.id) || {};
+  const activeSub = getActiveSubscription(u.id);
   const actorIsSuper = currentAuthUser.role === 'super_admin';
   const isTargetSuper = u.role === 'super_admin';
   const isTargetAdmin = u.role === 'admin';
   const canEditTarget = actorIsSuper || !isTargetSuper;
   const canSuspendTarget = !isTargetSuper && (actorIsSuper || !isTargetAdmin);
 
-  const userBookings = consoleState.bookings.filter(b => b.client_id === u.id || b.contractor_id === u.id);
   const userLedger = consoleState.ledger.filter(l => l.user_id === u.id);
   const userRatings = consoleState.ratings.filter(r => r.ratee_id === u.id);
   const certs = Array.isArray(u.certifications_docs) ? u.certifications_docs : [];
@@ -646,50 +925,82 @@ function openProfileInspector(userId) {
 
   const globalPct = (consoleState.globalCommissionRate * 100).toFixed(1);
   const manualCommVal = u.custom_commission_rate != null ? (Number(u.custom_commission_rate) * 100).toFixed(1) : '';
+  const accStatus = u.account_frozen ? 'SUSPENDED' : (u.account_status || 'ACTIVE');
 
   document.getElementById('profileModalTitle').innerHTML =
-    `User Profile Command • <span style="color:var(--cyan-accent)">@${u.username || u.role}</span> — ${u.full_name} [${u.role.toUpperCase()}]`;
+    `User Profile Command • <span style="color:var(--cyan-accent)">@${u.username || u.role}</span> — ${u.full_name} [${accStatus}]`;
 
-  // Scanned Certificates & Licenses Gallery HTML
+  // Scanned Certificates & Compliance Docs Gallery (1024px compressed)
   const certsHtml = certs.length === 0
-    ? `<div style="color:var(--text-muted);padding:0.4rem 0;">No scanned certificates or licenses attached yet. Upload an image below.</div>`
+    ? `<div style="color:var(--text-muted);padding:0.4rem 0;">No scanned certificates, licenses, or OR/CR attached yet.</div>`
     : `<div class="cert-grid">` + certs.map((c, idx) => `
         <div class="cert-card">
-          <img src="${c.image_data_url}" alt="${c.title}" onclick="previewCertImage('${u.id}', ${idx})" title="Click to enlarge scanned certificate" />
-          <div style="font-weight:700;font-size:0.78rem;color:var(--cyan-accent);">${c.title || 'Trade Certificate'}</div>
+          <img src="${c.image_data_url}" alt="${c.title}" onclick="previewCertImage('${u.id}', ${idx})" title="Click to inspect full 1024px compliance scan" />
+          <div style="font-weight:700;font-size:0.78rem;color:var(--cyan-accent);">${c.title || 'Compliance Document'}</div>
           <div style="font-size:0.72rem;color:var(--text-muted);">
-            License/Cert #: <code>${c.license_no || 'N/A'}</code><br/>
-            Issued By: ${c.issued_by || 'LGU / TESDA'} • ${c.uploaded_at || ''}
+            Ref/License #: <code>${c.license_no || 'N/A'}</code><br/>
+            Authority: ${c.issued_by || 'LGU / LTO / TESDA'} • ${c.uploaded_at || ''}
           </div>
-          ${canEditTarget ? `<button class="btn-danger" style="margin-top:auto;" onclick="removeUserCertification('${u.id}', ${idx})">Remove Cert</button>` : ''}
+          ${canEditTarget ? `<button class="btn-danger" style="margin-top:auto;" onclick="removeUserCertification('${u.id}', ${idx})">Remove File</button>` : ''}
         </div>
       `).join('') + `</div>`;
+
+  // Subscription Pass Activation Panel (For Contractors)
+  const subscriptionPanelHtml = u.role === 'contractor' ? `
+    <div class="forensic-box">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.6rem;">
+        <h4>4. Hybrid Monetization & Subscription Pass Control (Section 5 of V3 Spec)</h4>
+        <div>
+          ${activeSub
+            ? `<span class="pill-clean">ACTIVE PASS: ${activeSub.tier_code} (Expires: ${formatTs(activeSub.expires_at)})</span>`
+            : `<span class="engine-tag">CURRENT TIER: STANDARD PAY-AS-YOU-GO (≤${globalPct}%)</span>`}
+          ${u.vip_grind_badge ? `<span class="vip-badge" style="margin-left:0.4rem;">★ VIP GRIND BADGE (Priority Weight: ${u.priority_dispatch_weight})</span>` : ''}
+        </div>
+      </div>
+      <div class="profile-input-grid" style="grid-template-columns: 1fr auto; align-items: end;">
+        <div>
+          <label>Select Monthly Subscription Pass to Activate (Unlocks 0.00% Commission Window & Bundled Bonus Cushion)</label>
+          <select id="profSubPassSelect">
+            <option value="PART_TIME_PASS">Part-Time Pass — ₱3,000.00 (4h/day @ 0% Comm + ₱150 Overtime Cushion, 30 Days)</option>
+            <option value="FULL_TIME_PASS">Full-Time Pass — ₱5,000.00 (8h/day @ 0% Comm + ₱250 Overtime Cushion, 32 Days Total)</option>
+            <option value="GRIND_PASS">Hard-Working (Grind) Pass — ₱8,000.00 (24/7 Unlimited 0% Comm + Priority Dispatch + VIP Badge, 33 Days Total)</option>
+          </select>
+        </div>
+        <div>
+          <button class="btn-primary" onclick="activateContractorSubscriptionPass('${u.id}')">
+            Activate Subscription Pass
+          </button>
+        </div>
+      </div>
+    </div>
+  ` : '';
 
   // Contractor CSAT Section HTML
   const csatSectionHtml = u.role === 'contractor' ? `
     <div class="forensic-box">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.6rem;">
-        <h4>4. Contractor CSAT (Customer Satisfaction & Quality Scorecard — Engine 07)</h4>
-        <div>
-          <span class="csat-badge" style="font-size:0.88rem;padding:0.25rem 0.65rem;">
-            ★ ${avgStars} / 5.00 CSAT (${ratingCnt} Verified Review${ratingCnt === 1 ? '' : 's'})
-          </span>
-          <button class="btn-xs" style="margin-left:0.4rem;" onclick="promptAddTestCsatReview('${u.id}')">+ Log CSAT Review</button>
+        <h4>5. Contractor CSAT Scorecard & Verification Pipeline (Engine 01 & Engine 07)</h4>
+        <div class="action-cluster">
+          <span class="csat-badge">★ ${avgStars} / 5.00 CSAT (${ratingCnt} Reviews)</span>
+          <button class="btn-xs" style="border-color:var(--emerald-ok);color:var(--emerald-ok);" onclick="operatorQuickKycDecision('${u.id}', 'ACTIVATE')">
+            Approve & Set ACTIVE
+          </button>
+          <button class="btn-xs" style="border-color:var(--amber-core);color:var(--amber-core);" onclick="promptFlagDocResubmission('${u.id}', '${u.full_name.replace(/'/g, "")}')">
+            Flag Blurry Doc for Resubmission
+          </button>
+          <button class="btn-xs" onclick="promptAddTestCsatReview('${u.id}')">+ Log CSAT Review</button>
         </div>
       </div>
-      <div style="max-height:190px;overflow-y:auto;">
+      <div style="max-height:160px;overflow-y:auto;">
         ${userRatings.length === 0
           ? `<div style="color:var(--text-muted)">No itemized CSAT reviews recorded yet.</div>`
           : userRatings.map(r => `
-              <div style="padding:0.5rem;margin-bottom:0.45rem;background:#090d16;border:1px solid var(--border-subtle);border-radius:6px;">
+              <div style="padding:0.45rem;margin-bottom:0.4rem;background:#090d16;border:1px solid var(--border-subtle);border-radius:6px;">
                 <div style="display:flex;justify-content:space-between;">
                   <strong style="color:var(--amber-core)">${'★'.repeat(r.stars)}${'☆'.repeat(5 - r.stars)} (${r.stars}/5)</strong>
                   <span style="font-size:0.72rem;color:var(--text-muted)">Reviewer: ${getUserLabel(r.rater_id)} • ${formatTs(r.created_at)}</span>
                 </div>
-                <div style="margin:0.25rem 0;">
-                  ${(r.feedback_tags || []).map(t => `<span class="engine-tag" style="margin-right:0.3rem;font-size:0.66rem;">${t}</span>`).join('')}
-                </div>
-                <div style="color:var(--text-main);font-size:0.78rem;">"${r.comments || 'Verified satisfactory service completion.'}"</div>
+                <div style="color:var(--text-main);font-size:0.78rem;margin-top:0.2rem;">"${r.comments || 'Verified satisfactory service completion.'}"</div>
               </div>
             `).join('')}
       </div>
@@ -711,17 +1022,20 @@ function openProfileInspector(userId) {
   const body = document.getElementById('profileModalBody');
   body.innerHTML = `
     <div class="forensic-grid">
-      <!-- PANEL 1: EDIT PROFILE DETAILS & SKILLS -->
+      <!-- PANEL 1: EDIT PROFILE DETAILS, NICKNAME, GPS HOME PIN & SKILLS -->
       <div class="forensic-box">
-        <h4>1. Update Profile Details, Phone & Skills (\`@${u.username || u.role}\`)</h4>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+          <h4>1. Profile, Phone, GPS Home Anchor & Skills (\`@${u.username || u.role}\`)</h4>
+          ${u.profile_photo_url ? `<img src="${u.profile_photo_url}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid var(--cyan-accent);" title="Compressed VGA Profile Photo" />` : ''}
+        </div>
         <div class="profile-input-grid">
           <div>
             <label>Username (\`@username\`)</label>
             <input type="text" id="profUsername" value="${u.username || ''}" ${!canEditTarget ? 'disabled' : ''} />
           </div>
           <div>
-            <label>Mobile Phone Number</label>
-            <input type="text" id="profPhone" value="${u.phone || ''}" ${!canEditTarget ? 'disabled' : ''} />
+            <label>Preferred Nickname</label>
+            <input type="text" id="profNickname" value="${u.nickname || firstName}" ${!canEditTarget ? 'disabled' : ''} />
           </div>
           <div>
             <label>First Name</label>
@@ -732,6 +1046,10 @@ function openProfileInspector(userId) {
             <input type="text" id="profLastName" value="${lastName}" ${!canEditTarget ? 'disabled' : ''} />
           </div>
           <div>
+            <label>Active Mobile Phone (Direct Call)</label>
+            <input type="text" id="profPhone" value="${u.phone || ''}" ${!canEditTarget ? 'disabled' : ''} />
+          </div>
+          <div>
             <label>Email Address</label>
             <input type="email" id="profEmail" value="${u.email || ''}" ${!canEditTarget ? 'disabled' : ''} />
           </div>
@@ -740,6 +1058,13 @@ function openProfileInspector(userId) {
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.3rem;">
               <input type="text" id="profMunicipality" value="${u.municipality || 'Angeles City'}" ${!canEditTarget ? 'disabled' : ''} />
               <input type="text" id="profBarangay" value="${u.barangay_zone || 'Malabanias'}" ${!canEditTarget ? 'disabled' : ''} />
+            </div>
+          </div>
+          <div>
+            <label>GPS Home Pin (Lat / Lng)</label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.3rem;">
+              <input type="number" id="profHomeLat" value="${u.home_lat || 15.1450}" step="0.0001" ${!canEditTarget ? 'disabled' : ''} />
+              <input type="number" id="profHomeLng" value="${u.home_lng || 120.5887}" step="0.0001" ${!canEditTarget ? 'disabled' : ''} />
             </div>
           </div>
           <div>
@@ -757,33 +1082,32 @@ function openProfileInspector(userId) {
             </select>
           </div>
         </div>
-        <div style="margin-top:0.55rem;">
+        <div style="margin-top:0.5rem;">
           <label style="display:block;font-size:0.74rem;color:var(--text-muted);margin-bottom:0.2rem;">
-            Skills & Trade Categories (Comma-Separated — Add or Edit Skills)
+            Skills & Trade Categories (Comma-Separated)
           </label>
           <input type="text" id="profSkills" value="${(u.skill_categories || []).join(', ')}"
-                 placeholder="e.g., Aircon & HVAC, Electrical Repair, Plumbing, Sub-400cc Delivery"
                  style="width:100%;padding:0.45rem 0.6rem;border-radius:6px;border:1px solid var(--border-subtle);background:#090d16;color:var(--text-main);"
                  ${!canEditTarget ? 'disabled' : ''} />
         </div>
         ${canEditTarget
-          ? `<button class="btn-primary" style="margin-top:0.7rem;width:100%;" onclick="saveProfileModalChanges('${u.id}')">
-               Save Profile, Phone & Skills Updates
+          ? `<button class="btn-primary" style="margin-top:0.65rem;width:100%;" onclick="saveProfileModalChanges('${u.id}')">
+               Save Profile, Phone, GPS Anchor & Skills Updates
              </button>`
-          : `<div style="margin-top:0.6rem;color:var(--text-muted);font-size:0.75rem;">SuperAdmin profile is read-only for Admin Operators.</div>`}
+          : ''}
       </div>
 
       <!-- PANEL 2: PASSWORD RESET, MANUAL SUSPENSION & MANUAL COMMISSION RATE -->
       <div class="forensic-box">
         <h4>2. Security, Manual Suspension & User Commission Rate</h4>
 
-        <!-- Password Reset -->
+        <!-- Permanent Non-Expiring Password Reset -->
         <div style="padding-bottom:0.65rem;margin-bottom:0.65rem;border-bottom:1px solid var(--border-subtle);">
           <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:0.25rem;">
-            Reset User Password (\`public.user_credentials\`)
+            Reset Permanent Password (\`public.user_credentials\`)
           </label>
           <div style="display:grid;grid-template-columns:1fr auto;gap:0.45rem;">
-            <input type="text" id="profNewPasswordInput" placeholder="Enter new password (e.g. Alisto2026!)"
+            <input type="text" id="profNewPasswordInput" placeholder="Enter new permanent password"
                    style="padding:0.45rem 0.6rem;border-radius:6px;border:1px solid var(--border-subtle);background:#090d16;color:var(--text-main);"
                    ${!canEditTarget ? 'disabled' : ''} />
             <button class="btn-primary" onclick="saveProfilePasswordReset('${u.id}')" ${!canEditTarget ? 'disabled' : ''}>
@@ -795,10 +1119,8 @@ function openProfileInspector(userId) {
         <!-- Manual Suspension & Lift Suspension -->
         <div style="padding-bottom:0.65rem;margin-bottom:0.65rem;border-bottom:1px solid var(--border-subtle);">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem;">
-            <span style="font-size:0.76rem;color:var(--text-muted);">Current Account Standing:</span>
-            ${u.account_frozen
-              ? `<span class="pill-risk">SUSPENDED (${u.suspension_reason || 'Policy Violation'})</span>`
-              : `<span class="pill-clean">ACTIVE & IN GOOD STANDING</span>`}
+            <span style="font-size:0.76rem;color:var(--text-muted);">Account State (\`account_status\`):</span>
+            <span class="${accStatus === 'ACTIVE' ? 'pill-clean' : 'pill-risk'}">${accStatus}</span>
           </div>
           <div style="display:grid;grid-template-columns:1fr auto;gap:0.45rem;">
             <input type="text" id="profSuspendReasonInput"
@@ -816,14 +1138,14 @@ function openProfileInspector(userId) {
           </div>
         </div>
 
-        <!-- Manual Commission Rate of Specific User (SuperAdmin & Admin) -->
+        <!-- Manual Commission Rate of Specific User (SuperAdmin & Admin, Capped <= 12%) -->
         <div>
           <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:0.25rem;">
-            Manual Commission Rate for This User (% — Global Default is ${globalPct}%)
+            Manual Commission Rate for This User (% — Capped ≤ 12.0%, Global Default is ${globalPct}%)
           </label>
           <div style="display:grid;grid-template-columns:1fr auto auto;gap:0.45rem;">
             <input type="number" id="profManualCommInput" value="${manualCommVal}"
-                   placeholder="Global Default (${globalPct}%)" min="0" max="50" step="0.5"
+                   placeholder="Default (${globalPct}%)" min="0" max="12" step="0.5"
                    style="padding:0.45rem 0.6rem;border-radius:6px;border:1px solid var(--border-subtle);background:#090d16;color:var(--text-main);" />
             <button class="btn-primary" onclick="saveProfileManualCommission('${u.id}', false)">
               Set User Rate
@@ -832,49 +1154,56 @@ function openProfileInspector(userId) {
               Use Default
             </button>
           </div>
-          <small style="color:var(--text-muted);font-size:0.7rem;">
-            Both <code>super_admin</code> and <code>admin</code> can set a manual commission rate for a specific user.
-          </small>
         </div>
       </div>
     </div>
 
-    <!-- PANEL 3: SCANNED CERTIFICATES & LICENSES VAULT -->
+    <!-- PANEL 3: BANDWIDTH-OPTIMIZED MEDIA & COMPLIANCE ASSET VAULT (SECTION 4.2) -->
     <div class="forensic-box">
-      <h4>3. Scanned Certificates, Permits & Licenses Vault (${certs.length} Attached)</h4>
-      <div class="profile-input-grid" style="grid-template-columns: 1.2fr 1fr 1fr 1.2fr auto; align-items: end;">
+      <h4>3. Bandwidth-Optimized Asset Upload Vault — VGA Profile Photo (<80 KB) & 1024px Compliance Docs (${certs.length} Attached)</h4>
+      <div class="profile-input-grid" style="grid-template-columns: 1fr 1.1fr 1fr 1fr 1.1fr auto; align-items: end;">
         <div>
-          <label>Certificate / License Title</label>
-          <input type="text" id="certTitleInput" placeholder="e.g., TESDA NC-II HVAC / Driver License" />
+          <label>Compression Profile</label>
+          <select id="certCompressionSelect">
+            <option value="COMPLIANCE_DOC">Compliance Doc (1024px • 65% JPEG)</option>
+            <option value="PROFILE_VGA">Profile Photo (VGA 640x480 • <80KB)</option>
+          </select>
         </div>
         <div>
-          <label>License / Cert Number</label>
-          <input type="text" id="certNumberInput" placeholder="e.g., TESDA-2026-9912" />
+          <label>Document / Asset Type</label>
+          <input type="text" id="certTitleInput" placeholder="e.g., Driver License / OR-CR / TESDA NC-II" />
+        </div>
+        <div>
+          <label>License / Plate / Cert #</label>
+          <input type="text" id="certNumberInput" placeholder="e.g., N03-26-009182" />
         </div>
         <div>
           <label>Issuing Authority</label>
-          <input type="text" id="certIssuerInput" placeholder="e.g., TESDA / LTO / PRC" />
+          <input type="text" id="certIssuerInput" placeholder="e.g., LTO / TESDA / PESO" />
         </div>
         <div>
-          <label>Select Scanned Image File</label>
+          <label>Select Image File</label>
           <input type="file" id="certFileInput" accept="image/*" />
         </div>
         <div>
           <button class="btn-primary" onclick="uploadUserCertificationImage('${u.id}')" ${!canEditTarget ? 'disabled' : ''}>
-            + Attach Scanned Cert
+            + Compress & Attach
           </button>
         </div>
       </div>
       ${certsHtml}
     </div>
 
-    <!-- PANEL 4: CONTRACTOR CSAT SCORECARD -->
+    <!-- PANEL 4: SUBSCRIPTION PASS CONTROL -->
+    ${subscriptionPanelHtml}
+
+    <!-- PANEL 5: CONTRACTOR CSAT & KYC VERIFICATION -->
     ${csatSectionHtml}
 
-    <!-- PANEL 5: WALLET CREDIT / DEBIT CONSOLE & LEDGER HISTORY -->
+    <!-- PANEL 6: WALLET CREDIT / DEBIT & PAYMONGO QR PH TOP-UP (+P25 BONUS) -->
     <div class="forensic-box">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.65rem;">
-        <h4>5. Prepaid Wallet Credit / Debit Console & Immutable Ledger (\`public.credit_ledger\`)</h4>
+        <h4>6. Prepaid Wallet Credit / Debit & PayMongo QR Ph Top-Up (\`public.credit_ledger\`)</h4>
         <div>
           <span style="font-size:0.85rem;margin-right:0.8rem;">
             Available Balance: <strong style="color:var(--emerald-ok);font-size:1.05rem;">PHP ${Number(u.credit_balance || 0).toFixed(2)}</strong>
@@ -885,12 +1214,13 @@ function openProfileInspector(userId) {
         </div>
       </div>
 
-      <div class="profile-input-grid" style="grid-template-columns: 190px 160px 1fr auto; align-items: end; margin-bottom: 0.75rem;">
+      <div class="profile-input-grid" style="grid-template-columns: 220px 150px 1fr auto; align-items: end; margin-bottom: 0.75rem;">
         <div>
-          <label>Adjustment Operation</label>
+          <label>Wallet Operation</label>
           <select id="walletAdjDirection">
-            <option value="CREDIT">CREDIT (+ Add to Wallet)</option>
-            <option value="DEBIT">DEBIT (- Deduct from Wallet)</option>
+            <option value="TOPUP_QRPH">PayMongo QR Ph Top-Up (≥₱500 gets +₱25 Bonus!)</option>
+            <option value="CREDIT">Operator Manual CREDIT (+ Add)</option>
+            <option value="DEBIT">Operator Manual DEBIT (- Deduct)</option>
           </select>
         </div>
         <div>
@@ -899,11 +1229,11 @@ function openProfileInspector(userId) {
         </div>
         <div>
           <label>Audit Reference / Justification Note</label>
-          <input type="text" id="walletAdjReason" placeholder="e.g., PayMongo QR Ph OTC deposit / Penalty debit adjustment" />
+          <input type="text" id="walletAdjReason" placeholder="e.g., Cash-in ≥₱500 with automatic +₱25 bonus grant" />
         </div>
         <div>
           <button class="btn-primary" onclick="executeProfileWalletAdjustment('${u.id}')">
-            Execute Wallet Credit / Debit
+            Execute Wallet Transaction
           </button>
         </div>
       </div>
@@ -927,6 +1257,7 @@ async function saveProfileModalChanges(userId) {
   if (!u || !currentAuthUser) return;
 
   const username = document.getElementById('profUsername').value.trim();
+  const nickname = document.getElementById('profNickname').value.trim();
   const firstName = document.getElementById('profFirstName').value.trim();
   const lastName = document.getElementById('profLastName').value.trim();
   const fullName = `${firstName} ${lastName}`.trim() || u.full_name;
@@ -961,7 +1292,23 @@ async function saveProfileModalChanges(userId) {
     return;
   }
 
-  alert(`Profile details & skills updated for @${username} (${fullName}).`);
+  alert(`Profile details, phone & skills updated for @${username} (${ nickname || fullName }).`);
+  await syncFromSupabase();
+}
+
+async function activateContractorSubscriptionPass(contractorId) {
+  if (!currentAuthUser) return;
+  const tierCode = document.getElementById('profSubPassSelect').value;
+  const { data, error } = await supabaseClient.rpc('purchase_subscription_pass_rpc', {
+    p_contractor_id: contractorId,
+    p_tier_code: tierCode,
+    p_payment_ref: 'PASS-OP-' + Date.now()
+  });
+  if (error || (data && data.status === 'ERROR')) {
+    alert('Subscription Pass Activation Error: ' + (error ? error.message : data.message));
+    return;
+  }
+  alert(`Subscription Pass [${tierCode}] activated! 0.00% commission window and bonus cushion applied.`);
   await syncFromSupabase();
 }
 
@@ -970,7 +1317,7 @@ async function saveProfilePasswordReset(userId) {
   if (!u || !currentAuthUser) return;
   const newPw = document.getElementById('profNewPasswordInput').value.trim();
   if (!newPw) {
-    alert('Enter the new password in the password field first.');
+    alert('Enter the new password first.');
     return;
   }
 
@@ -986,7 +1333,7 @@ async function saveProfilePasswordReset(userId) {
   }
 
   document.getElementById('profNewPasswordInput').value = '';
-  alert(`Password successfully reset for @${u.username || u.full_name}.`);
+  alert(`Permanent password updated for @${u.username || u.full_name}.`);
   await syncFromSupabase();
 }
 
@@ -1016,12 +1363,10 @@ async function saveProfileManualCommission(userId, clearToDefault) {
   let decimalVal = null;
   if (!clearToDefault) {
     const raw = document.getElementById('profManualCommInput').value.trim();
-    if (raw === '') {
-      decimalVal = null;
-    } else {
+    if (raw !== '') {
       const pct = parseFloat(raw);
-      if (isNaN(pct) || pct < 0 || pct > 50) {
-        alert('Enter a valid commission rate between 0% and 50%.');
+      if (isNaN(pct) || pct < 0 || pct > 12) {
+        alert('Per V3 Spec, commission rates are capped at <= 12.0%.');
         return;
       }
       decimalVal = +(pct / 100.0).toFixed(4);
@@ -1052,7 +1397,24 @@ async function executeProfileWalletAdjustment(userId) {
   const reason = document.getElementById('walletAdjReason').value.trim() || `Manual ${direction} via Profile Command`;
 
   if (isNaN(amount) || amount <= 0) {
-    alert('Enter a valid adjustment amount greater than PHP 0.00.');
+    alert('Enter a valid amount greater than PHP 0.00.');
+    return;
+  }
+
+  if (direction === 'TOPUP_QRPH') {
+    const { data, error } = await supabaseClient.rpc('topup_prepaid_credits_rpc', {
+      p_user_id: userId,
+      p_amount: amount,
+      p_qrph_ref: 'QRPH-' + Date.now()
+    });
+    if (error || (data && data.status === 'ERROR')) {
+      alert('Top-Up Error: ' + (error ? error.message : data.message));
+      return;
+    }
+    if (data && Number(data.bonus_granted) > 0) {
+      alert(`Top-Up Complete! Paid: PHP ${amount.toFixed(2)} + Instant Promo Bonus: +PHP ${Number(data.bonus_granted).toFixed(2)}!`);
+    }
+    await syncFromSupabase();
     return;
   }
 
@@ -1073,49 +1435,31 @@ async function executeProfileWalletAdjustment(userId) {
   await syncFromSupabase();
 }
 
-function compressImageFileToDataUrl(file, maxWidth = 680) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = e => {
-      const img = new Image();
-      img.onload = () => {
-        const scale = Math.min(1, maxWidth / img.width);
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', 0.82));
-      };
-      img.onerror = reject;
-      img.src = e.target.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
 async function uploadUserCertificationImage(userId) {
   const u = getUserById(userId);
   if (!u || !currentAuthUser) return;
 
-  const title = document.getElementById('certTitleInput').value.trim() || 'Trade Certificate / License';
-  const licNo = document.getElementById('certNumberInput').value.trim() || 'VERIFIED-DOC';
-  const issuer = document.getElementById('certIssuerInput').value.trim() || 'LGU / TESDA';
+  const compMode = document.getElementById('certCompressionSelect').value;
+  const title = document.getElementById('certTitleInput').value.trim() || (compMode === 'PROFILE_VGA' ? 'Profile Photo (VGA 640x480)' : 'Compliance Document (1024px)');
+  const licNo = document.getElementById('certNumberInput').value.trim() || 'VERIFIED-ASSET';
+  const issuer = document.getElementById('certIssuerInput').value.trim() || 'LGU / LTO / TESDA';
   const fileInput = document.getElementById('certFileInput');
 
   let imageDataUrl = '';
+  let specLabel = compMode === 'PROFILE_VGA' ? 'VGA 640x480 (<80KB)' : '1024px Low/Med Res';
+
   if (fileInput && fileInput.files && fileInput.files[0]) {
-    imageDataUrl = await compressImageFileToDataUrl(fileInput.files[0]);
+    const compressed = await compressMediaBySpec(fileInput.files[0], compMode);
+    imageDataUrl = compressed.dataUrl;
+    specLabel = `${compressed.width}x${compressed.height}px (~${compressed.approxKb} KB)`;
   } else {
-    // Generate a clean digital certificate badge if no file was selected
-    imageDataUrl = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="480" height="300" viewBox="0 0 480 300"><rect width="480" height="300" fill="%230f172a" stroke="%2334d399" stroke-width="6"/><text x="240" y="65" fill="%23fbbf24" font-family="sans-serif" font-size="18" font-weight="bold" text-anchor="middle">${encodeURIComponent(issuer.toUpperCase())}</text><text x="240" y="115" fill="%23ffffff" font-family="sans-serif" font-size="18" font-weight="bold" text-anchor="middle">${encodeURIComponent(title)}</text><text x="240" y="160" fill="%2300f2fe" font-family="sans-serif" font-size="15" text-anchor="middle">Holder: ${encodeURIComponent(u.full_name)} (@${encodeURIComponent(u.username || '')})</text><text x="240" y="205" fill="%2334d399" font-family="sans-serif" font-size="14" font-weight="bold" text-anchor="middle">License / Cert #: ${encodeURIComponent(licNo)}</text></svg>`;
+    imageDataUrl = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="480" height="300" viewBox="0 0 480 300"><rect width="480" height="300" fill="%230f172a" stroke="%2334d399" stroke-width="6"/><text x="240" y="60" fill="%23fbbf24" font-family="sans-serif" font-size="17" font-weight="bold" text-anchor="middle">${encodeURIComponent(issuer.toUpperCase())} • ${encodeURIComponent(specLabel)}</text><text x="240" y="115" fill="%23ffffff" font-family="sans-serif" font-size="18" font-weight="bold" text-anchor="middle">${encodeURIComponent(title)}</text><text x="240" y="160" fill="%2300f2fe" font-family="sans-serif" font-size="15" text-anchor="middle">Holder: ${encodeURIComponent(u.full_name)} (@${encodeURIComponent(u.username || '')})</text><text x="240" y="205" fill="%2334d399" font-family="sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Ref / License #: ${encodeURIComponent(licNo)}</text></svg>`;
   }
 
   const existingCerts = Array.isArray(u.certifications_docs) ? [...u.certifications_docs] : [];
   existingCerts.unshift({
     id: 'cert_' + Date.now(),
-    title: title,
+    title: `${title} [${specLabel}]`,
     license_no: licNo,
     issued_by: issuer,
     uploaded_at: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString(),
@@ -1141,7 +1485,7 @@ async function uploadUserCertificationImage(userId) {
   });
 
   if (error || (data && data.status === 'ERROR')) {
-    alert('Certificate Upload Error: ' + (error ? error.message : data.message));
+    alert('Asset Upload Error: ' + (error ? error.message : data.message));
     return;
   }
 
@@ -1178,9 +1522,9 @@ function previewCertImage(userId, certIndex) {
   const u = getUserById(userId);
   if (!u || !Array.isArray(u.certifications_docs) || !u.certifications_docs[certIndex]) return;
   const c = u.certifications_docs[certIndex];
-  const w = window.open('', '_blank', 'width=720,height=520');
+  const w = window.open('', '_blank', 'width=760,height=560');
   if (w) {
-    w.document.write(`<html><head><title>${c.title}</title></head><body style="margin:0;background:#070a12;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:20px;"><h3 style="color:#00f2fe;margin-bottom:8px;">${c.title} (${c.license_no})</h3><p style="color:#94a3b8;margin-top:0;">Issued By: ${c.issued_by} • Holder: ${u.full_name} (@${u.username})</p><img src="${c.image_data_url}" style="max-width:95%;max-height:75vh;border:2px solid #00f2fe;border-radius:8px;" /></body></html>`);
+    w.document.write(`<html><head><title>${c.title}</title></head><body style="margin:0;background:#070a12;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:20px;"><h3 style="color:#00f2fe;margin-bottom:8px;">${c.title} (${c.license_no})</h3><p style="color:#94a3b8;margin-top:0;">Authority: ${c.issued_by} • Holder: ${u.full_name} (@${u.username})</p><img src="${c.image_data_url}" style="max-width:95%;max-height:75vh;border:2px solid #00f2fe;border-radius:8px;" /></body></html>`);
   }
 }
 
@@ -1211,7 +1555,7 @@ async function promptAddTestCsatReview(contractorId) {
 }
 
 // ============================================================================
-// 5. BOOKINGS TABLE & FORENSIC INVESTIGATION DOSSIER
+// 6. BOOKINGS TABLE & FORENSIC INVESTIGATION DOSSIER
 // ============================================================================
 
 function renderOperatorBookingsTable() {
@@ -1253,12 +1597,12 @@ function renderOperatorBookingsTable() {
           <small style="color:var(--text-muted)">${b.barangay_zone}, ${b.municipality || 'Angeles City'} • ${b.pickup_address}</small>
         </td>
         <td>
-          <small><strong>Client:</strong> ${clientObj ? `<a class="username-link" onclick="openProfileInspector('${clientObj.id}')">@${clientObj.username}</a> ${clientObj.full_name}` : b.client_id}</small><br/>
-          <small><strong>Contractor:</strong> ${contObj ? `<a class="username-link" onclick="openProfileInspector('${contObj.id}')">@${contObj.username}</a> ${contObj.full_name}` : 'Unclaimed (On Board)'}</small>
+          <small><strong>Client:</strong> ${clientObj ? `<button type="button" class="username-link" onclick="openProfileInspector('${clientObj.id}')">@${clientObj.username}</button> ${clientObj.full_name}` : b.client_id}</small><br/>
+          <small><strong>Contractor:</strong> ${contObj ? `<button type="button" class="username-link" onclick="openProfileInspector('${contObj.id}')">@${contObj.username}</button> ${contObj.full_name}` : 'Unclaimed (On Board)'}</small>
         </td>
         <td>
           Fee: <strong>PHP ${Number(b.quoted_fee).toFixed(2)}</strong><br/>
-          <small>Tip: PHP ${Number(b.tip_amount || 0).toFixed(2)} | Hold: PHP ${Number(b.commission_locked || 0).toFixed(2)}</small>
+          <small>Tip (100% Contractor): PHP ${Number(b.tip_amount || 0).toFixed(2)} | Hold: PHP ${Number(b.commission_locked || 0).toFixed(2)}</small>
         </td>
         <td style="font-size:0.74rem;line-height:1.45;">
           <strong>Req:</strong> ${formatTs(b.created_at)}<br/>
@@ -1318,7 +1662,7 @@ function openForensicDossier(bookingId) {
           <strong>${formatTs(g.recorded_at)}</strong> •
           Coords: <code>${Number(g.lat).toFixed(5)}, ${Number(g.lng).toFixed(5)}</code> •
           Speed: <strong>${g.speed_kph} kph</strong> (Heading ${g.heading}°) •
-          <span class="pill-clean">${g.sub_400cc_compliant ? 'Sub-400cc Non-Expressway OK' : 'EXPRESSWAY ALERT'}</span>
+          <span class="pill-clean">${g.sub_400cc_compliant ? 'Expressway-Free OK' : 'EXPRESSWAY ALERT'}</span>
         </div>
       `).join('');
 
@@ -1341,20 +1685,20 @@ function openForensicDossier(bookingId) {
       <div class="forensic-box">
         <h4>2. Parties, Financial Hold & Spatial Verification</h4>
         <ul class="ts-list">
-          <li><strong>Customer:</strong> ${client ? `<a class="username-link" onclick="closeForensicModal();openProfileInspector('${client.id}')">@${client.username}</a> ${client.full_name}` : b.client_id}</li>
-          <li><strong>Contractor:</strong> ${contractor ? `<a class="username-link" onclick="closeForensicModal();openProfileInspector('${contractor.id}')">@${contractor.username}</a> ${contractor.full_name}` : 'Unassigned'}</li>
+          <li><strong>Customer:</strong> ${client ? `<button type="button" class="username-link" onclick="closeForensicModal();openProfileInspector('${client.id}')">@${client.username}</button> ${client.full_name}` : b.client_id}</li>
+          <li><strong>Contractor:</strong> ${contractor ? `<button type="button" class="username-link" onclick="closeForensicModal();openProfileInspector('${contractor.id}')">@${contractor.username}</button> ${contractor.full_name}` : 'Unassigned'}</li>
           <li><strong>Pickup / Site Address:</strong> ${b.pickup_address} (${b.barangay_zone}, ${b.municipality})</li>
           <li><strong>Pickup Coords:</strong> <code>${b.pickup_lat || 15.1450}, ${b.pickup_lng || 120.5887}</code></li>
           <li><strong>Quoted Service Fee:</strong> PHP ${Number(b.quoted_fee).toFixed(2)} (+PHP ${Number(b.tip_amount || 0).toFixed(2)} Tip)</li>
           <li><strong>Locked Commission Hold:</strong> PHP ${Number(b.commission_locked || 0).toFixed(2)}</li>
-          <li><strong>Sub-400cc Route Rule:</strong> ${b.non_expressway_route_verified ? 'Verified Non-Expressway' : 'Pending'}</li>
+          <li><strong>Expressway-Free Route:</strong> ${b.non_expressway_route_verified ? 'Verified Non-Expressway' : 'Pending'}</li>
         </ul>
       </div>
     </div>
 
     <div class="forensic-grid">
       <div class="forensic-box">
-        <h4>3. Transactional In-App Chat History (<code>booking_messages</code>)</h4>
+        <h4>3. Engine 11 In-App Chat History (<code>booking_messages</code>)</h4>
         <div style="max-height:200px;overflow-y:auto;">${chatHtml}</div>
       </div>
 
@@ -1366,7 +1710,7 @@ function openForensicDossier(bookingId) {
 
     <div class="forensic-box">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
-        <h4>5. Location & Real-Time GPS Telemetry Breadcrumbs (<code>booking_telemetry</code>)</h4>
+        <h4>5. Engine 05 GPS Telemetry Breadcrumbs (<code>booking_telemetry</code>)</h4>
         <button class="btn-xs" onclick="simulateTelemetryPing('${b.id}', '${b.contractor_id || '33333333-3333-3333-3333-333333333333'}')">
           + Record Test GPS Telemetry Ping
         </button>
@@ -1420,12 +1764,89 @@ async function simulateTelemetryPing(bookingId, contractorId) {
 }
 
 // ============================================================================
-// 6. SUPERADMIN EXCLUSIVE CONSOLE, LGU & SCOPED USER VIEWS
+// 7. SUPERADMIN CONTROL CENTER (UNIVERSAL LEDGER HEALTH & SUBSCRIPTION TIERS)
 // ============================================================================
 
 function renderSuperAdmin() {
   if (!currentAuthUser || currentAuthUser.role !== 'super_admin') return;
 
+  // 1. Render Universal Ledger Health Executive View (v_universal_ledger_health)
+  const hStrip = document.getElementById('universalLedgerHealthStrip');
+  const h = consoleState.ledgerHealth || {};
+  if (hStrip) {
+    hStrip.innerHTML = `
+      <div class="kpi-card">
+        <div class="kpi-label">Gross Paid Credit Allocations</div>
+        <div class="kpi-value" style="color:var(--emerald-ok)">PHP ${Number(h.gross_paid_credit_allocations || 0).toFixed(2)}</div>
+        <div class="kpi-sub">PayMongo QR Ph Cash-In Volume</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Subscription Pass Volume</div>
+        <div class="kpi-value" style="color:var(--cyan-accent)">PHP ${Number(h.gross_subscription_volume || 0).toFixed(2)}</div>
+        <div class="kpi-sub">${Number(h.active_subscription_passes || 0)} Active Subscription Passes</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Realized Commission Burned</div>
+        <div class="kpi-value" style="color:var(--amber-core)">PHP ${Number(h.realized_commission_credits_burned || 0).toFixed(2)}</div>
+        <div class="kpi-sub">Earned Platform Commission Credits</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Promotional Bonus Burn</div>
+        <div class="kpi-value" style="color:#fca5a5">PHP ${Number(h.promotional_bonus_burn || 0).toFixed(2)}</div>
+        <div class="kpi-sub">+₱25 Top-Up & Pass Cushions</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Unearned Wallet Liability</div>
+        <div class="kpi-value">PHP ${Number(h.unearned_wallet_liability || 0).toFixed(2)}</div>
+        <div class="kpi-sub">Total Held + Available Contractor Credits</div>
+      </div>
+      <div class="kpi-card" style="border-color:var(--emerald-ok);">
+        <div class="kpi-label">Net Platform Yield</div>
+        <div class="kpi-value" style="color:var(--emerald-ok)">PHP ${Number(h.net_platform_yield || 0).toFixed(2)}</div>
+        <div class="kpi-sub">Subscriptions + Realized Comm - Promo Burn</div>
+      </div>
+    `;
+  }
+
+  // 2. Render Editable 4-Tier Subscription Pass Table
+  const subBody = document.getElementById('superAdminSubscriptionTiersTable');
+  if (subBody) {
+    subBody.innerHTML = consoleState.subscriptionTiers.map(t => `
+      <tr>
+        <td>
+          <strong>${t.tier_name}</strong><br/>
+          <code>${t.tier_code}</code>
+          ${t.grants_vip_badge ? `<span class="vip-badge">VIP BADGE</span>` : ''}
+        </td>
+        <td>
+          <input type="number" class="tier-input" id="fee_${t.tier_code}" value="${Number(t.monthly_fee).toFixed(2)}" step="100" />
+        </td>
+        <td>
+          <input type="number" class="tier-input" id="cap_${t.tier_code}" value="${t.daily_active_cap_hours}" min="1" max="24" /> hrs/day
+        </td>
+        <td>
+          <input type="number" class="tier-input" style="width:60px;" id="val_${t.tier_code}" value="${t.validity_days}" /> +
+          <input type="number" class="tier-input" style="width:55px;" id="bon_${t.tier_code}" value="${t.bonus_days}" /> bonus
+        </td>
+        <td>
+          +PHP <input type="number" class="tier-input" id="act_${t.tier_code}" value="${Number(t.activation_bonus_credits).toFixed(2)}" step="25" />
+        </td>
+        <td>
+          +PHP <input type="number" class="tier-input" id="top_${t.tier_code}" value="${Number(t.topup_bonus_credits).toFixed(2)}" step="5" />
+        </td>
+        <td style="font-size:0.74rem;color:var(--text-muted);max-width:290px;">
+          ${t.perks_summary}
+        </td>
+        <td>
+          <button class="btn-primary" style="padding:0.4rem 0.7rem;font-size:0.76rem;" onclick="saveSubscriptionTierRow('${t.tier_code}')">
+            Save Tier
+          </button>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  // 3. Render Service Verticals
   const list = document.getElementById('superAdminVerticalList');
   if (list) {
     list.innerHTML = consoleState.verticals.map(v => `
@@ -1436,13 +1857,14 @@ function renderSuperAdmin() {
         </div>
         <div>
           <button class="${v.is_enabled ? 'btn-primary' : 'btn-outline'}" onclick="toggleVertical('${v.vertical_key}')">
-            ${v.is_enabled ? 'ACTIVE (Click to Turn OFF)' : 'OFF (Click to Turn ON)'}
+            ${v.is_enabled ? 'ACTIVE (Click to Turn OFF)' : 'LOCKED / OFF (Click to Turn ON)'}
           </button>
         </div>
       </div>
     `).join('');
   }
 
+  // 4. Render Moderation Rules & Audit Logs
   const rulesBody = document.getElementById('moderationRulesTable');
   if (rulesBody) {
     rulesBody.innerHTML = consoleState.moderationRules.map(r => `
@@ -1473,6 +1895,38 @@ function renderSuperAdmin() {
   }
 }
 
+async function saveSubscriptionTierRow(tierCode) {
+  if (!currentAuthUser || currentAuthUser.role !== 'super_admin') {
+    alert('UNAUTHORIZED: Only SuperAdmin can modify Subscription Tier Pricing & Caps.');
+    return;
+  }
+  const fee = parseFloat(document.getElementById('fee_' + tierCode).value) || 0;
+  const cap = parseInt(document.getElementById('cap_' + tierCode).value, 10) || 24;
+  const valDays = parseInt(document.getElementById('val_' + tierCode).value, 10) || 30;
+  const bonDays = parseInt(document.getElementById('bon_' + tierCode).value, 10) || 0;
+  const actBonus = parseFloat(document.getElementById('act_' + tierCode).value) || 0;
+  const topBonus = parseFloat(document.getElementById('top_' + tierCode).value) || 0;
+
+  const { data, error } = await supabaseClient.rpc('admin_update_subscription_tier_rpc', {
+    p_actor_id: currentAuthUser.id,
+    p_tier_code: tierCode,
+    p_monthly_fee: fee,
+    p_daily_cap_hours: cap,
+    p_validity_days: valDays,
+    p_bonus_days: bonDays,
+    p_activation_bonus: actBonus,
+    p_topup_bonus: topBonus
+  });
+
+  if (error || (data && data.status === 'ERROR')) {
+    alert('Subscription Tier Update Error: ' + (error ? error.message : data.message));
+    return;
+  }
+
+  alert(`Subscription Tier [${tierCode}] updated live in PostgreSQL!`);
+  await syncFromSupabase();
+}
+
 async function toggleVertical(verticalKey) {
   if (!currentAuthUser || currentAuthUser.role !== 'super_admin') {
     alert('UNAUTHORIZED: Only SuperAdmin can enable or disable Service Verticals.');
@@ -1501,6 +1955,10 @@ async function saveRuntimeConfig() {
     return;
   }
   const comm = parseFloat(document.getElementById('cfgCommission').value) || 12;
+  if (comm > 12) {
+    alert('Per V3 Spec, Global Commission Rate is capped at <= 12.0%.');
+    return;
+  }
   const mat = parseInt(document.getElementById('cfgMaturity').value, 10) || 72;
   const rateDecimal = (comm / 100.0).toFixed(4);
 
@@ -1567,9 +2025,7 @@ function renderLguAdmin() {
           <td>${(c.skill_categories || []).join(', ')} • <span class="engine-tag">${certs.length} Cert(s)</span></td>
           <td>PHP ${Number(c.credit_balance || 0).toFixed(2)} (Held: PHP ${Number(c.held_credits || 0).toFixed(2)})</td>
           <td>
-            <span style="color:${c.kyc_verified && c.lgu_peso_endorsed ? 'var(--emerald-ok)' : 'var(--crimson-err)'};font-weight:700;">
-              ${c.kyc_verified && c.lgu_peso_endorsed ? 'KYC + LGU/PESO ENDORSED' : 'ENDORSEMENT SUSPENDED'}
-            </span>
+            <span class="${c.account_status === 'ACTIVE' ? 'pill-clean' : 'pill-watch'}">${c.account_status || 'ACTIVE'}</span>
           </td>
           <td>
             <button class="btn-outline" onclick="toggleContractorEndorsement('${c.id}', ${!c.lgu_peso_endorsed})">
@@ -1605,14 +2061,14 @@ function renderScopedAccountSummary() {
 
   card.innerHTML = `
     <div class="card-header">
-      <h2>Authenticated Account Session Profile • ${selfRecord.full_name} (@${selfRecord.username || selfRecord.role})</h2>
-      <span class="engine-tag">ROLE: ${selfRecord.role.toUpperCase()}</span>
+      <h2>Authenticated Session • ${selfRecord.full_name} (@${selfRecord.username || selfRecord.role})</h2>
+      <span class="engine-tag">ROLE: ${selfRecord.role.toUpperCase()} | STATE: ${selfRecord.account_status || 'ACTIVE'}</span>
     </div>
     <div style="font-size:0.83rem;color:var(--text-muted);display:flex;gap:1.5rem;flex-wrap:wrap;">
       <div><strong>Phone:</strong> ${selfRecord.phone}</div>
-      <div><strong>Zone:</strong> ${selfRecord.barangay_zone}, ${selfRecord.municipality}</div>
-      ${selfRecord.role === 'contractor' ? `<div><strong>Prepaid Credits:</strong> <span style="color:var(--emerald-ok);font-weight:700;">PHP ${Number(selfRecord.credit_balance || 0).toFixed(2)}</span> (Held: PHP ${Number(selfRecord.held_credits || 0).toFixed(2)})</div>` : ''}
-      <div><strong>Associated Bookings:</strong> ${myBookings.length}</div>
+      <div><strong>GPS Home Anchor:</strong> ${selfRecord.barangay_zone}, ${selfRecord.municipality} (${Number(selfRecord.home_lat || 15.145).toFixed(4)}, ${Number(selfRecord.home_lng || 120.588).toFixed(4)})</div>
+      ${selfRecord.role === 'contractor' ? `<div><strong>Wallet:</strong> <span style="color:var(--emerald-ok);font-weight:700;">PHP ${Number(selfRecord.credit_balance || 0).toFixed(2)}</span></div>` : ''}
+      <div><strong>Bookings:</strong> ${myBookings.length}</div>
     </div>
   `;
 }
@@ -1647,6 +2103,7 @@ function renderAll() {
   if (['super_admin', 'admin'].includes(currentAuthUser.role)) {
     renderOperatorKpis();
     renderOperatorUsersTable();
+    renderOperatorKycQueue();
     renderOperatorContractorCommissionTable();
     renderOperatorBookingsTable();
     renderLguAdmin();
