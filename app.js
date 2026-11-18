@@ -239,6 +239,7 @@ function splitFirstLastName(u) {
 async function syncFromSupabase() {
   if (!supabaseClient || !currentAuthUser) return;
   try {
+    await supabaseClient.rpc('sweep_expired_bookings_rpc');
     const [
       vRes, priceRes, heatRes, bidsRes, cfgRes, healthRes, subTiersRes, subActRes, cProfRes,
       uRes, bRes, lRes, ratRes, mRes, tRes, rRes, aRes, opRes
@@ -861,7 +862,7 @@ function renderOperatorContractorCommissionTable() {
           <small style="color:var(--cyan-accent)">${activeSub ? activeSub.tier_code : 'STANDARD_PAYG'}</small>
         </td>
         <td>
-          <span class="engine-tag">${cProf.vehicle_type || 'motorcycle'} (${cProf.dispatch_radius_m || 1500}m)</span>
+          <span class="engine-tag">${cProf.vehicle_type || 'motorcycle'} (${cProf.dispatch_radius_m || 1500}m)</span><br/><small style="color:var(--cyan-accent)">Shift: ${(cProf.active_shift_verticals || ['skills_marketplace']).join(', ')}</small>
         </td>
         <td><span class="engine-tag">${effPct}</span></td>
         <td>

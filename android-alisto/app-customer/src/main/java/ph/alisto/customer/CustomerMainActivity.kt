@@ -17,10 +17,8 @@ class CustomerMainActivity : AppCompatActivity() {
 
     private val uiScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var selectedVerticalKey = "skills_marketplace"
-    private var selectedJobSubtype = "ON_SITE_SKILL"
     private var entryMode = "LOGIN"
     private var compressedProfilePhotoDataUrl: String? = null
-    private var compressedProfilePhotoMeta: String = "Optional (Not Attached)"
     private val sequentialWaypoints = mutableListOf<JSONObject>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,11 +39,8 @@ class CustomerMainActivity : AppCompatActivity() {
             onUnlockedUserId = { savedUid ->
                 uiScope.launch {
                     val res = AlistoKernelClient.fetchAppBootStateRpc(savedUid, "customer")
-                    res.onSuccess {
-                        showAuthenticatedCustomerPortal()
-                    }.onFailure {
-                        showEntryPortalGate()
-                    }
+                    res.onSuccess { showAuthenticatedCustomerPortal() }
+                        .onFailure { showEntryPortalGate() }
                 }
             },
             onFallbackOrError = { showEntryPortalGate() }
@@ -210,7 +205,7 @@ class CustomerMainActivity : AppCompatActivity() {
             AlistoBrandHeaderView(
                 this,
                 "Hi, ${user.nickname}! (@${user.username})",
-                "Nationwide Scope • Local-Road Routing (avoid=ht)"
+                "Trust Score: ${"%.0f".format(user.customerTrustScore)}% (UP: ${user.thumbsUpCount} / DOWN: ${user.thumbsDownCount})"
             ).apply {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
@@ -223,7 +218,7 @@ class CustomerMainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 0, 0, 16)
             addView(Button(this@CustomerMainActivity).apply {
-                text = "Refresh"
+                text = "Refresh Bids & Status"
                 setBackgroundColor(Color.parseColor("#1E293B"))
                 setTextColor(Color.WHITE)
                 setOnClickListener {
@@ -250,7 +245,7 @@ class CustomerMainActivity : AppCompatActivity() {
         }
         container.addView(sessionBar)
 
-        container.addView(sectionTitle("1. Select Service Vertical & Subtype (Master Spec v2.0)"))
+        container.addView(sectionTitle("1. Select Service Vertical & Subtype"))
         val subtypeSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(
                 this@CustomerMainActivity,
@@ -259,15 +254,14 @@ class CustomerMainActivity : AppCompatActivity() {
             )
             setBackgroundColor(Color.parseColor("#1E293B"))
         }
-        container.addView(labeledField("Workflow Subtype (On-Site Pin vs. Multi-Stop Errand Waypoints)", subtypeSpinner))
+        container.addView(labeledField("Workflow Subtype (On-Site Pin vs. Multi-Stop Pabili/Errand Waypoints)", subtypeSpinner))
 
-        val titleInput = styledInput("e.g., Split-Type Aircon Cleaning OR Grocery/Hardware Errand Run")
+        val titleInput = styledInput("e.g., Split-Type Aircon Cleaning OR Multi-Stop Pabili Errand")
         container.addView(labeledField("Service / Errand Title", titleInput))
 
         val pickupInput = styledInput(user.addressText.ifBlank { "Origin / Job Site Pin (${user.barangayZone})" })
         container.addView(labeledField("Origin / Job Site Pin (Reverse-Geocoded)", pickupInput))
 
-        // Sequential Numbered Waypoints Builder (1, 2, 3...)
         val waypointsStatus = TextView(this).apply {
             text = if (sequentialWaypoints.isEmpty()) "Numbered Waypoints: None (Single Job Site Pin)" else "Waypoints: ${sequentialWaypoints.size}"
             setTextColor(Color.parseColor("#00F2FE"))
@@ -298,12 +292,12 @@ class CustomerMainActivity : AppCompatActivity() {
         val feeInput = styledInput("500").apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
         }
-        container.addView(labeledField("Proposed Base Service Fee / Starting Bid (PHP)", feeInput))
+        container.addView(labeledField("Service / Labor Fee Offer (PHP — Pabili goods are settled via Chat/GCash)", feeInput))
 
         val errandCostInput = styledInput("0").apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
         }
-        container.addView(labeledField("Errand Item Reimbursement (PHP — <₱500 adds +₱10–₱15 GCash Buffer)", errandCostInput))
+        container.addView(labeledField("Est. Pabili Goods Reimbursement (PHP — <₱500 adds +₱10–₱15 GCash Buffer; price shifts resolved via Chat)", errandCostInput))
 
         val deadheadKmInput = styledInput("0").apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
@@ -316,7 +310,7 @@ class CustomerMainActivity : AppCompatActivity() {
         container.addView(labeledField("Optional Tip (PHP — 100% Protected for Contractor/Rider)", tipInput))
 
         container.addView(Button(this).apply {
-            text = "BROADCAST BOOKING / OPEN BIDDING (V2 KERNEL)"
+            text = "BROADCAST BOOKING / OPEN BIDDING"
             setBackgroundColor(Color.parseColor("#00F2FE"))
             setTextColor(Color.parseColor("#070D19"))
             setTypeface(null, Typeface.BOLD)
@@ -367,37 +361,120 @@ class CustomerMainActivity : AppCompatActivity() {
             }
         })
 
-        container.addView(sectionTitle("2. My Bookings, Live Map Navigation & Cancellation Controls"))
+        container.addView(sectionTitle("2. My Bookings, Incoming Open Bids & Post-Completion CSAT"))
         AlistoKernelClient.bookings.filter { user.role == "super_admin" || it.clientId == user.id }.forEach { b ->
-            val card = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(24, 20, 24, 20)
-                setBackgroundColor(Color.parseColor("#1E293B"))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, 0, 0, 14) }
-            }
-            card.addView(TextView(this).apply {
-                text = "${b.bookingRef} • [${b.status}] — ${b.serviceTitle}"
-                setTextColor(Color.parseColor("#FBBF24"))
-                setTypeface(null, Typeface.BOLD)
-            })
-            card.addView(TextView(this).apply {
-                text = "Address: ${b.pickupAddress}\nBase: PHP ${b.quotedFee} | Tip (100% Contractor): PHP ${b.tipAmount}"
-                setTextColor(Color.WHITE)
-                textSize = 12.5f
-            })
+            container.addView(buildCustomerBookingCard(b))
+        }
 
-            val btnRow = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setPadding(0, 10, 0, 0)
-                addView(Button(this@CustomerMainActivity).apply {
-                    text = "Chat (Engine 11)"
-                    setBackgroundColor(Color.parseColor("#334155"))
-                    setTextColor(Color.WHITE)
-                    setOnClickListener { openChatDialog(b) }
+        rootScroll.addView(container)
+        setContentView(rootScroll)
+    }
+
+    private fun buildCustomerBookingCard(b: BookingRecord): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 20, 24, 20)
+            setBackgroundColor(Color.parseColor("#1E293B"))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 0, 0, 16) }
+        }
+
+        card.addView(TextView(this).apply {
+            text = "${b.bookingRef} • [${b.status}] — ${b.serviceTitle}"
+            setTextColor(Color.parseColor("#FBBF24"))
+            setTypeface(null, Typeface.BOLD)
+            textSize = 14f
+        })
+
+        val contractorRepLine = if (b.contractorFullName != null) {
+            val vipTag = if (b.contractorVipBadge) " [★ VIP GRIND]" else ""
+            "\nAssigned Contractor: ${b.contractorFullName}$vipTag • ★ ${"%.2f".format(b.contractorRatingAvg)} (${b.contractorRatingCount} reviews)"
+        } else {
+            "\nStatus: Open for Contractor Bidding / Dispatch"
+        }
+
+        card.addView(TextView(this).apply {
+            text = "Address: ${b.pickupAddress}\nService Fee: PHP ${"%.2f".format(b.quotedFee)} | Tip (100% Contractor): PHP ${"%.2f".format(b.tipAmount)}$contractorRepLine"
+            setTextColor(Color.WHITE)
+            textSize = 12.5f
+            setPadding(0, 4, 0, 10)
+        })
+
+        // INCOMING OPEN BIDS REVIEW & ACCEPTANCE (For PENDING / SEARCHING Bookings)
+        if (b.status in listOf("PENDING", "SEARCHING", "CREATED")) {
+            val matchingBids = AlistoKernelClient.bookingBids.filter { it.bookingId == b.id && it.status == "ACTIVE" }
+            if (matchingBids.isNotEmpty()) {
+                card.addView(TextView(this).apply {
+                    text = "INCOMING CONTRACTOR BIDS (${matchingBids.size}):"
+                    setTextColor(Color.parseColor("#00F2FE"))
+                    setTypeface(null, Typeface.BOLD)
+                    textSize = 12.5f
+                    setPadding(0, 6, 0, 6)
                 })
+                matchingBids.forEach { bid ->
+                    val bidBox = LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(18, 14, 18, 14)
+                        setBackgroundColor(Color.parseColor("#0F172A"))
+                        layoutParams = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        ).apply { setMargins(0, 0, 0, 10) }
+                    }
+                    val vipStr = if (bid.contractorVipBadge) " [★ VIP]" else ""
+                    val highlightsStr = if (bid.reviewHighlights.isNotEmpty()) "\nHighlights: ${bid.reviewHighlights.joinToString(" • ")}" else ""
+                    bidBox.addView(TextView(this).apply {
+                        text = "${bid.contractorName} (@${bid.contractorUsername})$vipStr\n" +
+                               "Reputation: ★ ${"%.2f".format(bid.contractorRatingAvg)} (${bid.contractorRatingCount} reviews)$highlightsStr\n" +
+                               "Bid Offer: PHP ${"%.2f".format(bid.bidAmountPhp)} • Est. Arrival: ${bid.estimatedEtaMin} mins"
+                        setTextColor(Color.parseColor("#E2E8F0"))
+                        textSize = 12f
+                    })
+                    bidBox.addView(Button(this).apply {
+                        text = "ACCEPT THIS BID (LOCK PHP ${"%.2f".format(bid.bidAmountPhp)})"
+                        setBackgroundColor(Color.parseColor("#10B981"))
+                        setTextColor(Color.parseColor("#070D19"))
+                        setTypeface(null, Typeface.BOLD)
+                        setOnClickListener {
+                            uiScope.launch {
+                                val res = AlistoKernelClient.acceptContractorBidRpc(b.id, bid.id)
+                                res.onSuccess {
+                                    Toast.makeText(this@CustomerMainActivity, "Bid Accepted! Contractor assigned.", Toast.LENGTH_LONG).show()
+                                    showAuthenticatedCustomerPortal()
+                                }.onFailure { err ->
+                                    AlertDialog.Builder(this@CustomerMainActivity).setTitle("Bid Acceptance Error").setMessage(err.message).setPositiveButton("OK", null).show()
+                                }
+                            }
+                        }
+                    })
+                    card.addView(bidBox)
+                }
+            }
+        }
+
+        // POST-COMPLETION 1-5 STAR RATING & CATEGORY TAGS (Engine 07)
+        if (b.status == "COMPLETED" && b.contractorId != null) {
+            card.addView(Button(this).apply {
+                text = "★ RATE CONTRACTOR (1–5 STARS & FEEDBACK TAGS)"
+                setBackgroundColor(Color.parseColor("#FBBF24"))
+                setTextColor(Color.parseColor("#070D19"))
+                setTypeface(null, Typeface.BOLD)
+                setOnClickListener { openCustomerStarRatingDialog(b) }
+            })
+        }
+
+        val btnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 8, 0, 0)
+            addView(Button(this@CustomerMainActivity).apply {
+                text = "Chat (Engine 11)"
+                setBackgroundColor(Color.parseColor("#334155"))
+                setTextColor(Color.WHITE)
+                setOnClickListener { openChatDialog(b) }
+            })
+            if (b.status !in listOf("COMPLETED", "CANCELLED", "EXPIRED")) {
                 addView(Button(this@CustomerMainActivity).apply {
                     text = "50/50 Mutual Cancel"
                     setBackgroundColor(Color.parseColor("#7F1D1D"))
@@ -421,12 +498,59 @@ class CustomerMainActivity : AppCompatActivity() {
                     }
                 })
             }
-            card.addView(btnRow)
-            container.addView(card)
+        }
+        card.addView(btnRow)
+        return card
+    }
+
+    private fun openCustomerStarRatingDialog(b: BookingRecord) {
+        val contractorId = b.contractorId ?: return
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(36, 24, 36, 16)
+            setBackgroundColor(Color.parseColor("#0F172A"))
         }
 
-        rootScroll.addView(container)
-        setContentView(rootScroll)
+        val starSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@CustomerMainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                listOf("5 Stars (★★★★★ - Excellent)", "4 Stars (★★★★☆ - Good)", "3 Stars (★★★☆☆ - Fair)", "2 Stars (★★☆☆☆ - Poor)", "1 Star (★☆☆☆☆ - Unsatisfactory)")
+            )
+            setBackgroundColor(Color.parseColor("#1E293B"))
+        }
+        layout.addView(labeledField("Select Star Rating (1 to 5 Stars)", starSpinner))
+
+        val tagOptions = listOf("Punctual Arrival", "Quality Workmanship", "Fair & Transparent Pricing", "Polite & Professional")
+        val tagBoxes = tagOptions.map { tag ->
+            CheckBox(this).apply {
+                text = tag
+                setTextColor(Color.WHITE)
+                isChecked = true
+            }
+        }
+        tagBoxes.forEach { layout.addView(it) }
+
+        val commentInput = styledInput("Write optional review comment...")
+        layout.addView(labeledField("Review Comments", commentInput))
+
+        AlertDialog.Builder(this)
+            .setTitle("Rate Contractor • ${b.bookingRef}")
+            .setView(layout)
+            .setPositiveButton("Submit CSAT Rating") { _, _ ->
+                val stars = 5 - starSpinner.selectedItemPosition
+                val selectedTags = tagBoxes.filter { it.isChecked }.map { it.text.toString() }
+                val comments = commentInput.text.toString().ifBlank { "Great service!" }
+                uiScope.launch {
+                    val res = AlistoKernelClient.submitCustomerStarRatingRpc(b.id, contractorId, stars, selectedTags, comments)
+                    res.onSuccess {
+                        Toast.makeText(this@CustomerMainActivity, "Thank you! $stars★ CSAT rating recorded.", Toast.LENGTH_LONG).show()
+                        showAuthenticatedCustomerPortal()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun openChatDialog(booking: BookingRecord) {
@@ -435,7 +559,7 @@ class CustomerMainActivity : AppCompatActivity() {
             setPadding(32, 24, 32, 16)
             setBackgroundColor(Color.parseColor("#0F172A"))
         }
-        val msgInput = styledInput("Negotiate bid / approve errand price adjustment...")
+        val msgInput = styledInput("Coordinate bid details or resolve pabili item price shifts...")
         dialogLayout.addView(msgInput)
 
         AlertDialog.Builder(this)

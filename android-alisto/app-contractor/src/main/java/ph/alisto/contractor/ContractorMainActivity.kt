@@ -177,6 +177,7 @@ class ContractorMainActivity : AppCompatActivity() {
 
     private fun routeContractorByAccountState() {
         val user = AlistoKernelClient.currentSessionUser ?: return showContractorEntryGate()
+        autoAcceptEnabled = AlistoKernelClient.currentContractorProfile?.autoAcceptEnabled ?: false
         when (user.accountStatus) {
             "PENDING_REVIEW", "RESUBMISSION_REQUIRED", "SUSPENDED" -> {
                 val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor("#070A12")) }
@@ -200,6 +201,7 @@ class ContractorMainActivity : AppCompatActivity() {
     private fun showActiveContractorPortal(user: AuthenticatedUser) {
         val prof = AlistoKernelClient.currentContractorProfile
         val activePass = AlistoKernelClient.currentSubscriptionPass
+        val currentShifts = prof?.activeShiftVerticals ?: listOf("skills_marketplace")
 
         val rootScroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor("#070D19")) }
         val container = LinearLayout(this).apply {
@@ -221,8 +223,68 @@ class ContractorMainActivity : AppCompatActivity() {
             }
         )
 
-        // DUAL-DISPATCH ENGINE TOGGLE (Auto-Accept Mode vs. Open Jobs Board Mode)
-        container.addView(sectionTitle("1. Dual-Dispatch Mode & Nationwide Local-Road Navigation"))
+        // SECTION 1: MULTI-VERTICAL DAILY SHIFT SELECTOR & DUAL-DISPATCH MODE
+        container.addView(sectionTitle("1. Daily Shift Verticals & Dual-Dispatch Mode"))
+        val shiftBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(20, 16, 20, 16)
+            setBackgroundColor(Color.parseColor("#1E293B"))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 0, 0, 12) }
+        }
+        shiftBox.addView(TextView(this).apply {
+            text = "Choose Active Vertical(s) for Today's Shift:"
+            setTextColor(Color.parseColor("#FBBF24"))
+            setTypeface(null, Typeface.BOLD)
+            textSize = 13f
+        })
+
+        val cbSkills = CheckBox(this).apply {
+            text = "On-Demand Skills & Errand Marketplace"
+            setTextColor(Color.WHITE)
+            isChecked = "skills_marketplace" in currentShifts
+        }
+        val cbDelivery = CheckBox(this).apply {
+            text = "Delivery & Logistics (${prof?.vehicleType ?: "motorcycle"} • ${prof?.dispatchRadiusM ?: 1500}m)"
+            setTextColor(Color.WHITE)
+            isChecked = "delivery_logistics" in currentShifts
+        }
+        val cbRide = CheckBox(this).apply {
+            text = "Ride-Hailing (Sub-400cc Transit)"
+            setTextColor(Color.WHITE)
+            isChecked = "ride_hailing" in currentShifts
+        }
+        shiftBox.addView(cbSkills)
+        shiftBox.addView(cbDelivery)
+        shiftBox.addView(cbRide)
+
+        shiftBox.addView(Button(this).apply {
+            text = "SAVE ACTIVE SHIFT VERTICAL SELECTION"
+            setBackgroundColor(Color.parseColor("#00F2FE"))
+            setTextColor(Color.parseColor("#070D19"))
+            setTypeface(null, Typeface.BOLD)
+            setOnClickListener {
+                val chosen = mutableListOf<String>()
+                if (cbSkills.isChecked) chosen.add("skills_marketplace")
+                if (cbDelivery.isChecked) chosen.add("delivery_logistics")
+                if (cbRide.isChecked) chosen.add("ride_hailing")
+                if (chosen.isEmpty()) chosen.add("skills_marketplace")
+
+                uiScope.launch {
+                    AlistoKernelClient.toggleContractorDispatchModeRpc(
+                        isOnline = true,
+                        autoAccept = autoAcceptEnabled,
+                        activeShiftVerticals = chosen
+                    )
+                    Toast.makeText(this@ContractorMainActivity, "Shift Verticals Updated: ${chosen.joinToString(", ")}", Toast.LENGTH_SHORT).show()
+                    routeContractorByAccountState()
+                }
+            }
+        })
+        container.addView(shiftBox)
+
         val dispatchModeBtn = Button(this).apply {
             text = if (autoAcceptEnabled) "DISPATCH MODE: AUTO-ACCEPT ON (Nearest ${prof?.dispatchRadiusM ?: 1500}m)" else "DISPATCH MODE: OPEN JOBS BOARD (Manual Bid / Claim)"
             setBackgroundColor(Color.parseColor(if (autoAcceptEnabled) "#10B981" else "#1E293B"))
@@ -231,14 +293,18 @@ class ContractorMainActivity : AppCompatActivity() {
             setOnClickListener {
                 autoAcceptEnabled = !autoAcceptEnabled
                 uiScope.launch {
-                    AlistoKernelClient.toggleContractorDispatchModeRpc(isOnline = true, autoAccept = autoAcceptEnabled)
-                    showActiveContractorPortal(user)
+                    AlistoKernelClient.toggleContractorDispatchModeRpc(
+                        isOnline = true,
+                        autoAccept = autoAcceptEnabled,
+                        activeShiftVerticals = currentShifts
+                    )
+                    routeContractorByAccountState()
                 }
             }
         }
         container.addView(dispatchModeBtn)
 
-        // HYBRID WALLET & SUBSCRIPTION PASSES
+        // SECTION 2: HYBRID WALLET & SUBSCRIPTION PASSES
         val commPct = "%.1f".format(AlistoKernelClient.effectiveCommissionRate * 100.0)
         container.addView(sectionTitle("2. Hybrid Wallet & Subscription Passes (Effective Rate: $commPct%)"))
         container.addView(TextView(this).apply {
@@ -259,7 +325,7 @@ class ContractorMainActivity : AppCompatActivity() {
                 setOnClickListener {
                     uiScope.launch {
                         AlistoKernelClient.topUpCreditsQrPhRpc(500.0)
-                        showActiveContractorPortal(AlistoKernelClient.currentSessionUser ?: user)
+                        routeContractorByAccountState()
                     }
                 }
             })
@@ -277,9 +343,12 @@ class ContractorMainActivity : AppCompatActivity() {
         }
         container.addView(walletBtnRow)
 
-        // OPEN BIDDING, TELEMETRY-GATED LIFECYCLE & TWO-WAY REPUTATION
-        container.addView(sectionTitle("3. Open Bidding Board, 10s Telemetry Gate & Customer Thumbs Rating"))
-        AlistoKernelClient.bookings.forEach { b ->
+        // SECTION 3: OPEN BIDDING, PRE-BID CUSTOMER REPUTATION & TELEMETRY-GATED LIFECYCLE
+        container.addView(sectionTitle("3. Active Shift Job Board (${currentShifts.joinToString(", ")})"))
+        val shiftBookings = AlistoKernelClient.bookings.filter { b ->
+            b.verticalKey in currentShifts || b.contractorId == user.id
+        }
+        shiftBookings.forEach { b ->
             container.addView(buildContractorJobCard(b, user))
         }
 
@@ -302,19 +371,28 @@ class ContractorMainActivity : AppCompatActivity() {
         val commPct = "%.1f".format(AlistoKernelClient.effectiveCommissionRate * 100.0)
 
         card.addView(TextView(this).apply {
-            text = "${b.bookingRef} • [${b.status}]"
+            text = "${b.bookingRef} • [${b.status}] (${b.verticalKey})"
             setTextColor(Color.parseColor("#00F2FE"))
             setTypeface(null, Typeface.BOLD)
             textSize = 14f
         })
+
+        // PRE-BID / PRE-DISPATCH CUSTOMER REPUTATION TRANSPARENCY (Section 5 of Spec)
         card.addView(TextView(this).apply {
-            text = "${b.serviceTitle}\nAddress: ${b.pickupAddress} (${b.barangayZone}, ${b.municipality})\nBase: PHP ${"%.2f".format(b.quotedFee)} | 100% Tip: PHP ${"%.2f".format(b.tipAmount)} | Est. Hold ($commPct%): PHP ${"%.2f".format(reqComm)}"
-            setTextColor(Color.WHITE)
+            text = "Customer: ${b.clientNickname} • Trust Score: ${"%.0f".format(b.clientTrustScore)}% (UP: ${b.clientThumbsUp} / DOWN: ${b.clientThumbsDown})"
+            setTextColor(Color.parseColor("#FBBF24"))
+            setTypeface(null, Typeface.BOLD)
             textSize = 12.5f
-            setPadding(0, 6, 0, 10)
+            setPadding(0, 4, 0, 4)
         })
 
-        // One-Tap Local-Road Navigation (avoid=ht)
+        card.addView(TextView(this).apply {
+            text = "${b.serviceTitle}\nAddress: ${b.pickupAddress} (${b.barangayZone}, ${b.municipality})\nBase Fee: PHP ${"%.2f".format(b.quotedFee)} | 100% Tip: PHP ${"%.2f".format(b.tipAmount)} | Est. Hold ($commPct%): PHP ${"%.2f".format(reqComm)}"
+            setTextColor(Color.WHITE)
+            textSize = 12.5f
+            setPadding(0, 2, 0, 10)
+        })
+
         card.addView(Button(this).apply {
             text = "ONE-TAP GOOGLE MAPS NAVIGATION (AVOID=HT • NO EXPRESSWAYS)"
             setBackgroundColor(Color.parseColor("#064E3B"))
@@ -326,17 +404,41 @@ class ContractorMainActivity : AppCompatActivity() {
 
         when (b.status) {
             "CREATED", "PENDING", "SEARCHING" -> {
-                val bidBtn = Button(this).apply {
-                    text = "SUBMIT OPEN BID (PRE-BID WALLET CHECK • TELEMETRY OFF)"
+                val myActiveBid = AlistoKernelClient.bookingBids.find {
+                    it.bookingId == b.id && it.contractorId == user.id && it.status == "ACTIVE"
+                }
+
+                card.addView(Button(this).apply {
+                    text = if (myActiveBid != null) {
+                        "UPDATE MY OPEN BID (CURRENT: PHP ${"%.2f".format(myActiveBid.bidAmountPhp)})"
+                    } else {
+                        "SUBMIT OPEN BID (PRE-BID WALLET CHECK • TELEMETRY OFF)"
+                    }
                     setBackgroundColor(Color.parseColor("#38BDF8"))
                     setTextColor(Color.parseColor("#070D19"))
                     setTypeface(null, Typeface.BOLD)
                     setOnClickListener { promptSubmitOpenBid(b) }
-                }
-                card.addView(bidBtn)
+                })
 
-                val claimBtn = Button(this).apply {
-                    text = "INSTANT CLAIM JOB (LOCK $commPct%: PHP ${"%.2f".format(reqComm)})"
+                if (myActiveBid != null) {
+                    card.addView(Button(this).apply {
+                        text = "WITHDRAW MY BID (PHP ${"%.2f".format(myActiveBid.bidAmountPhp)})"
+                        setBackgroundColor(Color.parseColor("#7F1D1D"))
+                        setTextColor(Color.WHITE)
+                        setOnClickListener {
+                            uiScope.launch {
+                                val res = AlistoKernelClient.withdrawContractorBidRpc(b.id)
+                                res.onSuccess {
+                                    Toast.makeText(this@ContractorMainActivity, "Bid withdrawn.", Toast.LENGTH_SHORT).show()
+                                    routeContractorByAccountState()
+                                }
+                            }
+                        }
+                    })
+                }
+
+                card.addView(Button(this).apply {
+                    text = "INSTANT CLAIM JOB AT QUOTED FEE (LOCK $commPct%: PHP ${"%.2f".format(reqComm)})"
                     setBackgroundColor(Color.parseColor("#FBBF24"))
                     setTextColor(Color.parseColor("#070D19"))
                     setTypeface(null, Typeface.BOLD)
@@ -349,8 +451,7 @@ class ContractorMainActivity : AppCompatActivity() {
                                 }
                         }
                     }
-                }
-                card.addView(claimBtn)
+                })
             }
             "ACCEPTED" -> {
                 card.addView(Button(this).apply {
@@ -395,7 +496,6 @@ class ContractorMainActivity : AppCompatActivity() {
                 })
             }
             "COMPLETED" -> {
-                // Section 5: Two-Way Reputation — Thumbs Up / Thumbs Down for Customer
                 val thumbRow = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     setPadding(0, 8, 0, 0)
@@ -445,6 +545,7 @@ class ContractorMainActivity : AppCompatActivity() {
                     val res = AlistoKernelClient.submitContractorBidRpc(b.id, amt, 20, "Open bid by verified contractor")
                     res.onSuccess {
                         Toast.makeText(this@ContractorMainActivity, "Bid of PHP $amt broadcast to customer!", Toast.LENGTH_LONG).show()
+                        routeContractorByAccountState()
                     }.onFailure { err ->
                         AlertDialog.Builder(this@ContractorMainActivity).setTitle("Pre-Bid Wallet Gate").setMessage(err.message).setPositiveButton("OK", null).show()
                     }
