@@ -896,10 +896,26 @@ object AlistoKernelClient {
         errandItemCostPhp: Double,
         deadheadReturnKm: Double,
         pickupLat: Double? = null,
-        pickupLng: Double? = null
+        pickupLng: Double? = null,
+        dropoffLat: Double? = null,
+        dropoffLng: Double? = null,
+        pickupNote: String = "",
+        dropoffNote: String = "",
+        bookingNotes: String = ""
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
+            fun cleanTag(v: String) = v.trim().replace("]", ")").replace("[", "(")
+            val noteParts = mutableListOf("Nationwide Local-Road (avoid=ht) • Client: ${activeUser.nickname}")
+            if (pickupNote.isNotBlank()) noteParts.add("[PICKUP_NOTE:${cleanTag(pickupNote)}]")
+            if (dropoffNote.isNotBlank()) noteParts.add("[DROPOFF_NOTE:${cleanTag(dropoffNote)}]")
+            if (bookingNotes.isNotBlank()) noteParts.add("[BOOKING_NOTE:${cleanTag(bookingNotes)}]")
+
+            val pLat = pickupLat ?: activeUser.homeLat
+            val pLng = pickupLng ?: activeUser.homeLng
+            val dLat = dropoffLat ?: pLat
+            val dLng = dropoffLng ?: pLng
+
             val json = postRpc("create_booking_v2_rpc", JSONObject().apply {
                 put("p_client_id", activeUser.id)
                 put("p_vertical_key", verticalKey)
@@ -908,15 +924,13 @@ object AlistoKernelClient {
                 put("p_barangay_zone", barangayZone)
                 put("p_skill_category", skillCategory)
                 put("p_service_title", serviceTitle)
-                put("p_service_notes", "Nationwide Local-Road (avoid=ht) • Client: ${activeUser.nickname}")
+                put("p_service_notes", noteParts.joinToString(" "))
                 put("p_pickup_address", pickupAddress)
                 put("p_dropoff_address", dropoffAddress)
-                val pLat = pickupLat ?: activeUser.homeLat
-                val pLng = pickupLng ?: activeUser.homeLng
                 put("p_pickup_lat", pLat)
                 put("p_pickup_lng", pLng)
-                put("p_dropoff_lat", activeUser.homeLat + 0.012)
-                put("p_dropoff_lng", activeUser.homeLng + 0.012)
+                put("p_dropoff_lat", dLat)
+                put("p_dropoff_lng", dLng)
                 put("p_waypoints", waypointsJson)
                 put("p_quoted_fee", quotedFee)
                 put("p_tip_amount", tipAmount)
