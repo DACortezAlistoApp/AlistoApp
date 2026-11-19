@@ -40,6 +40,8 @@ const consoleState = {
   globalCommissionRate: 0.12,
   maturityHours: 72,
   ledgerHealth: null,
+  paymentGatewayConfig: null,
+  paymentTransactions: [],
   verticals: [],
   heatmapClusters: [],
   bookingBids: [],
@@ -154,6 +156,7 @@ function applyRoleBasedAccessControl() {
 
   const tabOp = document.getElementById('tabBtnOperatorOps');
   const tabSuper = document.getElementById('tabBtnSuperAdmin');
+  const tabPay = document.getElementById('tabBtnPayMongo');
   const tabLgu = document.getElementById('tabBtnLguAdmin');
   const tabApk = document.getElementById('tabBtnApkPortal');
   const onbAdminOpt = document.getElementById('onbAdminOption');
@@ -161,6 +164,7 @@ function applyRoleBasedAccessControl() {
   if (role === 'super_admin') {
     tabOp.style.display = 'inline-block';
     tabSuper.style.display = 'inline-block';
+    if (tabPay) tabPay.style.display = 'inline-block';
     tabLgu.style.display = 'inline-block';
     tabApk.style.display = 'inline-block';
     if (onbAdminOpt) onbAdminOpt.disabled = false;
@@ -168,6 +172,7 @@ function applyRoleBasedAccessControl() {
   } else if (role === 'admin') {
     tabOp.style.display = 'inline-block';
     tabSuper.style.display = 'none';
+    if (tabPay) tabPay.style.display = 'none';
     tabLgu.style.display = 'inline-block';
     tabApk.style.display = 'inline-block';
     if (onbAdminOpt) {
@@ -180,6 +185,7 @@ function applyRoleBasedAccessControl() {
   } else {
     tabOp.style.display = 'none';
     tabSuper.style.display = 'none';
+    if (tabPay) tabPay.style.display = 'none';
     tabLgu.style.display = 'none';
     tabApk.style.display = 'inline-block';
     switchConsoleView('apk_portal');
@@ -206,7 +212,7 @@ function switchConsoleView(viewKey) {
   if (!currentAuthUser) return;
   const role = currentAuthUser.role;
 
-  if (viewKey === 'superadmin' && role !== 'super_admin') {
+  if ((viewKey === 'superadmin' || viewKey === 'paymongo_gateway') && role !== 'super_admin') {
     alert('RBAC Restriction: Only SuperAdmin can access the Universal Ledger Health, Subscription Pricing & Vertical Rollout Control Center.');
     return;
   }
@@ -296,6 +302,8 @@ async function syncFromSupabase() {
     consoleState.heatmapClusters = data.heatmap_clusters || [];
     consoleState.bookingBids = data.booking_bids || [];
     consoleState.ledgerHealth = data.ledger_health || null;
+    consoleState.paymentGatewayConfig = data.payment_gateway_config || null;
+    consoleState.paymentTransactions = data.payment_transactions || [];
     consoleState.subscriptionTiers = data.subscription_tiers || [];
     consoleState.contractorSubscriptions = data.contractor_subscriptions || [];
     consoleState.contractorProfiles = data.contractor_profiles || [];
@@ -2193,6 +2201,7 @@ function renderAll() {
   }
   if (currentAuthUser.role === 'super_admin') {
     renderSuperAdmin();
+    renderPayMongoGatewayTab();
   }
   renderScopedAccountSummary();
 }
@@ -2354,5 +2363,234 @@ async function revokeUserSessions(userId, label) {
     return;
   }
   alert(`Kill-Switch Executed: Revoked ${data.revoked_count || 0} active session(s) for ${label}.`);
+  await syncFromSupabase();
+}
+
+
+// ============================================================================
+// PHASE 2B: SUPERADMIN PAYMENT GATEWAY & PAYMONGO VAULT CONTROLS
+// ============================================================================
+
+let paymongoFormHydrated = false;
+let paymongoFormDirty = false;
+let selectedPaymentModeDraft = 'MANUAL';
+
+function markPayMongoFormDirty() {
+  paymongoFormDirty = true;
+}
+
+function selectPaymentModeOption(mode) {
+  selectedPaymentModeDraft = mode;
+  paymongoFormDirty = true;
+  const rManual = document.getElementById('pgModeManual');
+  const rTest = document.getElementById('pgModeTest');
+  const rLive = document.getElementById('pgModeLive');
+  if (rManual) rManual.checked = (mode === 'MANUAL');
+  if (rTest) rTest.checked = (mode === 'PAYMONGO_TEST');
+  if (rLive) rLive.checked = (mode === 'PAYMONGO_LIVE');
+
+  const styles = {
+    pgCardManual: mode === 'MANUAL' ? '#fbbf24' : '#334155',
+    pgCardTest: mode === 'PAYMONGO_TEST' ? '#38bdf8' : '#334155',
+    pgCardLive: mode === 'PAYMONGO_LIVE' ? '#34d399' : '#334155'
+  };
+  Object.entries(styles).forEach(([id, border]) => {
+    const el = document.getElementById(id);
+    if (el) el.style.borderColor = border;
+  });
+}
+
+function toggleSecretInput(inputId, btnEl) {
+  const inp = document.getElementById(inputId);
+  if (!inp) return;
+  const revealing = inp.type === 'password';
+  inp.type = revealing ? 'text' : 'password';
+  if (btnEl) btnEl.textContent = revealing ? 'Hide' : 'Show';
+}
+
+function copyGatewayField(inputId, btnEl) {
+  const inp = document.getElementById(inputId);
+  if (!inp || !inp.value) return;
+  navigator.clipboard.writeText(inp.value).then(() => {
+    if (!btnEl) return;
+    const orig = btnEl.textContent;
+    btnEl.textContent = 'Copied';
+    setTimeout(() => { btnEl.textContent = orig; }, 1400);
+  }).catch(() => {
+    inp.select();
+    document.execCommand('copy');
+  });
+}
+
+function hydratePayMongoFormFields(cfg) {
+  if (!cfg) return;
+  const setVal = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.value = val || '';
+  };
+
+  setVal('pgTestApiUrl', cfg.test_api_base_url || 'https://api.paymongo.com/v1');
+  setVal('pgTestPublicKey', cfg.test_public_key || '');
+  setVal('pgTestSecretKey', cfg.test_secret_key || '');
+  setVal('pgTestWebhookSecret', cfg.test_webhook_secret || '');
+  setVal('pgTestWebhookUrl', cfg.test_webhook_url || '');
+
+  setVal('pgLiveApiUrl', cfg.live_api_base_url || 'https://api.paymongo.com/v1');
+  setVal('pgLivePublicKey', cfg.live_public_key || '');
+  setVal('pgLiveSecretKey', cfg.live_secret_key || '');
+  setVal('pgLiveWebhookSecret', cfg.live_webhook_secret || '');
+  setVal('pgLiveWebhookUrl', cfg.live_webhook_url || '');
+
+  setVal('pgCheckoutEdgeUrl', cfg.checkout_edge_url || '');
+  setVal('pgCheckoutReturnUrl', cfg.checkout_return_url || '');
+  setVal('pgManualInstructions', cfg.manual_payment_instructions || '');
+
+  selectPaymentModeOption(cfg.payment_mode || 'MANUAL');
+  paymongoFormHydrated = true;
+  paymongoFormDirty = false;
+}
+
+async function reloadPayMongoVaultForm() {
+  paymongoFormHydrated = false;
+  paymongoFormDirty = false;
+  await syncFromSupabase();
+}
+
+function renderPayMongoGatewayTab() {
+  const cfg = consoleState.paymentGatewayConfig;
+  const badge = document.getElementById('pgActiveModeBadge');
+  const updatedEl = document.getElementById('pgLastUpdatedLabel');
+
+  if (cfg) {
+    const mode = cfg.payment_mode || 'MANUAL';
+    if (badge) {
+      badge.textContent = `ACTIVE MODE: ${mode}`;
+      if (mode === 'PAYMONGO_LIVE') {
+        badge.style.color = '#34d399';
+        badge.style.borderColor = '#10b981';
+      } else if (mode === 'PAYMONGO_TEST') {
+        badge.style.color = '#38bdf8';
+        badge.style.borderColor = '#0ea5e9';
+      } else {
+        badge.style.color = '#fbbf24';
+        badge.style.borderColor = '#f59e0b';
+      }
+    }
+    if (updatedEl) {
+      updatedEl.textContent = `Last saved: ${formatTs(cfg.updated_at)} | Test Secret: ${cfg.test_secret_key ? 'Configured' : 'Empty'} | Live Secret: ${cfg.live_secret_key ? 'Configured' : 'Empty'}`;
+    }
+    if (!paymongoFormHydrated && !paymongoFormDirty) {
+      hydratePayMongoFormFields(cfg);
+    }
+  }
+
+  renderPayMongoTransactionsTable();
+}
+
+function renderPayMongoTransactionsTable() {
+  const tbody = document.getElementById('pgTransactionsTableBody');
+  if (!tbody) return;
+  const rows = consoleState.paymentTransactions || [];
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#64748b;">No payment transactions recorded yet.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map(tx => {
+    const userLabel = getUserLabel(tx.user_id);
+    const statusColor = tx.status === 'PAID'
+      ? '#34d399'
+      : (tx.status === 'REJECTED' || tx.status === 'FAILED' ? '#f87171' : '#fbbf24');
+    const canReview = tx.status === 'MANUAL_SUBMITTED' || (tx.payment_mode === 'MANUAL' && tx.status === 'PENDING');
+    const actionsHtml = canReview
+      ? `<button class="btn-outline" style="border-color:#10b981;color:#34d399;margin-right:6px;" onclick="reviewManualPaymentTx('${tx.id}', 'APPROVE', '${tx.tx_ref}')">Approve</button>` +
+        `<button class="btn-outline" style="border-color:#ef4444;color:#fca5a5;" onclick="reviewManualPaymentTx('${tx.id}', 'REJECT', '${tx.tx_ref}')">Reject</button>`
+      : `<span style="color:#64748b;">—</span>`;
+
+    return `
+      <tr style="border-bottom:1px solid #1e293b;">
+        <td style="padding:9px 8px;font-weight:700;color:#e2e8f0;">${tx.tx_ref}</td>
+        <td style="padding:9px 8px;color:#cbd5e1;">${userLabel}</td>
+        <td style="padding:9px 8px;color:#38bdf8;">${tx.payment_mode}</td>
+        <td style="padding:9px 8px;color:#e2e8f0;">${tx.purpose}${tx.tier_code ? ' (' + tx.tier_code + ')' : ''}</td>
+        <td style="padding:9px 8px;font-weight:700;color:#f8fafc;">PHP ${Number(tx.amount_php || 0).toFixed(2)}</td>
+        <td style="padding:9px 8px;color:#cbd5e1;">${tx.provider_reference || '—'}</td>
+        <td style="padding:9px 8px;font-weight:700;color:${statusColor};">${tx.status}</td>
+        <td style="padding:9px 8px;color:#94a3b8;">${formatTs(tx.created_at)}</td>
+        <td style="padding:9px 8px;white-space:nowrap;">${actionsHtml}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function savePayMongoGatewayConfig() {
+  const mode = selectedPaymentModeDraft || 'MANUAL';
+  const testSecret = (document.getElementById('pgTestSecretKey')?.value || '').trim();
+  const liveSecret = (document.getElementById('pgLiveSecretKey')?.value || '').trim();
+
+  if (mode === 'PAYMONGO_TEST' && !testSecret) {
+    alert('Cannot switch to PAYMONGO_TEST without a Test Secret Key (sk_test_...).');
+    return;
+  }
+  if (mode === 'PAYMONGO_LIVE') {
+    if (!liveSecret) {
+      alert('Cannot switch to PAYMONGO_LIVE without a Live Secret Key (sk_live_...).');
+      return;
+    }
+    if (!confirm('Switch Alisto Network PH to PAYMONGO_LIVE production payments? Real PHP charges will be processed immediately.')) {
+      return;
+    }
+  }
+
+  const payload = {
+    p_session_token: getActiveSessionToken(),
+    p_payment_mode: mode,
+    p_test_api_base_url: (document.getElementById('pgTestApiUrl')?.value || '').trim(),
+    p_test_public_key: (document.getElementById('pgTestPublicKey')?.value || '').trim(),
+    p_test_secret_key: testSecret,
+    p_test_webhook_secret: (document.getElementById('pgTestWebhookSecret')?.value || '').trim(),
+    p_test_webhook_url: (document.getElementById('pgTestWebhookUrl')?.value || '').trim(),
+    p_live_api_base_url: (document.getElementById('pgLiveApiUrl')?.value || '').trim(),
+    p_live_public_key: (document.getElementById('pgLivePublicKey')?.value || '').trim(),
+    p_live_secret_key: liveSecret,
+    p_live_webhook_secret: (document.getElementById('pgLiveWebhookSecret')?.value || '').trim(),
+    p_live_webhook_url: (document.getElementById('pgLiveWebhookUrl')?.value || '').trim(),
+    p_checkout_edge_url: (document.getElementById('pgCheckoutEdgeUrl')?.value || '').trim(),
+    p_checkout_return_url: (document.getElementById('pgCheckoutReturnUrl')?.value || '').trim(),
+    p_manual_instructions: (document.getElementById('pgManualInstructions')?.value || '').trim()
+  };
+
+  const { data, error } = await supabaseClient.rpc('secure_update_payment_gateway_config_rpc', payload);
+  if (error || (data && data.status !== 'SUCCESS')) {
+    alert('Failed to save Payment Gateway Vault: ' + (error ? error.message : (data?.message || 'Unknown error')));
+    return;
+  }
+
+  paymongoFormHydrated = false;
+  paymongoFormDirty = false;
+  await syncFromSupabase();
+  alert(`Payment Gateway Vault saved cleanly. Active mode is now: ${mode}`);
+}
+
+async function reviewManualPaymentTx(txId, decision, txRef) {
+  const note = decision === 'REJECT'
+    ? (prompt(`Enter rejection reason for ${txRef}:`, 'Receipt reference could not be verified') || '')
+    : 'Verified by Admin Console';
+  if (decision === 'REJECT' && !note) return;
+  if (decision === 'APPROVE' && !confirm(`Approve manual payment ${txRef} and immediately credit wallet / activate pass?`)) return;
+
+  const { data, error } = await supabaseClient.rpc('secure_review_manual_payment_rpc', {
+    p_session_token: getActiveSessionToken(),
+    p_tx_id: txId,
+    p_decision: decision,
+    p_review_notes: note
+  });
+
+  if (error || (data && data.status !== 'SUCCESS')) {
+    alert('Settlement Error: ' + (error ? error.message : (data?.message || 'Unknown error')));
+    return;
+  }
+
+  alert(`Transaction ${txRef} marked as ${data.decision || decision}.`);
   await syncFromSupabase();
 }

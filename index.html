@@ -180,6 +180,9 @@
         <button id="tabBtnSuperAdmin" class="role-tab" data-view="superadmin" onclick="switchConsoleView('superadmin')">
           SUPERADMIN CONTROL CENTER (Ledger Health, Subscriptions & Verticals)
         </button>
+        <button id="tabBtnPayMongo" class="role-tab" data-view="paymongo_gateway" onclick="switchConsoleView('paymongo_gateway')" style="display:none;">
+          PAYMENT GATEWAY &amp; PAYMONGO (Mode Switch &amp; API Vault)
+        </button>
         <button id="tabBtnLguAdmin" class="role-tab" data-view="lgu_admin" onclick="switchConsoleView('lgu_admin')">
           LGU / PESO & OPERATOR AUDIT TRAIL
         </button>
@@ -690,6 +693,192 @@
       <!-- ==================================================================== -->
       <!-- 3. LGU / PESO ADMIN & OPERATOR AUDIT LOGS VIEW                       -->
       <!-- ==================================================================== -->
+      
+      <section id="view-paymongo_gateway" class="role-view">
+        <div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:20px;margin-bottom:18px;">
+          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;">
+            <div>
+              <h2 style="margin:0;color:#00f2fe;font-size:1.15rem;">Payment Gateway Control &amp; PayMongo Vault</h2>
+              <p style="margin:4px 0 0;color:#94a3b8;font-size:0.85rem;">
+                SuperAdmin-exclusive switch between Manual Clinic/GCash verification, PayMongo Test (Sandbox), and PayMongo Live (Production). Secret keys stay encrypted under strict RLS.
+              </p>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <span id="pgActiveModeBadge" style="padding:6px 12px;border-radius:999px;font-size:0.78rem;font-weight:700;background:#1e293b;color:#fbbf24;border:1px solid #334155;">MODE: LOADING...</span>
+              <button type="button" class="btn-outline" onclick="reloadPayMongoVaultForm()">Reload Vault</button>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:16px;">
+            <label id="pgCardManual" onclick="selectPaymentModeOption('MANUAL')" style="cursor:pointer;display:block;padding:14px;border-radius:10px;background:#111827;border:2px solid #334155;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <input type="radio" name="pgPaymentMode" id="pgModeManual" value="MANUAL" onchange="selectPaymentModeOption('MANUAL')" />
+                <strong style="color:#fbbf24;">MANUAL MODE</strong>
+              </div>
+              <div style="color:#94a3b8;font-size:0.8rem;margin-top:6px;">
+                Contractors submit GCash, QR Ph, or Clinic receipt references. Admins approve in 1 click below.
+              </div>
+            </label>
+
+            <label id="pgCardTest" onclick="selectPaymentModeOption('PAYMONGO_TEST')" style="cursor:pointer;display:block;padding:14px;border-radius:10px;background:#111827;border:2px solid #334155;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <input type="radio" name="pgPaymentMode" id="pgModeTest" value="PAYMONGO_TEST" onchange="selectPaymentModeOption('PAYMONGO_TEST')" />
+                <strong style="color:#38bdf8;">PAYMONGO TEST (SANDBOX)</strong>
+              </div>
+              <div style="color:#94a3b8;font-size:0.8rem;margin-top:6px;">
+                Routes contractor QR Ph wallet top-ups and passes through your PayMongo Sandbox keys and test webhooks.
+              </div>
+            </label>
+
+            <label id="pgCardLive" onclick="selectPaymentModeOption('PAYMONGO_LIVE')" style="cursor:pointer;display:block;padding:14px;border-radius:10px;background:#111827;border:2px solid #334155;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <input type="radio" name="pgPaymentMode" id="pgModeLive" value="PAYMONGO_LIVE" onchange="selectPaymentModeOption('PAYMONGO_LIVE')" />
+                <strong style="color:#34d399;">PAYMONGO LIVE (PRODUCTION)</strong>
+              </div>
+              <div style="color:#94a3b8;font-size:0.8rem;margin-top:6px;">
+                Charges real PHP via dynamic PayMongo QR Ph and auto-credits wallets upon signed webhook settlement.
+              </div>
+            </label>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px;">
+            <!-- PAYMONGO TEST KEYS -->
+            <div style="background:#0b1220;border:1px solid #1e3a5f;border-radius:10px;padding:16px;">
+              <h3 style="margin:0 0 12px;color:#38bdf8;font-size:0.95rem;">PayMongo Test (Sandbox) Credentials</h3>
+              <div style="display:flex;flex-direction:column;gap:10px;">
+                <div>
+                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Test API Base URL</label>
+                  <input id="pgTestApiUrl" type="text" oninput="markPayMongoFormDirty()" placeholder="https://api.paymongo.com/v1" style="width:100%;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
+                </div>
+                <div>
+                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Test Public Key (pk_test_...)</label>
+                  <input id="pgTestPublicKey" type="text" oninput="markPayMongoFormDirty()" placeholder="pk_test_..." autocomplete="off" style="width:100%;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
+                </div>
+                <div>
+                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Test Secret Key (sk_test_...)</label>
+                  <div style="display:flex;gap:6px;">
+                    <input id="pgTestSecretKey" type="password" oninput="markPayMongoFormDirty()" placeholder="sk_test_..." autocomplete="new-password" style="flex:1;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;" />
+                    <button type="button" class="btn-outline" onclick="toggleSecretInput('pgTestSecretKey', this)">Show</button>
+                  </div>
+                </div>
+                <div>
+                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Test Webhook Signing Secret (whsec_...)</label>
+                  <div style="display:flex;gap:6px;">
+                    <input id="pgTestWebhookSecret" type="password" oninput="markPayMongoFormDirty()" placeholder="whsec_..." autocomplete="new-password" style="flex:1;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;" />
+                    <button type="button" class="btn-outline" onclick="toggleSecretInput('pgTestWebhookSecret', this)">Show</button>
+                  </div>
+                </div>
+                <div>
+                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Test Webhook Listener URL (Paste into PayMongo Dashboard)</label>
+                  <div style="display:flex;gap:6px;">
+                    <input id="pgTestWebhookUrl" type="text" oninput="markPayMongoFormDirty()" style="flex:1;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;" />
+                    <button type="button" class="btn-outline" onclick="copyGatewayField('pgTestWebhookUrl', this)">Copy</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- PAYMONGO LIVE KEYS -->
+            <div style="background:#0b1220;border:1px solid #14532d;border-radius:10px;padding:16px;">
+              <h3 style="margin:0 0 12px;color:#34d399;font-size:0.95rem;">PayMongo Live (Production) Credentials</h3>
+              <div style="display:flex;flex-direction:column;gap:10px;">
+                <div>
+                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Live API Base URL</label>
+                  <input id="pgLiveApiUrl" type="text" oninput="markPayMongoFormDirty()" placeholder="https://api.paymongo.com/v1" style="width:100%;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
+                </div>
+                <div>
+                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Live Public Key (pk_live_...)</label>
+                  <input id="pgLivePublicKey" type="text" oninput="markPayMongoFormDirty()" placeholder="pk_live_..." autocomplete="off" style="width:100%;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
+                </div>
+                <div>
+                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Live Secret Key (sk_live_...)</label>
+                  <div style="display:flex;gap:6px;">
+                    <input id="pgLiveSecretKey" type="password" oninput="markPayMongoFormDirty()" placeholder="sk_live_..." autocomplete="new-password" style="flex:1;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;" />
+                    <button type="button" class="btn-outline" onclick="toggleSecretInput('pgLiveSecretKey', this)">Show</button>
+                  </div>
+                </div>
+                <div>
+                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Live Webhook Signing Secret (whsec_...)</label>
+                  <div style="display:flex;gap:6px;">
+                    <input id="pgLiveWebhookSecret" type="password" oninput="markPayMongoFormDirty()" placeholder="whsec_..." autocomplete="new-password" style="flex:1;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;" />
+                    <button type="button" class="btn-outline" onclick="toggleSecretInput('pgLiveWebhookSecret', this)">Show</button>
+                  </div>
+                </div>
+                <div>
+                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Live Webhook Listener URL (Paste into PayMongo Dashboard)</label>
+                  <div style="display:flex;gap:6px;">
+                    <input id="pgLiveWebhookUrl" type="text" oninput="markPayMongoFormDirty()" style="flex:1;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;" />
+                    <button type="button" class="btn-outline" onclick="copyGatewayField('pgLiveWebhookUrl', this)">Copy</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SHARED ENDPOINTS & MANUAL INSTRUCTIONS -->
+          <div style="background:#0b1220;border:1px solid #334155;border-radius:10px;padding:16px;margin-bottom:16px;">
+            <h3 style="margin:0 0 10px;color:#e2e8f0;font-size:0.92rem;">Shared Checkout Endpoint &amp; Manual Mode Instructions</h3>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-bottom:10px;">
+              <div>
+                <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Checkout Edge Function URL</label>
+                <div style="display:flex;gap:6px;">
+                  <input id="pgCheckoutEdgeUrl" type="text" oninput="markPayMongoFormDirty()" style="flex:1;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;" />
+                  <button type="button" class="btn-outline" onclick="copyGatewayField('pgCheckoutEdgeUrl', this)">Copy</button>
+                </div>
+              </div>
+              <div>
+                <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Checkout Redirect / Return URL</label>
+                <input id="pgCheckoutReturnUrl" type="text" oninput="markPayMongoFormDirty()" style="width:100%;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
+              </div>
+            </div>
+            <div>
+              <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Manual Mode Payment Instructions (Shown in Contractor App when Mode = MANUAL)</label>
+              <textarea id="pgManualInstructions" rows="2" oninput="markPayMongoFormDirty()" style="width:100%;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;"></textarea>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;">
+            <span id="pgLastUpdatedLabel" style="font-size:0.8rem;color:#94a3b8;">Last updated: —</span>
+            <button type="button" onclick="savePayMongoGatewayConfig()" style="padding:11px 22px;border:none;border-radius:8px;background:#00f2fe;color:#070d19;font-weight:800;cursor:pointer;">
+              SAVE PAYMENT MODE &amp; PAYMONGO VAULT
+            </button>
+          </div>
+        </div>
+
+        <!-- LIVE PAYMENT TRANSACTIONS & MANUAL SETTLEMENT QUEUE -->
+        <div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:20px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+            <div>
+              <h3 style="margin:0;color:#fbbf24;font-size:1.02rem;">Payment Transactions &amp; Manual Approval Queue</h3>
+              <p style="margin:4px 0 0;color:#94a3b8;font-size:0.82rem;">
+                Approve or reject Manual Mode receipt submissions in one click, or audit live PayMongo Test/Live QR Ph settlements.
+              </p>
+            </div>
+            <button type="button" class="btn-outline" onclick="syncFromSupabase()">Refresh Queue</button>
+          </div>
+          <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:0.83rem;">
+              <thead>
+                <tr style="text-align:left;border-bottom:1px solid #334155;color:#94a3b8;">
+                  <th style="padding:10px 8px;">TX Ref</th>
+                  <th style="padding:10px 8px;">Account</th>
+                  <th style="padding:10px 8px;">Mode</th>
+                  <th style="padding:10px 8px;">Purpose / Tier</th>
+                  <th style="padding:10px 8px;">Amount (PHP)</th>
+                  <th style="padding:10px 8px;">Receipt / Provider Ref</th>
+                  <th style="padding:10px 8px;">Status</th>
+                  <th style="padding:10px 8px;">Timestamp</th>
+                  <th style="padding:10px 8px;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="pgTransactionsTableBody">
+                <tr><td colspan="9" style="padding:16px;text-align:center;color:#64748b;">No payment transactions recorded yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <section id="view-lgu_admin" class="role-view">
         <div class="grid-2">
           <div class="card">
