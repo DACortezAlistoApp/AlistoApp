@@ -2,21 +2,25 @@ package ph.alisto.contractor
 
 import android.content.Intent
 import android.graphics.Color
-import android.net.Uri
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
+import android.view.Gravity
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.*
 import ph.alisto.kernel.*
+import ph.alisto.kernel.AlistoUiKit.dp
 
 class ContractorMainActivity : AppCompatActivity() {
 
     private val uiScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var entryMode = "LOGIN"
+    private var activeTab = "DRIVE"
+    private var jobsFilter = "OPEN"
     private var autoAcceptEnabled = false
     private var realtimePollJob: Job? = null
     private var contractorMapView: AlistoInteractiveMapView? = null
@@ -27,6 +31,7 @@ class ContractorMainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AlistoUiKit.applyDarkSystemBars(this)
         if (AlistoKernelClient.currentSessionUser != null) {
             routeContractorByAccountState()
         } else if (AlistoBiometricVault.hasSavedSession(this, "contractor")) {
@@ -52,98 +57,105 @@ class ContractorMainActivity : AppCompatActivity() {
     }
 
     private fun showContractorEntryGate() {
-        val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor("#070A12")) }
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
+            isFillViewport = true
+        }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(42, 54, 42, 64)
+            setPadding(dp(22), dp(36), dp(22), dp(36))
         }
 
         container.addView(
-            AlistoBrandHeaderView(
+            AlistoUiKit.authBrandHero(
                 this,
-                "ALISTO CONTRACTOR",
-                "Nationwide Roaming • Dual-Dispatch • Biometric Keystore"
-            ).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, 0, 0, 20) }
-            }
+                "ALISTO PRO",
+                "Contractor & Rider Command • Skills, Errands & Local Rides",
+                AlistoUiKit.AMBER
+            )
         )
 
         if (AlistoBiometricVault.hasSavedSession(this, "contractor")) {
-            container.addView(Button(this).apply {
-                text = "BIOMETRIC QUICK UNLOCK (${AlistoBiometricVault.getSavedUserLabel(this@ContractorMainActivity, "contractor")})"
-                setBackgroundColor(Color.parseColor("#10B981"))
-                setTextColor(Color.parseColor("#070A12"))
-                setTypeface(null, Typeface.BOLD)
-                setOnClickListener { triggerFrictionlessBiometricEntry() }
-            })
+            val savedLabel = AlistoBiometricVault.getSavedUserLabel(this, "contractor")
+            container.addView(
+                AlistoUiKit.pillButton(
+                    this, "Quick Unlock • $savedLabel", AlistoUiKit.EMERALD, AlistoUiKit.BG_DEEP
+                ) { triggerFrictionlessBiometricEntry() }.apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(16) }
+                }
+            )
         }
+
+        val formCard = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 18)
 
         val tabRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 16, 0, 20)
-            addView(Button(this@ContractorMainActivity).apply {
-                text = "LOG IN"
-                setBackgroundColor(Color.parseColor(if (entryMode == "LOGIN") "#FBBF24" else "#1E293B"))
-                setTextColor(Color.parseColor(if (entryMode == "LOGIN") "#070A12" else "#FFFFFF"))
-                setOnClickListener { entryMode = "LOGIN"; showContractorEntryGate() }
-            })
-            addView(Button(this@ContractorMainActivity).apply {
-                text = "CONTRACTOR SIGN UP"
-                setBackgroundColor(Color.parseColor(if (entryMode == "SIGNUP") "#FBBF24" else "#1E293B"))
-                setTextColor(Color.parseColor(if (entryMode == "SIGNUP") "#070A12" else "#FFFFFF"))
-                setOnClickListener { entryMode = "SIGNUP"; showContractorEntryGate() }
-            })
+            background = AlistoUiKit.roundedBg(this@ContractorMainActivity, AlistoUiKit.BG_INPUT, 22, AlistoUiKit.BORDER)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(18) }
+
+            addView(AlistoUiKit.chipButton(this@ContractorMainActivity, "Log In", entryMode == "LOGIN", AlistoUiKit.AMBER) {
+                entryMode = "LOGIN"; showContractorEntryGate()
+            }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
+
+            addView(AlistoUiKit.chipButton(this@ContractorMainActivity, "Apply as Pro", entryMode == "SIGNUP", AlistoUiKit.AMBER) {
+                entryMode = "SIGNUP"; showContractorEntryGate()
+            }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
         }
-        container.addView(tabRow)
+        formCard.addView(tabRow)
 
         if (entryMode == "LOGIN") {
-            val idInput = styledInput("Username (e.g., marco), Phone, or Email")
-            container.addView(labeledField("Contractor Login Identifier", idInput))
-            val pwInput = styledInput("Permanent Non-Expiring Password").apply {
-                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            }
-            container.addView(labeledField("Password", pwInput))
+            val idInput = AlistoUiKit.inputField(this, "Username (e.g., marco), phone, or email")
+            formCard.addView(AlistoUiKit.labeledField(this, "Contractor Login", idInput))
 
-            container.addView(Button(this).apply {
-                text = "SIGN IN & BIND ANDROID BIOMETRIC KEYSTORE"
-                setBackgroundColor(Color.parseColor("#FBBF24"))
-                setTextColor(Color.parseColor("#070A12"))
-                setTypeface(null, Typeface.BOLD)
-                setOnClickListener {
+            val pwInput = AlistoUiKit.inputField(
+                this, "Password", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            )
+            formCard.addView(AlistoUiKit.labeledField(this, "Password", pwInput, bottomMarginDp = 18))
+
+            formCard.addView(
+                AlistoUiKit.pillButton(this, "Sign In", AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP) {
                     uiScope.launch {
-                        val res = AlistoKernelClient.authenticateUserRpc(idInput.text.toString(), pwInput.text.toString(), "contractor")
+                        val res = AlistoKernelClient.authenticateUserRpc(
+                            idInput.text.toString(), pwInput.text.toString(), "contractor"
+                        )
                         res.onSuccess { user ->
-                            AlistoBiometricVault.saveEncryptedSession(this@ContractorMainActivity, "contractor", AlistoKernelClient.currentSessionToken ?: "", "${user.fullName} (@${user.username})")
+                            AlistoBiometricVault.saveEncryptedSession(
+                                this@ContractorMainActivity, "contractor",
+                                AlistoKernelClient.currentSessionToken ?: "",
+                                "${user.fullName} (@${user.username})"
+                            )
+                            activeTab = "DRIVE"
                             routeContractorByAccountState()
                         }.onFailure { err ->
-                            AlertDialog.Builder(this@ContractorMainActivity).setTitle("Login Failed").setMessage(err.message).setPositiveButton("OK", null).show()
+                            AlertDialog.Builder(this@ContractorMainActivity)
+                                .setTitle("Login Failed").setMessage(err.message).setPositiveButton("OK", null).show()
                         }
                     }
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
                 }
-            })
+            )
         } else {
-            val fnInput = styledInput("First Name")
-            container.addView(labeledField("First Name", fnInput))
-            val lnInput = styledInput("Last Name")
-            container.addView(labeledField("Last Name", lnInput))
-            val phoneInput = styledInput("+63917XXXXXXX")
-            container.addView(labeledField("Mobile Number (Admin Call Verification)", phoneInput))
-            val emailInput = styledInput("contractor@alisto.ph")
-            container.addView(labeledField("Email Address", emailInput))
-            val pwInput = styledInput("Permanent Password").apply {
-                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            }
-            container.addView(labeledField("Permanent Password", pwInput))
+            val fnInput = AlistoUiKit.inputField(this, "First Name")
+            formCard.addView(AlistoUiKit.labeledField(this, "First Name", fnInput))
+            val lnInput = AlistoUiKit.inputField(this, "Last Name")
+            formCard.addView(AlistoUiKit.labeledField(this, "Last Name", lnInput))
+            val phoneInput = AlistoUiKit.inputField(this, "+63917XXXXXXX", InputType.TYPE_CLASS_PHONE)
+            formCard.addView(AlistoUiKit.labeledField(this, "Mobile Number (KYC Call)", phoneInput))
+            val emailInput = AlistoUiKit.inputField(this, "contractor@alisto.ph", InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS)
+            formCard.addView(AlistoUiKit.labeledField(this, "Email Address", emailInput))
+            val pwInput = AlistoUiKit.inputField(
+                this, "Create permanent password", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            )
+            formCard.addView(AlistoUiKit.labeledField(this, "Password", pwInput, bottomMarginDp = 18))
 
-            container.addView(Button(this).apply {
-                text = "SUBMIT CONTRACTOR REGISTRATION (PENDING_REVIEW GATE)"
-                setBackgroundColor(Color.parseColor("#FBBF24"))
-                setTextColor(Color.parseColor("#070A12"))
-                setTypeface(null, Typeface.BOLD)
-                setOnClickListener {
+            formCard.addView(
+                AlistoUiKit.pillButton(this, "Submit Application", AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP) {
                     uiScope.launch {
                         val res = AlistoKernelClient.registerContractorPortalRpc(
                             firstName = fnInput.text.toString().trim(),
@@ -168,13 +180,24 @@ class ContractorMainActivity : AppCompatActivity() {
                             vehiclePhotoUrl = compressedVehicleUrl
                         )
                         res.onSuccess { user ->
-                            AlistoBiometricVault.saveEncryptedSession(this@ContractorMainActivity, "contractor", AlistoKernelClient.currentSessionToken ?: "", "${user.fullName} (@${user.username})")
+                            AlistoBiometricVault.saveEncryptedSession(
+                                this@ContractorMainActivity, "contractor",
+                                AlistoKernelClient.currentSessionToken ?: "",
+                                "${user.fullName} (@${user.username})"
+                            )
                             routeContractorByAccountState()
+                        }.onFailure { err ->
+                            AlertDialog.Builder(this@ContractorMainActivity)
+                                .setTitle("Application Error").setMessage(err.message).setPositiveButton("OK", null).show()
                         }
                     }
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
                 }
-            })
+            )
         }
+
+        container.addView(formCard)
         scroll.addView(container)
         setContentView(scroll)
     }
@@ -184,17 +207,50 @@ class ContractorMainActivity : AppCompatActivity() {
         autoAcceptEnabled = AlistoKernelClient.currentContractorProfile?.autoAcceptEnabled ?: false
         when (user.accountStatus) {
             "PENDING_REVIEW", "RESUBMISSION_REQUIRED", "SUSPENDED" -> {
-                val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor("#070A12")) }
-                val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(42, 64, 42, 64) }
-                box.addView(TextView(this).apply {
-                    text = "ACCOUNT GATE: ${user.accountStatus}\n${user.fullName} (@${user.username})\nAwaiting Admin KYC Activation."
-                    setTextColor(Color.parseColor("#FBBF24"))
-                    textSize = 15f
+                val scroll = ScrollView(this).apply {
+                    setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
+                    isFillViewport = true
+                }
+                val box = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(22), dp(48), dp(22), dp(36))
+                }
+                val card = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.AMBER, padDp = 22)
+                card.addView(AlistoUiKit.badgePill(this, user.accountStatus, "#451A03", AlistoUiKit.AMBER))
+                card.addView(TextView(this).apply {
+                    text = "Verification In Progress"
+                    textSize = 20f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                    setPadding(0, dp(12), 0, dp(6))
                 })
-                box.addView(Button(this).apply {
-                    text = "Refresh Boot State"
-                    setOnClickListener { uiScope.launch { AlistoKernelClient.fetchAppBootStateRpc(AlistoKernelClient.currentSessionToken ?: "", "contractor"); routeContractorByAccountState() } }
+                card.addView(TextView(this).apply {
+                    text = "${user.fullName} (@${user.username})\n\nOur operations team is verifying your KYC documents. Tap Refresh once activated."
+                    textSize = 13.5f
+                    setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED))
+                    setPadding(0, 0, 0, dp(18))
                 })
+                card.addView(
+                    AlistoUiKit.pillButton(this, "Refresh Verification Status", AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP) {
+                        uiScope.launch {
+                            AlistoKernelClient.fetchAppBootStateRpc(AlistoKernelClient.currentSessionToken ?: "", "contractor")
+                            routeContractorByAccountState()
+                        }
+                    }.apply {
+                        layoutParams = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                        ).apply { bottomMargin = dp(10) }
+                    }
+                )
+                card.addView(
+                    AlistoUiKit.pillButton(this, "Sign Out", AlistoUiKit.BG_INPUT, AlistoUiKit.TEXT_MUTED, AlistoUiKit.BORDER_LIGHT, heightDp = 42) {
+                        AlistoKernelClient.signOut()
+                        showContractorEntryGate()
+                    }.apply {
+                        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    }
+                )
+                box.addView(card)
                 scroll.addView(box)
                 setContentView(scroll)
             }
@@ -208,51 +264,69 @@ class ContractorMainActivity : AppCompatActivity() {
         startContractorRealtimeLoop()
         AlistoComplianceGate.checkOtaUpdate(this, "contractor", BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
         AlistoComplianceGate.enforceRa10173ConsentIfRequired(this, uiScope, "contractor")
-        val prof = AlistoKernelClient.currentContractorProfile
-        val activePass = AlistoKernelClient.currentSubscriptionPass
-        val currentShifts = prof?.activeShiftVerticals ?: listOf("skills_marketplace")
 
-        val rootScroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor("#070D19")) }
-        val container = LinearLayout(this).apply {
+        val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(36, 42, 36, 64)
+            setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
+        }
+        val contentHost = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
         }
 
-        val heartbeatBadge = if (AlistoSpatialEngine.isHeartbeatStreaming) "10s GPS ACTIVE (60 km/h MAX)" else "GPS OFF (0 WRITES)"
-        val ltfrbBadge = if (prof?.ltfrbCompliant == true && !prof.authorizedPlateNo.isNullOrBlank()) {
-            "LTFRB Plate: ${prof.authorizedPlateNo}"
-        } else {
-            "LTFRB Plate: Unbound"
+        when (activeTab) {
+            "JOBS" -> contentHost.addView(buildContractorJobsTab(user))
+            "WALLET" -> contentHost.addView(buildContractorWalletTab(user))
+            "PROFILE" -> contentHost.addView(buildContractorProfileTab(user))
+            else -> contentHost.addView(buildContractorDriveMapTab(user))
         }
-        container.addView(
-            AlistoBrandHeaderView(
-                this,
-                "${user.fullName} (@${user.username})",
-                "$heartbeatBadge • $ltfrbBadge • avoid=ht"
-            ).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, 0, 0, 14) }
-            }
-        )
 
-        // LIVE DEMAND HEAT MAP & OPEN JOB BOARD RADAR
-        container.addView(sectionTitle("Live Demand Heat Map & Open Job Radar"))
-        container.addView(TextView(this).apply {
-            text = "Demand Clusters: ${AlistoKernelClient.heatmapClusters.size} | Open/Active Pins: ${AlistoKernelClient.bookings.count { it.status !in listOf("COMPLETED", "CANCELLED", "EXPIRED") }} | Live GPS: ${AlistoKernelClient.liveTelemetryPins.size}"
-            setTextColor(Color.parseColor("#00F2FE"))
-            textSize = 12f
-            setPadding(0, 0, 0, 6)
-        })
-        val cMap = AlistoInteractiveMapView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                (250 * resources.displayMetrics.density).toInt()
-            ).apply { setMargins(0, 0, 0, 14) }
+        val prof = AlistoKernelClient.currentContractorProfile
+        val currentShifts = prof?.activeShiftVerticals ?: listOf("skills_marketplace")
+        val openCount = AlistoKernelClient.bookings.count {
+            (it.verticalKey in currentShifts || it.contractorId == user.id) &&
+                it.status !in listOf("COMPLETED", "CANCELLED", "EXPIRED")
         }
+
+        val bottomNav = AlistoUiKit.bottomNavBar(
+            this,
+            tabs = listOf(
+                Triple("DRIVE", "◎", "Drive"),
+                Triple("JOBS", "☰", if (openCount > 0) "Jobs ($openCount)" else "Jobs"),
+                Triple("WALLET", "₱", "Wallet"),
+                Triple("PROFILE", "●", "Profile")
+            ),
+            activeKey = activeTab,
+            accentHex = AlistoUiKit.AMBER
+        ) { nextTab ->
+            activeTab = nextTab
+            showActiveContractorPortal(user)
+        }
+
+        shell.addView(contentHost)
+        shell.addView(bottomNav)
+        setContentView(shell)
+    }
+
+    private fun buildContractorDriveMapTab(user: AuthenticatedUser): View {
+        val prof = AlistoKernelClient.currentContractorProfile
+        val currentShifts = prof?.activeShiftVerticals ?: listOf("skills_marketplace")
+        val isOnline = prof?.isOnline == true
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
+        }
+
+        // Upper full-bleed demand heat map and live job radar
+        val mapStage = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 0.56f)
+        }
+        val cMap = AlistoInteractiveMapView(this)
         contractorMapView = cMap
-        container.addView(cMap)
+        mapStage.addView(
+            cMap,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        )
         cMap.loadInteractiveMap(user.homeLat, user.homeLng, enableTapToPin = false)
         cMap.updateMapLayers(
             bookings = AlistoKernelClient.bookings,
@@ -260,181 +334,439 @@ class ContractorMainActivity : AppCompatActivity() {
             heatClusters = AlistoKernelClient.heatmapClusters
         )
 
-                // SECTION 1: MULTI-VERTICAL DAILY SHIFT SELECTOR & DUAL-DISPATCH MODE
-        container.addView(sectionTitle("1. Daily Shift Verticals & Dual-Dispatch Mode"))
-        val shiftBox = LinearLayout(this).apply {
+        // Floating top HUD: Wallet balance, GPS stream badge, Sync
+        val topHud = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(14), dp(14), 0)
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP
+            )
+        }
+        val walletHudPill = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = AlistoUiKit.roundedBg(this@ContractorMainActivity, "#E60D1424", 24, AlistoUiKit.BORDER_LIGHT)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            elevation = dp(4).toFloat()
+            setOnClickListener { activeTab = "WALLET"; showActiveContractorPortal(user) }
+            addView(TextView(this@ContractorMainActivity).apply {
+                text = "PHP ${"%.2f".format(AlistoKernelClient.contractorAvailableCredits)}"
+                textSize = 14f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor(AlistoUiKit.EMERALD))
+            })
+        }
+        topHud.addView(walletHudPill, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
+
+        val gpsLive = AlistoSpatialEngine.isHeartbeatStreaming
+        val gpsPill = TextView(this).apply {
+            text = if (gpsLive) "● GPS LIVE" else "○ STANDBY"
+            textSize = 11.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(if (gpsLive) AlistoUiKit.EMERALD else AlistoUiKit.TEXT_MUTED))
+            background = AlistoUiKit.roundedBg(
+                this@ContractorMainActivity, "#E60D1424", 20,
+                if (gpsLive) AlistoUiKit.EMERALD else AlistoUiKit.BORDER_LIGHT
+            )
+            setPadding(dp(11), dp(8), dp(11), dp(8))
+            elevation = dp(4).toFloat()
+        }
+        topHud.addView(gpsPill)
+        topHud.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+        topHud.addView(AlistoUiKit.chipButton(this, "Sync", true, "#E60D1424", AlistoUiKit.AMBER) {
+            uiScope.launch {
+                AlistoKernelClient.fetchAppBootStateRpc(AlistoKernelClient.currentSessionToken ?: "", "contractor")
+                routeContractorByAccountState()
+            }
+        }.apply { elevation = dp(4).toFloat() })
+        mapStage.addView(topHud)
+
+        // Bottom-left radar telemetry pill (tap to recenter)
+        val radarStats = TextView(this).apply {
+            val openPins = AlistoKernelClient.bookings.count { it.status !in listOf("COMPLETED", "CANCELLED", "EXPIRED") }
+            text = "Zones: ${AlistoKernelClient.heatmapClusters.size} • Open Pins: $openPins"
+            textSize = 11.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(AlistoUiKit.CYAN))
+            background = AlistoUiKit.roundedBg(this@ContractorMainActivity, "#E60D1424", 18, AlistoUiKit.BORDER_LIGHT)
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            elevation = dp(4).toFloat()
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.START
+            ).apply {
+                leftMargin = dp(14)
+                bottomMargin = dp(12)
+            }
+            setOnClickListener { contractorMapView?.recenter(user.homeLat, user.homeLng, 14) }
+        }
+        mapStage.addView(radarStats)
+        root.addView(mapStage)
+
+        // Lyft-driver rounded bottom sheet
+        val sheetWrap = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(20, 16, 20, 16)
-            setBackgroundColor(Color.parseColor("#1E293B"))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 0, 0, 12) }
+            background = AlistoUiKit.topSheetBg(this@ContractorMainActivity, AlistoUiKit.BG_SURFACE, 24, AlistoUiKit.BORDER)
+            elevation = dp(10).toFloat()
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 0.44f)
         }
-        shiftBox.addView(TextView(this).apply {
-            text = "Choose Active Vertical(s) for Today's Shift:"
-            setTextColor(Color.parseColor("#FBBF24"))
-            setTypeface(null, Typeface.BOLD)
-            textSize = 13f
+        sheetWrap.addView(AlistoUiKit.dragHandle(this))
+
+        val sheetScroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+        }
+        val sheetBody = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(2), dp(18), dp(18))
+        }
+
+        // Primary Go Online + Auto-Accept control bar
+        sheetBody.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) }
+            addView(
+                AlistoUiKit.pillButton(
+                    this@ContractorMainActivity,
+                    if (isOnline) "● ONLINE — PAUSE" else "GO ONLINE",
+                    if (isOnline) AlistoUiKit.EMERALD else AlistoUiKit.AMBER,
+                    AlistoUiKit.BG_DEEP, heightDp = 48, textSizeSp = 14f
+                ) {
+                    val nextOnline = !isOnline
+                    uiScope.launch {
+                        AlistoKernelClient.toggleContractorDispatchModeRpc(
+                            isOnline = nextOnline, autoAccept = autoAcceptEnabled, activeShiftVerticals = currentShifts
+                        )
+                        routeContractorByAccountState()
+                    }
+                }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.3f).apply { rightMargin = dp(8) } }
+            )
+            addView(
+                AlistoUiKit.pillButton(
+                    this@ContractorMainActivity,
+                    if (autoAcceptEnabled) "Auto: ON" else "Open Board",
+                    if (autoAcceptEnabled) "#0C4A6E" else AlistoUiKit.BG_CARD,
+                    if (autoAcceptEnabled) AlistoUiKit.CYAN else AlistoUiKit.TEXT_MUTED,
+                    if (autoAcceptEnabled) AlistoUiKit.CYAN else AlistoUiKit.BORDER_LIGHT,
+                    heightDp = 48, textSizeSp = 12.5f
+                ) {
+                    autoAcceptEnabled = !autoAcceptEnabled
+                    uiScope.launch {
+                        AlistoKernelClient.toggleContractorDispatchModeRpc(
+                            isOnline = true, autoAccept = autoAcceptEnabled, activeShiftVerticals = currentShifts
+                        )
+                        routeContractorByAccountState()
+                    }
+                }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.9f) }
+            )
         })
 
-        val cbSkills = CheckBox(this).apply {
-            text = "On-Demand Skills & Errand Marketplace"
-            setTextColor(Color.WHITE)
-            isChecked = "skills_marketplace" in currentShifts
+        // Active assigned job spotlight card
+        val myActiveJob = AlistoKernelClient.bookings.firstOrNull {
+            it.contractorId == user.id && it.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS")
         }
-        val cbDelivery = CheckBox(this).apply {
-            text = "Delivery & Logistics (${prof?.vehicleType ?: "motorcycle"} • ${prof?.dispatchRadiusM ?: 1500}m)"
-            setTextColor(Color.WHITE)
-            isChecked = "delivery_logistics" in currentShifts
+        if (myActiveJob != null) {
+            val spotCard = AlistoUiKit.surfaceCard(this, "#0C2942", AlistoUiKit.CYAN, padDp = 14)
+            spotCard.addView(TextView(this).apply {
+                text = "ACTIVE JOB • ${myActiveJob.bookingRef} (${myActiveJob.status})"
+                textSize = 11.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.CYAN))
+            })
+            spotCard.addView(TextView(this).apply {
+                text = "${myActiveJob.serviceTitle} • ${myActiveJob.pickupAddress}"
+                textSize = 13.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                setPadding(0, dp(4), 0, dp(10))
+            })
+            spotCard.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(AlistoUiKit.pillButton(this@ContractorMainActivity, "Navigate", "#064E3B", "#34D399", "#10B981", heightDp = 40, textSizeSp = 12.5f) {
+                    AlistoSpatialEngine.launchLocalRoadNavigation(this@ContractorMainActivity, myActiveJob.pickupLat, myActiveJob.pickupLng)
+                }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) } })
+                addView(AlistoUiKit.pillButton(this@ContractorMainActivity, "Open Job →", AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP, heightDp = 40, textSizeSp = 12.5f) {
+                    jobsFilter = "MINE"; activeTab = "JOBS"; showActiveContractorPortal(user)
+                }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
+            })
+            sheetBody.addView(spotCard)
         }
-        val cbRide = CheckBox(this).apply {
-            text = "Ride-Hailing (Sub-400cc Transit)"
-            setTextColor(Color.WHITE)
-            isChecked = "ride_hailing" in currentShifts
-        }
-        shiftBox.addView(cbSkills)
-        shiftBox.addView(cbDelivery)
-        shiftBox.addView(cbRide)
 
-        shiftBox.addView(Button(this).apply {
-            text = "SAVE ACTIVE SHIFT VERTICAL SELECTION"
-            setBackgroundColor(Color.parseColor("#00F2FE"))
-            setTextColor(Color.parseColor("#070D19"))
-            setTypeface(null, Typeface.BOLD)
-            setOnClickListener {
-                val chosen = mutableListOf<String>()
-                if (cbSkills.isChecked) chosen.add("skills_marketplace")
-                if (cbDelivery.isChecked) chosen.add("delivery_logistics")
-                if (cbRide.isChecked) chosen.add("ride_hailing")
-                if (chosen.isEmpty()) chosen.add("skills_marketplace")
-
-                uiScope.launch {
-                    AlistoKernelClient.toggleContractorDispatchModeRpc(
-                        isOnline = true,
-                        autoAccept = autoAcceptEnabled,
-                        activeShiftVerticals = chosen
-                    )
-                    Toast.makeText(this@ContractorMainActivity, "Shift Verticals Updated: ${chosen.joinToString(", ")}", Toast.LENGTH_SHORT).show()
-                    routeContractorByAccountState()
-                }
-            }
+        // Shift verticals quick-toggle chips
+        sheetBody.addView(TextView(this).apply {
+            text = "Active Shift Verticals (Tap to toggle)"
+            textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED))
+            setPadding(dp(2), 0, 0, dp(8))
         })
-        container.addView(shiftBox)
 
-        val dispatchModeBtn = Button(this).apply {
-            text = if (autoAcceptEnabled) "DISPATCH MODE: AUTO-ACCEPT ON (Nearest ${prof?.dispatchRadiusM ?: 1500}m)" else "DISPATCH MODE: OPEN JOBS BOARD (Manual Bid / Claim)"
-            setBackgroundColor(Color.parseColor(if (autoAcceptEnabled) "#10B981" else "#1E293B"))
-            setTextColor(Color.parseColor(if (autoAcceptEnabled) "#070D19" else "#00F2FE"))
-            setTypeface(null, Typeface.BOLD)
-            setOnClickListener {
-                autoAcceptEnabled = !autoAcceptEnabled
+        val shiftRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+        }
+        val verticalsSpec = listOf(
+            "skills_marketplace" to "Skills",
+            "delivery_logistics" to "Delivery",
+            "ride_hailing" to "Ride-Hailing"
+        )
+        verticalsSpec.forEachIndexed { idx, (vKey, label) ->
+            shiftRow.addView(
+                AlistoUiKit.chipButton(this, label, vKey in currentShifts, AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP) {
+                    val updated = currentShifts.toMutableList()
+                    if (vKey in updated) updated.remove(vKey) else updated.add(vKey)
+                    if (updated.isEmpty()) updated.add("skills_marketplace")
+                    uiScope.launch {
+                        AlistoKernelClient.toggleContractorDispatchModeRpc(
+                            isOnline = isOnline, autoAccept = autoAcceptEnabled, activeShiftVerticals = updated
+                        )
+                        Toast.makeText(this@ContractorMainActivity, "Shift updated: ${updated.joinToString(", ")}", Toast.LENGTH_SHORT).show()
+                        routeContractorByAccountState()
+                    }
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        if (idx < verticalsSpec.lastIndex) rightMargin = dp(8)
+                    }
+                }
+            )
+        }
+        sheetBody.addView(shiftRow)
+
+        sheetBody.addView(TextView(this).apply {
+            text = "Auto-Accept Rings: 1km → 1.5km → 2km → 2.5km  •  Vehicle: ${prof?.vehicleType ?: "motorcycle"} (${prof?.authorizedPlateNo ?: "Unbound"})"
+            textSize = 11.5f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_DIM))
+        })
+
+        sheetScroll.addView(sheetBody)
+        sheetWrap.addView(sheetScroll)
+        root.addView(sheetWrap)
+        return root
+    }
+
+    private fun buildContractorJobsTab(user: AuthenticatedUser): View {
+        val prof = AlistoKernelClient.currentContractorProfile
+        val currentShifts = prof?.activeShiftVerticals ?: listOf("skills_marketplace")
+
+        val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP)) }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(22), dp(18), dp(24))
+        }
+
+        container.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(14) }
+            addView(TextView(this@ContractorMainActivity).apply {
+                text = "Job Board"; textSize = 22f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            addView(AlistoUiKit.chipButton(this@ContractorMainActivity, "Refresh", true, AlistoUiKit.BG_CARD, AlistoUiKit.AMBER) {
                 uiScope.launch {
-                    AlistoKernelClient.toggleContractorDispatchModeRpc(
-                        isOnline = true,
-                        autoAccept = autoAcceptEnabled,
-                        activeShiftVerticals = currentShifts
-                    )
+                    AlistoKernelClient.fetchAppBootStateRpc(AlistoKernelClient.currentSessionToken ?: "", "contractor")
                     routeContractorByAccountState()
                 }
-            }
-        }
-        container.addView(dispatchModeBtn)
+            })
+        })
 
-        // SECTION 2: HYBRID WALLET, PAYMENT GATEWAY MODE & SUBSCRIPTION PASSES
+        container.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(14) }
+            addView(AlistoUiKit.chipButton(this@ContractorMainActivity, "Open Requests", jobsFilter == "OPEN", AlistoUiKit.AMBER) {
+                jobsFilter = "OPEN"; showActiveContractorPortal(user)
+            }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) } })
+            addView(AlistoUiKit.chipButton(this@ContractorMainActivity, "My Jobs", jobsFilter == "MINE", AlistoUiKit.AMBER) {
+                jobsFilter = "MINE"; showActiveContractorPortal(user)
+            })
+        })
+
+        val shiftBookings = AlistoKernelClient.bookings.filter { b ->
+            if (jobsFilter == "MINE") b.contractorId == user.id
+            else b.verticalKey in currentShifts && b.status in listOf("CREATED", "PENDING", "SEARCHING")
+        }
+
+        if (shiftBookings.isEmpty()) {
+            val emptyCard = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 22)
+            emptyCard.addView(TextView(this).apply {
+                text = if (jobsFilter == "MINE") "No assigned jobs yet." else "No open requests in your active verticals."
+                textSize = 15f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+            })
+            emptyCard.addView(TextView(this).apply {
+                text = "Keep your shift verticals active on the Drive tab to receive live bids and auto-accept matches."
+                textSize = 13f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(6), 0, 0)
+            })
+            container.addView(emptyCard)
+        } else {
+            shiftBookings.forEach { b -> container.addView(buildContractorJobCard(b, user)) }
+        }
+
+        scroll.addView(container)
+        return scroll
+    }
+
+    private fun buildContractorWalletTab(user: AuthenticatedUser): View {
+        val activePass = AlistoKernelClient.currentSubscriptionPass
         val payInfo = AlistoKernelClient.currentPaymentModeInfo
         val commPct = "%.1f".format(AlistoKernelClient.effectiveCommissionRate * 100.0)
-        container.addView(sectionTitle("2. Hybrid Wallet & Passes (Rate: $commPct% • Gateway: ${payInfo.paymentMode})"))
-        val recentTxLine = AlistoKernelClient.paymentTransactions.firstOrNull()?.let { tx ->
-            "\nLatest Payment: ${tx.txRef} • PHP ${"%.2f".format(tx.amountPhp)} [${tx.status}]"
-        } ?: ""
+
+        val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP)) }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(22), dp(18), dp(24))
+        }
+
         container.addView(TextView(this).apply {
-            setPadding(24, 18, 24, 18)
-            setBackgroundColor(Color.parseColor("#1E293B"))
-            setTextColor(Color.WHITE)
-            text = "Prepaid Wallet: PHP ${"%.2f".format(AlistoKernelClient.contractorAvailableCredits)} | Held: PHP ${"%.2f".format(AlistoKernelClient.contractorHeldCredits)}\n" +
-                   "Active Pass: ${activePass?.tierCode ?: "STANDARD PAY-AS-YOU-GO (<=12%)"} | Mode: ${payInfo.paymentMode}$recentTxLine"
+            text = "Wallet & Passes"; textSize = 22f; setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); setPadding(0, 0, 0, dp(14))
         })
 
-        val walletBtnRow = LinearLayout(this).apply {
+        val heroCard = AlistoUiKit.surfaceCard(this, "#0E1D34", AlistoUiKit.CYAN, padDp = 20)
+        heroCard.addView(TextView(this).apply {
+            text = "AVAILABLE PREPAID CREDITS"; textSize = 11f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.CYAN))
+        })
+        heroCard.addView(TextView(this).apply {
+            text = "PHP ${"%.2f".format(AlistoKernelClient.contractorAvailableCredits)}"
+            textSize = 30f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+            setPadding(0, dp(4), 0, dp(10))
+        })
+
+        heroCard.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 8, 0, 12)
-            addView(Button(this@ContractorMainActivity).apply {
-                text = if (payInfo.paymentMode == "MANUAL") "+PHP 500 Top-Up (Manual Ref)" else "+PHP 500 Top-Up (PayMongo QR Ph)"
-                setBackgroundColor(Color.parseColor("#10B981"))
-                setTextColor(Color.parseColor("#070D19"))
-                setOnClickListener {
-                    initiateContractorPaymentFlow("WALLET_TOPUP", 500.0, null, "Prepaid Wallet Top-Up (+PHP 25 Bonus)")
-                }
+            addView(AlistoUiKit.badgePill(this@ContractorMainActivity, "Held: PHP ${"%.2f".format(AlistoKernelClient.contractorHeldCredits)}", AlistoUiKit.BG_DEEP, AlistoUiKit.AMBER).apply {
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) }
             })
-            addView(Button(this@ContractorMainActivity).apply {
-                text = if (payInfo.paymentMode == "MANUAL") "Grind Pass (Manual Ref)" else "Grind Pass (PayMongo)"
-                setBackgroundColor(Color.parseColor("#FBBF24"))
-                setTextColor(Color.parseColor("#070D19"))
-                setOnClickListener {
-                    initiateContractorPaymentFlow("SUBSCRIPTION_PASS", 8000.0, "GRIND_PASS", "Hard-Working Grind Pass (0% 24/7)")
-                }
+            addView(AlistoUiKit.badgePill(this@ContractorMainActivity, "Comm: $commPct%", AlistoUiKit.BG_DEEP, AlistoUiKit.EMERALD).apply {
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) }
             })
-        }
-        container.addView(walletBtnRow)
+            addView(AlistoUiKit.badgePill(this@ContractorMainActivity, payInfo.paymentMode, AlistoUiKit.BG_DEEP, AlistoUiKit.CYAN))
+        })
+        heroCard.addView(TextView(this).apply {
+            text = "Active Plan: ${activePass?.tierCode ?: "Standard Pay-As-You-Go (≤12%)"}"
+            textSize = 12.5f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(10), 0, 0)
+        })
+        container.addView(heroCard)
 
-        // SECTION 3: OPEN BIDDING, PRE-BID CUSTOMER REPUTATION & TELEMETRY-GATED LIFECYCLE
-        container.addView(sectionTitle("3. Active Shift Job Board (${currentShifts.joinToString(", ")})"))
-        val shiftBookings = AlistoKernelClient.bookings.filter { b ->
-            b.verticalKey in currentShifts || b.contractorId == user.id
-        }
-        shiftBookings.forEach { b ->
-            container.addView(buildContractorJobCard(b, user))
+        container.addView(AlistoUiKit.pillButton(
+            this,
+            if (payInfo.paymentMode == "MANUAL") "+PHP 500 Top-Up (Manual Ref)" else "+PHP 500 Top-Up (PayMongo QR Ph)",
+            AlistoUiKit.EMERALD, AlistoUiKit.BG_DEEP, heightDp = 48
+        ) { initiateContractorPaymentFlow("WALLET_TOPUP", 500.0, null, "Prepaid Wallet Top-Up (+PHP 25 Bonus)") }.apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+        })
+
+        container.addView(AlistoUiKit.pillButton(
+            this,
+            if (payInfo.paymentMode == "MANUAL") "Grind Pass • 0% Comm (Manual Ref)" else "Grind Pass • 0% Comm (PayMongo)",
+            AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP, heightDp = 48
+        ) { initiateContractorPaymentFlow("SUBSCRIPTION_PASS", 8000.0, "GRIND_PASS", "Hard-Working Grind Pass (0% 24/7)") }.apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(18) }
+        })
+
+        container.addView(TextView(this).apply {
+            text = "Recent Payment Activity"; textSize = 15f; setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); setPadding(0, 0, 0, dp(8))
+        })
+
+        if (AlistoKernelClient.paymentTransactions.isEmpty()) {
+            val c = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 14)
+            c.addView(TextView(this).apply { text = "No payment transactions recorded yet."; textSize = 13f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)) })
+            container.addView(c)
+        } else {
+            AlistoKernelClient.paymentTransactions.take(10).forEach { tx ->
+                val c = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 14)
+                val (sBg, sFg) = AlistoUiKit.statusColors(tx.status)
+                c.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                    addView(TextView(this@ContractorMainActivity).apply {
+                        text = "${tx.txRef}\n${tx.purpose} • PHP ${"%.2f".format(tx.amountPhp)}"
+                        textSize = 13f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    })
+                    addView(AlistoUiKit.badgePill(this@ContractorMainActivity, tx.status, sBg, sFg))
+                })
+                container.addView(c)
+            }
         }
 
-        rootScroll.addView(container)
-        setContentView(rootScroll)
+        scroll.addView(container)
+        return scroll
+    }
+
+    private fun buildContractorProfileTab(user: AuthenticatedUser): View {
+        val prof = AlistoKernelClient.currentContractorProfile
+        val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP)) }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(22), dp(18), dp(24))
+        }
+
+        container.addView(TextView(this).apply {
+            text = "Contractor Profile"; textSize = 22f; setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); setPadding(0, 0, 0, dp(14))
+        })
+
+        val card = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 18)
+        card.addView(TextView(this).apply { text = user.fullName; textSize = 18f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)) })
+        card.addView(TextView(this).apply {
+            text = "@${user.username} • ${user.phone}\n${user.barangayZone}, ${user.municipality}"
+            textSize = 13f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(4), 0, dp(12))
+        })
+
+        val plateText = if (prof?.ltfrbCompliant == true && !prof.authorizedPlateNo.isNullOrBlank()) {
+            "LTFRB Plate: ${prof.authorizedPlateNo}"
+        } else {
+            "Vehicle: ${prof?.vehicleType ?: "Skills Only"}"
+        }
+        card.addView(AlistoUiKit.badgePill(this, "$plateText • ${prof?.dispatchRadiusM ?: 1000}m start", "#0C4A6E", AlistoUiKit.CYAN))
+        container.addView(card)
+
+        container.addView(AlistoUiKit.pillButton(this, "Sync Profile & Jobs", AlistoUiKit.BG_CARD, AlistoUiKit.AMBER, AlistoUiKit.BORDER_LIGHT, heightDp = 46) {
+            uiScope.launch {
+                AlistoKernelClient.fetchAppBootStateRpc(AlistoKernelClient.currentSessionToken ?: "", "contractor")
+                Toast.makeText(this@ContractorMainActivity, "Synced", Toast.LENGTH_SHORT).show()
+                routeContractorByAccountState()
+            }
+        }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) } })
+
+        container.addView(AlistoUiKit.pillButton(this, "Sign Out & Lock", "#450A0A", "#FCA5A5", "#7F1D1D", heightDp = 46) {
+            realtimePollJob?.cancel(); AlistoSpatialEngine.stopHeartbeat(); AlistoKernelClient.signOut(); showContractorEntryGate()
+        }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT) })
+
+        scroll.addView(container)
+        return scroll
     }
 
     private fun buildContractorJobCard(b: BookingRecord, user: AuthenticatedUser): View {
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 20, 24, 20)
-            setBackgroundColor(Color.parseColor("#1E293B"))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 0, 0, 16) }
-        }
-
+        val card = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 16)
         val reqComm = b.quotedFee * AlistoKernelClient.effectiveCommissionRate
         val commPct = "%.1f".format(AlistoKernelClient.effectiveCommissionRate * 100.0)
+        val (sBg, sFg) = AlistoUiKit.statusColors(b.status)
 
-        card.addView(TextView(this).apply {
-            text = "${b.bookingRef} • [${b.status}] (${b.verticalKey})"
-            setTextColor(Color.parseColor("#00F2FE"))
-            setTypeface(null, Typeface.BOLD)
-            textSize = 14f
+        card.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+            addView(TextView(this@ContractorMainActivity).apply {
+                text = "${b.bookingRef} • ${b.verticalKey.replace("_", " ")}"
+                textSize = 11.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            addView(AlistoUiKit.badgePill(this@ContractorMainActivity, b.status, sBg, sFg))
         })
 
-        // PRE-BID / PRE-DISPATCH CUSTOMER REPUTATION TRANSPARENCY (Section 5 of Spec)
+        card.addView(TextView(this).apply { text = b.serviceTitle; textSize = 16f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)) })
         card.addView(TextView(this).apply {
-            text = "Customer: ${b.clientNickname} • Trust Score: ${"%.0f".format(b.clientTrustScore)}% (UP: ${b.clientThumbsUp} / DOWN: ${b.clientThumbsDown})"
-            setTextColor(Color.parseColor("#FBBF24"))
-            setTypeface(null, Typeface.BOLD)
-            textSize = 12.5f
-            setPadding(0, 4, 0, 4)
+            text = "${b.pickupAddress} (${b.barangayZone}, ${b.municipality})"
+            textSize = 12.5f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(3), 0, dp(8))
+        })
+        card.addView(TextView(this).apply {
+            text = "Customer: ${b.clientNickname} • Trust ${"%.0f".format(b.clientTrustScore)}% (UP ${b.clientThumbsUp} / DOWN ${b.clientThumbsDown})"
+            textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.AMBER)); setPadding(0, 0, 0, dp(8))
         })
 
-        card.addView(TextView(this).apply {
-            text = "${b.serviceTitle}\nAddress: ${b.pickupAddress} (${b.barangayZone}, ${b.municipality})\nBase Fee: PHP ${"%.2f".format(b.quotedFee)} | 100% Tip: PHP ${"%.2f".format(b.tipAmount)} | Est. Hold ($commPct%): PHP ${"%.2f".format(reqComm)}"
-            setTextColor(Color.WHITE)
-            textSize = 12.5f
-            setPadding(0, 2, 0, 10)
-        })
-
-        card.addView(Button(this).apply {
-            text = "ONE-TAP GOOGLE MAPS NAVIGATION (AVOID=HT • NO EXPRESSWAYS)"
-            setBackgroundColor(Color.parseColor("#064E3B"))
-            setTextColor(Color.parseColor("#34D399"))
-            setOnClickListener {
-                AlistoSpatialEngine.launchLocalRoadNavigation(this@ContractorMainActivity, 15.1455, 120.5892)
-            }
+        card.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) }
+            addView(AlistoUiKit.badgePill(this@ContractorMainActivity, "Fee: PHP ${"%.2f".format(b.quotedFee)}", AlistoUiKit.BG_INPUT, AlistoUiKit.EMERALD).apply {
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(6) }
+            })
+            addView(AlistoUiKit.badgePill(this@ContractorMainActivity, "Tip: PHP ${"%.0f".format(b.tipAmount)}", AlistoUiKit.BG_INPUT, AlistoUiKit.AMBER).apply {
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(6) }
+            })
+            addView(AlistoUiKit.badgePill(this@ContractorMainActivity, "Hold $commPct%: PHP ${"%.2f".format(reqComm)}", AlistoUiKit.BG_INPUT, AlistoUiKit.TEXT_MUTED))
         })
 
         when (b.status) {
@@ -442,219 +774,165 @@ class ContractorMainActivity : AppCompatActivity() {
                 val myActiveBid = AlistoKernelClient.bookingBids.find {
                     it.bookingId == b.id && it.contractorId == user.id && it.status == "ACTIVE"
                 }
-
-                card.addView(Button(this).apply {
-                    text = if (myActiveBid != null) {
-                        "UPDATE MY OPEN BID (CURRENT: PHP ${"%.2f".format(myActiveBid.bidAmountPhp)})"
-                    } else {
-                        "SUBMIT OPEN BID (PRE-BID WALLET CHECK • TELEMETRY OFF)"
-                    }
-                    setBackgroundColor(Color.parseColor("#38BDF8"))
-                    setTextColor(Color.parseColor("#070D19"))
-                    setTypeface(null, Typeface.BOLD)
-                    setOnClickListener { promptSubmitOpenBid(b) }
+                card.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+                    addView(AlistoUiKit.pillButton(
+                        this@ContractorMainActivity,
+                        if (myActiveBid != null) "Update Bid (PHP ${"%.0f".format(myActiveBid.bidAmountPhp)})" else "Submit Bid",
+                        AlistoUiKit.CYAN, AlistoUiKit.BG_DEEP, heightDp = 42, textSizeSp = 13f
+                    ) { promptSubmitOpenBid(b) }.apply {
+                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) }
+                    })
+                    addView(AlistoUiKit.pillButton(this@ContractorMainActivity, "Claim Now", AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP, heightDp = 42, textSizeSp = 13f) {
+                        uiScope.launch {
+                            val res = AlistoKernelClient.claimBookingRpc(b.id)
+                            res.onSuccess { jobsFilter = "MINE"; routeContractorByAccountState() }
+                                .onFailure { err ->
+                                    AlertDialog.Builder(this@ContractorMainActivity)
+                                        .setTitle("Wallet Check").setMessage(err.message).setPositiveButton("OK", null).show()
+                                }
+                        }
+                    }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
                 })
 
                 if (myActiveBid != null) {
-                    card.addView(Button(this).apply {
-                        text = "WITHDRAW MY BID (PHP ${"%.2f".format(myActiveBid.bidAmountPhp)})"
-                        setBackgroundColor(Color.parseColor("#7F1D1D"))
-                        setTextColor(Color.WHITE)
-                        setOnClickListener {
-                            uiScope.launch {
-                                val res = AlistoKernelClient.withdrawContractorBidRpc(b.id)
-                                res.onSuccess {
-                                    Toast.makeText(this@ContractorMainActivity, "Bid withdrawn.", Toast.LENGTH_SHORT).show()
-                                    routeContractorByAccountState()
-                                }
+                    card.addView(AlistoUiKit.pillButton(this, "Withdraw Bid", "#450A0A", "#FCA5A5", "#7F1D1D", heightDp = 38, textSizeSp = 12f) {
+                        uiScope.launch {
+                            val res = AlistoKernelClient.withdrawContractorBidRpc(b.id)
+                            res.onSuccess {
+                                Toast.makeText(this@ContractorMainActivity, "Bid withdrawn", Toast.LENGTH_SHORT).show()
+                                routeContractorByAccountState()
                             }
                         }
-                    })
+                    }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) } })
                 }
-
-                card.addView(Button(this).apply {
-                    text = "INSTANT CLAIM JOB AT QUOTED FEE (LOCK $commPct%: PHP ${"%.2f".format(reqComm)})"
-                    setBackgroundColor(Color.parseColor("#FBBF24"))
-                    setTextColor(Color.parseColor("#070D19"))
-                    setTypeface(null, Typeface.BOLD)
-                    setOnClickListener {
-                        uiScope.launch {
-                            val res = AlistoKernelClient.claimBookingRpc(b.id)
-                            res.onSuccess { routeContractorByAccountState() }
-                                .onFailure { err ->
-                                    AlertDialog.Builder(this@ContractorMainActivity).setTitle("Wallet Check").setMessage(err.message).setPositiveButton("OK", null).show()
-                                }
-                        }
-                    }
-                })
             }
             "ACCEPTED" -> {
-                card.addView(Button(this).apply {
-                    text = "TAP ON_THE_WAY (START 10-SEC BILATERAL GPS HEARTBEAT)"
-                    setBackgroundColor(Color.parseColor("#FBBF24"))
-                    setTextColor(Color.parseColor("#070D19"))
-                    setTypeface(null, Typeface.BOLD)
-                    setOnClickListener {
-                        AlistoSpatialEngine.startTenSecondHeartbeat(this@ContractorMainActivity, uiScope, b.id, user.id)
-                        transitionJob(b.id, "ON_THE_WAY")
-                    }
-                })
+                card.addView(AlistoUiKit.pillButton(this, "Start En Route (Begin Live GPS)", AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP, heightDp = 44) {
+                    AlistoSpatialEngine.startTenSecondHeartbeat(this@ContractorMainActivity, uiScope, b.id, user.id)
+                    transitionJob(b.id, "ON_THE_WAY")
+                }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) } })
             }
             "ON_THE_WAY" -> {
-                card.addView(Button(this).apply {
-                    text = "MARK ARRIVED AT PICKUP / SITE (10S GPS STREAMING)"
-                    setBackgroundColor(Color.parseColor("#00F2FE"))
-                    setTextColor(Color.parseColor("#070D19"))
-                    setTypeface(null, Typeface.BOLD)
-                    setOnClickListener { transitionJob(b.id, "ARRIVED") }
-                })
+                card.addView(AlistoUiKit.pillButton(this, "Mark Arrived at Pickup / Site", AlistoUiKit.CYAN, AlistoUiKit.BG_DEEP, heightDp = 44) {
+                    transitionJob(b.id, "ARRIVED")
+                }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) } })
             }
             "ARRIVED" -> {
-                card.addView(Button(this).apply {
-                    text = "START EXECUTION (ONGOING • 10S GPS HEARTBEAT ACTIVE)"
-                    setBackgroundColor(Color.parseColor("#FBBF24"))
-                    setTextColor(Color.parseColor("#070D19"))
-                    setTypeface(null, Typeface.BOLD)
-                    setOnClickListener { transitionJob(b.id, "ONGOING") }
-                })
+                card.addView(AlistoUiKit.pillButton(this, "Start Job Execution", AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP, heightDp = 44) {
+                    transitionJob(b.id, "ONGOING")
+                }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) } })
             }
             "ONGOING", "IN_PROGRESS" -> {
-                card.addView(Button(this).apply {
-                    text = "COMPLETE P2P SETTLEMENT & STOP GPS HEARTBEAT"
-                    setBackgroundColor(Color.parseColor("#10B981"))
-                    setTextColor(Color.parseColor("#070D19"))
-                    setTypeface(null, Typeface.BOLD)
-                    setOnClickListener {
-                        realtimePollJob?.cancel()
-        AlistoSpatialEngine.stopHeartbeat()
-                        transitionJob(b.id, "COMPLETED")
-                    }
-                })
+                card.addView(AlistoUiKit.pillButton(this, "Complete & Settle Job", AlistoUiKit.EMERALD, AlistoUiKit.BG_DEEP, heightDp = 44) {
+                    AlistoSpatialEngine.stopHeartbeat()
+                    transitionJob(b.id, "COMPLETED")
+                }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) } })
             }
             "COMPLETED" -> {
-                val thumbRow = LinearLayout(this).apply {
+                card.addView(LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
-                    setPadding(0, 8, 0, 0)
-                    addView(Button(this@ContractorMainActivity).apply {
-                        text = "RATE CUSTOMER: THUMB UP"
-                        setBackgroundColor(Color.parseColor("#064E3B"))
-                        setTextColor(Color.parseColor("#34D399"))
-                        setOnClickListener {
-                            uiScope.launch {
-                                AlistoKernelClient.submitContractorThumbReviewRpc(b.id, "UP", "Smooth P2P payment & clear instructions")
-                                Toast.makeText(this@ContractorMainActivity, "Customer Thumbs-Up Recorded!", Toast.LENGTH_SHORT).show()
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+                    addView(AlistoUiKit.pillButton(this@ContractorMainActivity, "Rate Up (Good Client)", "#064E3B", "#34D399", "#10B981", heightDp = 40, textSizeSp = 12.5f) {
+                        uiScope.launch {
+                            AlistoKernelClient.submitContractorThumbReviewRpc(b.id, "UP", "Smooth payment & clear instructions")
+                            Toast.makeText(this@ContractorMainActivity, "Thumbs-Up recorded!", Toast.LENGTH_SHORT).show()
+                        }
+                    }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) } })
+                    addView(AlistoUiKit.pillButton(this@ContractorMainActivity, "Rate Down (Issue)", "#450A0A", "#FCA5A5", "#7F1D1D", heightDp = 40, textSizeSp = 12.5f) {
+                        uiScope.launch {
+                            val res = AlistoKernelClient.submitContractorThumbReviewRpc(b.id, "DOWN", "Delayed coordination / difficult pickup")
+                            res.onSuccess { json ->
+                                val gate = json.optBoolean("trust_deposit_required", false)
+                                Toast.makeText(this@ContractorMainActivity, "Logged (Deposit Gate: $gate)", Toast.LENGTH_LONG).show()
                             }
                         }
-                    })
-                    addView(Button(this@ContractorMainActivity).apply {
-                        text = "RATE CUSTOMER: THUMB DOWN"
-                        setBackgroundColor(Color.parseColor("#7F1D1D"))
-                        setTextColor(Color.WHITE)
-                        setOnClickListener {
-                            uiScope.launch {
-                                val res = AlistoKernelClient.submitContractorThumbReviewRpc(b.id, "DOWN", "Delayed coordination / difficult pickup")
-                                res.onSuccess { json ->
-                                    val gate = json.optBoolean("trust_deposit_required", false)
-                                    Toast.makeText(this@ContractorMainActivity, "Thumbs-Down Logged (Customer Deposit Gate: $gate)", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
-                    })
-                }
-                card.addView(thumbRow)
+                    }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
+                })
             }
         }
+
+        // Secondary utility row: turn-by-turn local-road nav + LTFRB safety refusal
+        val utilRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        utilRow.addView(AlistoUiKit.pillButton(this, "Navigate (avoid=ht)", AlistoUiKit.BG_INPUT, AlistoUiKit.EMERALD, AlistoUiKit.BORDER_LIGHT, heightDp = 38, textSizeSp = 12f) {
+            AlistoSpatialEngine.launchLocalRoadNavigation(this@ContractorMainActivity, b.pickupLat, b.pickupLng)
+        }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
+
         if (b.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED") && (b.contractorId == user.id || user.role == "super_admin")) {
-            card.addView(Button(this).apply {
-                text = "LOG LTFRB SAFETY REFUSAL (PENALTY-FREE)"
-                setBackgroundColor(Color.parseColor("#451A03"))
-                setTextColor(Color.parseColor("#FBBF24"))
-                setOnClickListener { promptLtfrbSafetyRefusal(b, user) }
-            })
+            utilRow.addView(AlistoUiKit.pillButton(this, "Safety Refusal", "#451A03", AlistoUiKit.AMBER, "#78350F", heightDp = 38, textSizeSp = 12f) {
+                promptLtfrbSafetyRefusal(b, user)
+            }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = dp(8) } })
         }
+        card.addView(utilRow)
         return card
     }
 
-
     private fun promptLtfrbSafetyRefusal(b: BookingRecord, user: AuthenticatedUser) {
         val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(36, 24, 36, 16)
-            setBackgroundColor(Color.parseColor("#0F172A"))
+            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(16), dp(20), dp(10))
+            setBackgroundColor(Color.parseColor(AlistoUiKit.BG_SURFACE))
         }
         val categories = listOf(
-            "INTOXICATED_PASSENGER",
-            "NO_HELMET_REFUSAL",
-            "UNSAFE_BEHAVIOR_THREAT",
-            "OVERWEIGHT_OR_PROHIBITED_CARGO",
-            "MINOR_UNACCOMPANIED",
-            "OTHER_SAFETY_RISK"
+            "INTOXICATED_PASSENGER", "NO_HELMET_REFUSAL", "UNSAFE_BEHAVIOR_THREAT",
+            "OVERWEIGHT_OR_PROHIBITED_CARGO", "MINOR_UNACCOMPANIED", "OTHER_SAFETY_RISK"
         )
         val catSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(this@ContractorMainActivity, android.R.layout.simple_spinner_dropdown_item, categories)
-            setBackgroundColor(Color.parseColor("#1E293B"))
+            background = AlistoUiKit.roundedBg(this@ContractorMainActivity, AlistoUiKit.BG_INPUT, 10, AlistoUiKit.BORDER_LIGHT)
         }
-        layout.addView(labeledField("LTFRB MC 2026-048 Safety Refusal Category", catSpinner))
-        val notesInput = styledInput("Document safety reason (releases hold penalty-free)...")
-        layout.addView(labeledField("Incident Details", notesInput))
+        layout.addView(AlistoUiKit.labeledField(this, "LTFRB Safety Refusal Category", catSpinner))
+        val notesInput = AlistoUiKit.inputField(this, "Document safety reason (releases hold penalty-free)...")
+        layout.addView(AlistoUiKit.labeledField(this, "Incident Details", notesInput))
 
         AlertDialog.Builder(this)
-            .setTitle("LTFRB Safety Refusal • ${b.bookingRef}")
-            .setView(layout)
-            .setPositiveButton("Log Refusal & Release Hold") { _, _ ->
+            .setTitle("Safety Refusal • ${b.bookingRef}").setView(layout)
+            .setPositiveButton("Log & Release Hold") { _, _ ->
                 val chosenCat = catSpinner.selectedItem.toString()
                 val noteText = notesInput.text.toString().ifBlank { "Safety refusal logged by contractor" }
                 AlistoSpatialEngine.stopHeartbeat()
                 uiScope.launch {
-                    val res = AlistoKernelClient.logSafetyRefusalRpc(
-                        bookingId = b.id,
-                        refusalCategory = chosenCat,
-                        notes = noteText,
-                        lat = user.homeLat,
-                        lng = user.homeLng
-                    )
+                    val res = AlistoKernelClient.logSafetyRefusalRpc(b.id, chosenCat, noteText, user.homeLat, user.homeLng)
                     res.onSuccess {
-                        Toast.makeText(
-                            this@ContractorMainActivity,
-                            "LTFRB Safety Refusal logged ($chosenCat). Commission hold released penalty-free.",
-                            Toast.LENGTH_LONG
-                        ).show()
+                        Toast.makeText(this@ContractorMainActivity, "Safety Refusal logged. Hold released.", Toast.LENGTH_LONG).show()
                         routeContractorByAccountState()
                     }.onFailure { err ->
                         AlertDialog.Builder(this@ContractorMainActivity)
-                            .setTitle("Safety Refusal Error")
-                            .setMessage(err.message)
-                            .setPositiveButton("OK", null)
-                            .show()
+                            .setTitle("Safety Refusal Error").setMessage(err.message).setPositiveButton("OK", null).show()
                     }
                 }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+            }.setNegativeButton("Cancel", null).show()
     }
 
     private fun promptSubmitOpenBid(b: BookingRecord) {
-        val bidInput = styledInput(b.quotedFee.toString()).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(14), dp(20), dp(8))
+            setBackgroundColor(Color.parseColor(AlistoUiKit.BG_SURFACE))
         }
+        val bidInput = AlistoUiKit.inputField(
+            this, b.quotedFee.toString(),
+            InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL,
+            b.quotedFee.toString()
+        )
+        layout.addView(AlistoUiKit.labeledField(this, "Your Offer (PHP)", bidInput))
+
         AlertDialog.Builder(this)
-            .setTitle("Submit Open Bid • ${b.bookingRef}")
-            .setMessage("Pre-Bid Wallet Check validates <=12% commission coverage (0% for Active Pass holders).")
-            .setView(bidInput)
-            .setPositiveButton("Submit Bid") { _, _ ->
+            .setTitle("Submit Offer • ${b.bookingRef}")
+            .setMessage("Validates commission coverage (0% for Active Pass holders).")
+            .setView(layout)
+            .setPositiveButton("Send Offer") { _, _ ->
                 val amt = bidInput.text.toString().toDoubleOrNull() ?: b.quotedFee
                 uiScope.launch {
                     val res = AlistoKernelClient.submitContractorBidRpc(b.id, amt, 20, "Open bid by verified contractor")
                     res.onSuccess {
-                        Toast.makeText(this@ContractorMainActivity, "Bid of PHP $amt broadcast to customer!", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this@ContractorMainActivity, "Offer of PHP $amt sent!", Toast.LENGTH_LONG).show()
                         routeContractorByAccountState()
                     }.onFailure { err ->
-                        AlertDialog.Builder(this@ContractorMainActivity).setTitle("Pre-Bid Wallet Gate").setMessage(err.message).setPositiveButton("OK", null).show()
+                        AlertDialog.Builder(this@ContractorMainActivity)
+                            .setTitle("Wallet Coverage Check").setMessage(err.message).setPositiveButton("OK", null).show()
                     }
                 }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+            }.setNegativeButton("Cancel", null).show()
     }
 
     private fun transitionJob(bookingId: String, nextStatus: String) {
@@ -663,35 +941,6 @@ class ContractorMainActivity : AppCompatActivity() {
             routeContractorByAccountState()
         }
     }
-
-    private fun sectionTitle(title: String): TextView = TextView(this).apply {
-        text = title
-        setTextColor(Color.parseColor("#00F2FE"))
-        textSize = 15f
-        setTypeface(null, Typeface.BOLD)
-        setPadding(0, 20, 0, 8)
-    }
-
-    private fun styledInput(hintText: String): EditText = EditText(this).apply {
-        hint = hintText
-        setHintTextColor(Color.parseColor("#64748B"))
-        setTextColor(Color.WHITE)
-        setBackgroundColor(Color.parseColor("#1E293B"))
-        setPadding(20, 16, 20, 16)
-    }
-
-    private fun labeledField(label: String, field: View): View = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(0, 0, 0, 14)
-        addView(TextView(this@ContractorMainActivity).apply {
-            text = label
-            setTextColor(Color.parseColor("#94A3B8"))
-            textSize = 12f
-            setPadding(0, 0, 0, 4)
-        })
-        addView(field)
-    }
-
 
     private fun initiateContractorPaymentFlow(
         purpose: String,
@@ -702,63 +951,46 @@ class ContractorMainActivity : AppCompatActivity() {
         val payInfo = AlistoKernelClient.currentPaymentModeInfo
         if (payInfo.paymentMode == "MANUAL") {
             val layout = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(36, 24, 36, 16)
-                setBackgroundColor(Color.parseColor("#0F172A"))
+                orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(16), dp(20), dp(10))
+                setBackgroundColor(Color.parseColor(AlistoUiKit.BG_SURFACE))
             }
             layout.addView(TextView(this).apply {
                 text = "Amount Due: PHP ${"%.2f".format(amountPhp)}\n\n${payInfo.manualInstructions}"
-                setTextColor(Color.parseColor("#E2E8F0"))
-                textSize = 13f
-                setPadding(0, 0, 0, 14)
+                setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); textSize = 13f; setPadding(0, 0, 0, dp(12))
             })
-            val refInput = styledInput("GCash / QR Ph / Clinic Receipt Reference No.")
-            layout.addView(labeledField("Payment Reference Number", refInput))
+            val refInput = AlistoUiKit.inputField(this, "GCash / QR Ph / Clinic Reference No.")
+            layout.addView(AlistoUiKit.labeledField(this, "Payment Reference Number", refInput))
 
             AlertDialog.Builder(this)
-                .setTitle("Manual Payment • $titleLabel")
-                .setView(layout)
-                .setPositiveButton("Submit for Admin Approval") { _, _ ->
+                .setTitle("Manual Top-Up • $titleLabel").setView(layout)
+                .setPositiveButton("Submit for Approval") { _, _ ->
                     val ref = refInput.text.toString().trim()
                     uiScope.launch {
                         val res = AlistoKernelClient.submitManualPaymentRequestRpc(purpose, amountPhp, tierCode, ref)
                         res.onSuccess {
-                            Toast.makeText(
-                                this@ContractorMainActivity,
-                                "Reference submitted! Admin will approve and credit shortly.",
-                                Toast.LENGTH_LONG
-                            ).show()
+                            Toast.makeText(this@ContractorMainActivity, "Reference submitted for Admin approval!", Toast.LENGTH_LONG).show()
                             routeContractorByAccountState()
                         }.onFailure { err ->
                             AlertDialog.Builder(this@ContractorMainActivity)
-                                .setTitle("Submission Error")
-                                .setMessage(err.message)
-                                .setPositiveButton("OK", null)
-                                .show()
+                                .setTitle("Submission Error").setMessage(err.message).setPositiveButton("OK", null).show()
                         }
                     }
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
+                }.setNegativeButton("Cancel", null).show()
             return
         }
 
-        // PAYMONGO_TEST or PAYMONGO_LIVE checkout via dynamic Edge Function
-        Toast.makeText(this, "Preparing PayMongo (${payInfo.paymentMode}) checkout...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Opening PayMongo (${payInfo.paymentMode})...", Toast.LENGTH_SHORT).show()
         uiScope.launch {
             val res = AlistoKernelClient.initiatePayMongoCheckout(purpose, amountPhp, tierCode)
             res.onSuccess { json ->
                 val url = json.optString("checkout_url", "")
                 val txRef = json.optString("tx_ref", "")
-                Toast.makeText(this@ContractorMainActivity, "Opening PayMongo Checkout [$txRef]", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@ContractorMainActivity, "Checkout [$txRef]", Toast.LENGTH_LONG).show()
                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                 routeContractorByAccountState()
             }.onFailure { err ->
                 AlertDialog.Builder(this@ContractorMainActivity)
-                    .setTitle("PayMongo Checkout Gate")
-                    .setMessage(err.message)
-                    .setPositiveButton("OK", null)
-                    .show()
+                    .setTitle("PayMongo Checkout").setMessage(err.message).setPositiveButton("OK", null).show()
             }
         }
     }
@@ -776,15 +1008,14 @@ class ContractorMainActivity : AppCompatActivity() {
                     telemetryPins = AlistoKernelClient.liveTelemetryPins,
                     heatClusters = AlistoKernelClient.heatmapClusters
                 )
-                if (fired > 0) {
-                    Toast.makeText(this@ContractorMainActivity, "$fired new dispatch alert(s)", Toast.LENGTH_SHORT).show()
-                }
+                if (fired > 0) Toast.makeText(this@ContractorMainActivity, "$fired new dispatch alert(s)", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        realtimePollJob?.cancel()
         AlistoSpatialEngine.stopHeartbeat()
         uiScope.cancel()
     }

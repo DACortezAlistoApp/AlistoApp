@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.MotionEvent
 import android.webkit.JavascriptInterface
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
@@ -21,21 +22,23 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
     private var tapCallback: ((Double, Double) -> Unit)? = null
 
     init {
-        setBackgroundColor(Color.parseColor("#070D19"))
-        addView(
-            webView,
-            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
-        )
+        setBackgroundColor(Color.parseColor("#070A12"))
+        addView(webView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         setupWebView()
     }
 
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     private fun setupWebView() {
-        webView.setBackgroundColor(Color.parseColor("#070D19"))
-        webView.settings.javaScriptEnabled = true
-        webView.settings.domStorageEnabled = true
-        webView.settings.loadWithOverviewMode = true
-        webView.settings.useWideViewPort = true
+        webView.setBackgroundColor(Color.parseColor("#070A12"))
+        webView.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            loadWithOverviewMode = true
+            useWideViewPort = true
+            cacheMode = WebSettings.LOAD_DEFAULT
+            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            userAgentString = "AlistoNetworkPH/4.0 (Android Mobile; https://dacortezalistoapp.github.io/AlistoApp/)"
+        }
 
         webView.setOnTouchListener { v, event ->
             when (event.action) {
@@ -48,9 +51,7 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
         webView.addJavascriptInterface(object {
             @JavascriptInterface
             fun onMapTapped(lat: Double, lng: Double) {
-                mainHandler.post {
-                    tapCallback?.invoke(lat, lng)
-                }
+                mainHandler.post { tapCallback?.invoke(lat, lng) }
             }
         }, "AlistoMapBridge")
 
@@ -59,6 +60,13 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
                 mapReady = true
                 pendingPayloadJson?.let { pushPayloadToJs(it) }
             }
+        }
+    }
+
+    fun recenter(lat: Double, lng: Double, zoom: Int = 15) {
+        if (!mapReady) return
+        mainHandler.post {
+            webView.evaluateJavascript("if (window.recenterAlistoMap) { window.recenterAlistoMap($lat, $lng, $zoom); }", null)
         }
     }
 
@@ -75,33 +83,48 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
-    html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #070d19; }
-    .leaflet-popup-content-wrapper { background: #0f172a; color: #f8fafc; border: 1px solid #334155; font-family: sans-serif; font-size: 12px; }
+    html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #070a12; overflow: hidden; }
+    .alisto-dark-tiles { filter: invert(100%) hue-rotate(180deg) brightness(93%) contrast(90%); }
+    .leaflet-control-attribution { background: rgba(7,10,18,0.72) !important; color: #94a3b8 !important; font-size: 9px !important; }
+    .leaflet-control-attribution a { color: #38bdf8 !important; }
+    .leaflet-control-layers { background: rgba(15,23,42,0.92) !important; color: #f8fafc !important; border: 1px solid #334155 !important; border-radius: 12px !important; }
+    .leaflet-control-layers-toggle { filter: invert(90%); }
+    .leaflet-popup-content-wrapper { background: #0f172a; color: #f8fafc; border: 1px solid #334155; border-radius: 12px; font-family: sans-serif; font-size: 12px; }
     .leaflet-popup-tip { background: #0f172a; }
-    .wp-label { background: #fbbf24; color: #070d19; font-weight: 800; border-radius: 999px; width: 22px; height: 22px; line-height: 22px; text-align: center; border: 2px solid #070d19; font-size: 11px; }
+    .wp-label { background: #fbbf24; color: #070a12; font-weight: 800; border-radius: 999px; width: 24px; height: 24px; line-height: 24px; text-align: center; border: 2px solid #070a12; font-size: 11px; }
   </style>
 </head>
 <body>
   <div id="map"></div>
   <script>
-    const map = L.map('map', { zoomControl: true }).setView([$centerLat, $centerLng], 14);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      maxZoom: 19,
-      attribution: '&copy; OSM &copy; CARTO'
-    }).addTo(map);
+    const map = L.map('map', { zoomControl: false, attributionControl: true }).setView([$centerLat, $centerLng], 15);
+    const osmDark = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, className: 'alisto-dark-tiles', attribution: '&copy; OpenStreetMap' });
+    const osmLight = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' });
+    const esriDark = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, className: 'alisto-dark-tiles', attribution: 'Tiles &copy; Esri' });
+    const esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Tiles &copy; Esri' });
+
+    let osmErr = 0;
+    osmDark.on('tileerror', function() {
+      osmErr++;
+      if (osmErr === 3 && map.hasLayer(osmDark)) { map.removeLayer(osmDark); esriDark.addTo(map); }
+    });
+
+    osmDark.addTo(map);
+    L.control.layers({ 'Dark Street': osmDark, 'Esri Dark': esriDark, 'Light Street': osmLight, 'Satellite': esriSat }, null, { position: 'bottomright' }).addTo(map);
 
     const layerGroup = L.layerGroup().addTo(map);
+    if (typeof ResizeObserver !== 'undefined') { new ResizeObserver(function() { map.invalidateSize(); }).observe(document.getElementById('map')); }
+    setTimeout(function() { map.invalidateSize(); }, 250);
+
+    window.recenterAlistoMap = function(lat, lng, zoom) { map.flyTo([lat, lng], zoom || 15, { duration: 0.6 }); };
 
     if (${if (enableTapToPin) "true" else "false"}) {
-      map.on('click', function(e) {
-        if (window.AlistoMapBridge) {
-          window.AlistoMapBridge.onMapTapped(e.latlng.lat, e.latlng.lng);
-        }
-      });
+      map.on('click', function(e) { if (window.AlistoMapBridge) window.AlistoMapBridge.onMapTapped(e.latlng.lat, e.latlng.lng); });
     }
 
     window.updateAlistoLayers = function(data) {
@@ -109,44 +132,34 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
       if (!data) return;
 
       (data.heatClusters || []).forEach(function(c) {
-        const radius = Math.min(2200, 320 + ((c.demand || 1) * 200));
+        const r = Math.min(2200, 320 + ((c.demand || 1) * 200));
         const col = (c.demand || 1) >= 5 ? '#ef4444' : ((c.demand || 1) >= 3 ? '#f59e0b' : '#38bdf8');
-        L.circle([c.lat, c.lng], {
-          radius: radius, color: col, weight: 1.5, fillColor: col, fillOpacity: 0.24
-        }).bindPopup('<b>Demand Zone:</b> ' + c.label + '<br/>Requests: ' + c.demand).addTo(layerGroup);
+        L.circle([c.lat, c.lng], { radius: r, color: col, weight: 1.5, fillColor: col, fillOpacity: 0.24 })
+          .bindPopup('<b>Demand Zone:</b> ' + c.label + '<br/>Requests: ' + c.demand).addTo(layerGroup);
       });
 
       if (data.origin && typeof data.origin.lat === 'number') {
-        L.circleMarker([data.origin.lat, data.origin.lng], {
-          radius: 8, color: '#ffffff', weight: 2, fillColor: '#10b981', fillOpacity: 0.95
-        }).bindPopup('<b>Origin / Job Site Pin</b><br/>' + (data.origin.address || '')).addTo(layerGroup);
+        L.circleMarker([data.origin.lat, data.origin.lng], { radius: 9, color: '#ffffff', weight: 3, fillColor: '#10b981', fillOpacity: 0.98 })
+          .bindPopup('<b>Pickup / Job Site</b><br/>' + (data.origin.address || '')).addTo(layerGroup);
       }
 
       const routePts = [];
-      if (data.origin && typeof data.origin.lat === 'number') {
-        routePts.push([data.origin.lat, data.origin.lng]);
-      }
+      if (data.origin && typeof data.origin.lat === 'number') routePts.push([data.origin.lat, data.origin.lng]);
       (data.waypoints || []).forEach(function(w) {
         routePts.push([w.lat, w.lng]);
-        const icon = L.divIcon({ className: 'wp-icon', html: '<div class="wp-label">' + w.stop_number + '</div>', iconSize: [22, 22] });
-        L.marker([w.lat, w.lng], { icon: icon })
-          .bindPopup('<b>Stop #' + w.stop_number + '</b><br/>' + (w.address || ''))
-          .addTo(layerGroup);
+        const icon = L.divIcon({ className: 'wp-icon', html: '<div class="wp-label">' + w.stop_number + '</div>', iconSize: [24, 24] });
+        L.marker([w.lat, w.lng], { icon: icon }).bindPopup('<b>Stop #' + w.stop_number + '</b><br/>' + (w.address || '')).addTo(layerGroup);
       });
-      if (routePts.length >= 2) {
-        L.polyline(routePts, { color: '#fbbf24', weight: 3, dashArray: '6,6' }).addTo(layerGroup);
-      }
+      if (routePts.length >= 2) L.polyline(routePts, { color: '#00f2fe', weight: 4, opacity: 0.9 }).addTo(layerGroup);
 
       (data.bookings || []).forEach(function(b) {
-        L.circleMarker([b.lat, b.lng], {
-          radius: 7, color: '#fbbf24', weight: 2, fillColor: '#f59e0b', fillOpacity: 0.85
-        }).bindPopup('<b>' + b.ref + ' [' + b.status + ']</b><br/>' + b.title + '<br/>PHP ' + b.fee).addTo(layerGroup);
+        L.circleMarker([b.lat, b.lng], { radius: 7, color: '#fbbf24', weight: 2, fillColor: '#f59e0b', fillOpacity: 0.9 })
+          .bindPopup('<b>' + b.ref + ' [' + b.status + ']</b><br/>' + b.title + '<br/>PHP ' + b.fee).addTo(layerGroup);
       });
 
       (data.telemetry || []).forEach(function(t) {
-        L.circleMarker([t.lat, t.lng], {
-          radius: 9, color: '#ffffff', weight: 2.5, fillColor: '#00f2fe', fillOpacity: 1.0
-        }).bindPopup('<b>LIVE TRACKING • ' + t.ref + '</b><br/>' + t.status + ' • ' + t.speed + ' km/h').addTo(layerGroup);
+        L.circleMarker([t.lat, t.lng], { radius: 10, color: '#ffffff', weight: 3, fillColor: '#00f2fe', fillOpacity: 1.0 })
+          .bindPopup('<b>LIVE GPS &bull; ' + t.ref + '</b><br/>' + t.status + ' &bull; ' + t.speed + ' km/h').addTo(layerGroup);
       });
     };
   </script>
@@ -154,7 +167,7 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
 </html>
         """.trimIndent()
 
-        webView.loadDataWithBaseURL("https://alisto.local/", html, "text/html", "UTF-8", null)
+        webView.loadDataWithBaseURL("https://dacortezalistoapp.github.io/AlistoApp/", html, "text/html", "UTF-8", null)
     }
 
     fun updateMapLayers(
@@ -169,57 +182,35 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
         val root = JSONObject()
         if (originLat != null && originLng != null) {
             root.put("origin", JSONObject().apply {
-                put("lat", originLat)
-                put("lng", originLng)
-                put("address", originAddress)
+                put("lat", originLat); put("lng", originLng); put("address", originAddress)
             })
         }
-
-        val wpArr = JSONArray()
-        waypoints.forEach { wpArr.put(it) }
-        root.put("waypoints", wpArr)
-
-        val bArr = JSONArray()
-        bookings.filter { it.status !in listOf("COMPLETED", "CANCELLED", "EXPIRED") }.forEach { b ->
-            bArr.put(JSONObject().apply {
-                put("ref", b.bookingRef)
-                put("status", b.status)
-                put("title", b.serviceTitle)
-                put("fee", "%.2f".format(b.quotedFee))
-                put("lat", b.pickupLat)
-                put("lng", b.pickupLng)
-            })
-        }
-        root.put("bookings", bArr)
-
-        val tArr = JSONArray()
-        telemetryPins.forEach { t ->
-            tArr.put(JSONObject().apply {
-                put("ref", t.bookingRef)
-                put("status", t.bookingStatus)
-                put("speed", "%.1f".format(t.speedKph))
-                put("lat", t.lat)
-                put("lng", t.lng)
-            })
-        }
-        root.put("telemetry", tArr)
-
-        val hArr = JSONArray()
-        heatClusters.forEach { h ->
-            hArr.put(JSONObject().apply {
-                put("label", h.label)
-                put("demand", h.demandCount)
-                put("lat", h.lat)
-                put("lng", h.lng)
-            })
-        }
-        root.put("heatClusters", hArr)
+        root.put("waypoints", JSONArray().apply { waypoints.forEach { put(it) } })
+        root.put("bookings", JSONArray().apply {
+            bookings.filter { it.status !in listOf("COMPLETED", "CANCELLED", "EXPIRED") }.forEach { b ->
+                put(JSONObject().apply {
+                    put("ref", b.bookingRef); put("status", b.status); put("title", b.serviceTitle)
+                    put("fee", "%.2f".format(b.quotedFee)); put("lat", b.pickupLat); put("lng", b.pickupLng)
+                })
+            }
+        })
+        root.put("telemetry", JSONArray().apply {
+            telemetryPins.forEach { t ->
+                put(JSONObject().apply {
+                    put("ref", t.bookingRef); put("status", t.bookingStatus)
+                    put("speed", "%.1f".format(t.speedKph)); put("lat", t.lat); put("lng", t.lng)
+                })
+            }
+        })
+        root.put("heatClusters", JSONArray().apply {
+            heatClusters.forEach { h ->
+                put(JSONObject().apply { put("label", h.label); put("demand", h.demandCount); put("lat", h.lat); put("lng", h.lng) })
+            }
+        })
 
         val jsonStr = root.toString()
         pendingPayloadJson = jsonStr
-        if (mapReady) {
-            pushPayloadToJs(jsonStr)
-        }
+        if (mapReady) pushPayloadToJs(jsonStr)
     }
 
     private fun pushPayloadToJs(jsonStr: String) {
