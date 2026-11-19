@@ -42,6 +42,8 @@ const consoleState = {
   ledgerHealth: null,
   paymentGatewayConfig: null,
   paymentTransactions: [],
+  liveTelemetryPins: [],
+  pushOutboxRecent: [],
   verticals: [],
   heatmapClusters: [],
   bookingBids: [],
@@ -227,6 +229,9 @@ function switchConsoleView(viewKey) {
     sec.classList.toggle('active', sec.id === 'view-' + viewKey);
   });
   renderAll();
+  if (viewKey === 'operator_ops' && typeof alistoOpsMap !== 'undefined' && alistoOpsMap) {
+    setTimeout(() => alistoOpsMap.invalidateSize(), 150);
+  }
 }
 
 // ============================================================================
@@ -304,6 +309,8 @@ async function syncFromSupabase() {
     consoleState.ledgerHealth = data.ledger_health || null;
     consoleState.paymentGatewayConfig = data.payment_gateway_config || null;
     consoleState.paymentTransactions = data.payment_transactions || [];
+    consoleState.liveTelemetryPins = data.live_telemetry_pins || [];
+    consoleState.pushOutboxRecent = data.push_outbox_recent || [];
     consoleState.subscriptionTiers = data.subscription_tiers || [];
     consoleState.contractorSubscriptions = data.contractor_subscriptions || [];
     consoleState.contractorProfiles = data.contractor_profiles || [];
@@ -2196,6 +2203,8 @@ function renderAll() {
     renderOperatorKycQueue();
     renderOperatorContractorCommissionTable();
     renderOperatorHeatmapTable();
+    renderOperatorLiveSpatialMap();
+    renderOperatorPushOutboxFeed();
     renderOperatorBookingsTable();
     renderLguAdmin();
   }
@@ -2593,4 +2602,183 @@ async function reviewManualPaymentTx(txId, decision, txRef) {
 
   alert(`Transaction ${txRef} marked as ${data.decision || decision}.`);
   await syncFromSupabase();
+}
+
+
+// ============================================================================
+// PHASE 3B: LIVE OPERATIONS MAP, DEMAND HEAT MAP & ENGINE 06 PUSH OUTBOX
+// ============================================================================
+
+let alistoOpsMap = null;
+let alistoOpsLayerGroup = null;
+let alistoOpsHasAutoFitted = false;
+
+function ensureOpsMapInitialized() {
+  const mapEl = document.getElementById('alistoLiveOpsMap');
+  if (!mapEl) return false;
+  if (typeof window.L === 'undefined') {
+    const stats = document.getElementById('alistoLiveOpsMapStats');
+    if (stats) stats.textContent = 'Interactive map library unavailable offline; telemetry & heat map tables remain active.';
+    return false;
+  }
+  if (!alistoOpsMap) {
+    alistoOpsMap = window.L.map('alistoLiveOpsMap', { zoomControl: true }).setView([15.1450, 120.5887], 13);
+    window.L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap &copy; CARTO | Alisto Spatial Engine (avoid=ht)'
+    }).addTo(alistoOpsMap);
+    alistoOpsLayerGroup = window.L.layerGroup().addTo(alistoOpsMap);
+  }
+  return true;
+}
+
+function centerOpsMapRegion3() {
+  if (!ensureOpsMapInitialized()) return;
+  alistoOpsMap.setView([15.1450, 120.5887], 13);
+}
+
+function fitOpsMapToActivePins() {
+  if (!ensureOpsMapInitialized() || !alistoOpsLayerGroup) return;
+  const bounds = [];
+  alistoOpsLayerGroup.eachLayer(layer => {
+    if (typeof layer.getLatLng === 'function') {
+      bounds.push(layer.getLatLng());
+    }
+  });
+  if (bounds.length > 0) {
+    alistoOpsMap.fitBounds(window.L.latLngBounds(bounds).pad(0.25), { maxZoom: 15 });
+  } else {
+    centerOpsMapRegion3();
+  }
+}
+
+function renderOperatorLiveSpatialMap() {
+  if (!ensureOpsMapInitialized() || !alistoOpsLayerGroup) return;
+  alistoOpsLayerGroup.clearLayers();
+
+  const showTelemetry = document.getElementById('mapLayerTelemetry')?.checked !== false;
+  const showBookings = document.getElementById('mapLayerBookings')?.checked !== false;
+  const showHeatmap = document.getElementById('mapLayerHeatmap')?.checked !== false;
+
+  let telemetryCount = 0;
+  let bookingPinCount = 0;
+  let clusterCount = 0;
+
+  // 1. Demand Heat Map Clusters (bottom layer)
+  if (showHeatmap) {
+    (consoleState.heatmapClusters || []).forEach(c => {
+      const lat = Number(c.centroid_lat ?? c.center_lat ?? c.lat ?? c.avg_lat);
+      const lng = Number(c.centroid_lng ?? c.center_lng ?? c.lng ?? c.avg_lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const demand = Number(c.open_requests ?? c.active_demand ?? c.request_count ?? c.demand_count ?? c.booking_count ?? 1);
+      const radiusMeters = Math.min(2400, 350 + (demand * 220));
+      const color = demand >= 5 ? '#ef4444' : (demand >= 3 ? '#f59e0b' : '#38bdf8');
+
+      window.L.circle([lat, lng], {
+        radius: radiusMeters,
+        color: color,
+        weight: 1.5,
+        fillColor: color,
+        fillOpacity: 0.24
+      }).bindPopup(
+        `<div style="color:#0f172a;font-size:12px;">
+          <strong>Demand Cluster: ${c.barangay_zone || c.municipality || 'Active Zone'}</strong><br/>
+          Municipality: ${c.municipality || 'Philippines'}<br/>
+          Active Demand: <b>${demand}</b> request(s)
+        </div>`
+      ).addTo(alistoOpsLayerGroup);
+      clusterCount++;
+    });
+  }
+
+  // 2. Active Bookings (middle layer)
+  if (showBookings) {
+    (consoleState.bookings || []).forEach(b => {
+      if (['COMPLETED', 'CANCELLED', 'EXPIRED'].includes(b.status)) return;
+      const lat = Number(b.pickup_lat);
+      const lng = Number(b.pickup_lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) return;
+
+      window.L.circleMarker([lat, lng], {
+        radius: 8,
+        color: '#fbbf24',
+        weight: 2,
+        fillColor: '#f59e0b',
+        fillOpacity: 0.85
+      }).bindPopup(
+        `<div style="color:#0f172a;font-size:12px;">
+          <strong>${b.booking_ref} [${b.status}]</strong><br/>
+          ${b.service_title || 'Service Booking'}<br/>
+          ${b.pickup_address || b.barangay_zone || ''}<br/>
+          Fee: PHP ${Number(b.quoted_fee || 0).toFixed(2)}<br/>
+          <button style="margin-top:6px;padding:4px 8px;background:#0f172a;color:#00f2fe;border:none;border-radius:4px;cursor:pointer;" onclick="openForensicDossier('${b.id}')">Open Dossier</button>
+        </div>`
+      ).addTo(alistoOpsLayerGroup);
+      bookingPinCount++;
+    });
+  }
+
+  // 3. Live 10-Second Contractor GPS Telemetry Pings (top layer)
+  if (showTelemetry) {
+    (consoleState.liveTelemetryPins || []).forEach(p => {
+      const lat = Number(p.lat);
+      const lng = Number(p.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const riderName = getUserLabel(p.contractor_id);
+
+      window.L.circleMarker([lat, lng], {
+        radius: 9,
+        color: '#ffffff',
+        weight: 2,
+        fillColor: '#00f2fe',
+        fillOpacity: 0.95
+      }).bindPopup(
+        `<div style="color:#0f172a;font-size:12px;">
+          <strong>LIVE RIDER PING • ${p.booking_ref}</strong><br/>
+          Contractor: ${riderName}<br/>
+          State: <b>${p.booking_status}</b> | Speed: <b>${Number(p.speed_kph || 0).toFixed(1)} km/h</b><br/>
+          Last Ping: ${formatTs(p.ping_time)}
+        </div>`
+      ).addTo(alistoOpsLayerGroup);
+      telemetryCount++;
+    });
+  }
+
+  const statsEl = document.getElementById('alistoLiveOpsMapStats');
+  if (statsEl) {
+    statsEl.textContent = `Live GPS Pings: ${telemetryCount} | Active Booking Pins: ${bookingPinCount} | Demand Heat Clusters: ${clusterCount}`;
+  }
+
+  if (!alistoOpsHasAutoFitted && (telemetryCount + bookingPinCount + clusterCount) > 0) {
+    alistoOpsHasAutoFitted = true;
+    setTimeout(() => {
+      if (alistoOpsMap) {
+        alistoOpsMap.invalidateSize();
+        fitOpsMapToActivePins();
+      }
+    }, 200);
+  }
+}
+
+function renderOperatorPushOutboxFeed() {
+  const tbody = document.getElementById('operatorPushOutboxBody');
+  if (!tbody) return;
+  const rows = (consoleState.pushOutboxRecent || []).slice(0, 15);
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="padding:14px;text-align:center;color:#64748b;">No Engine 06 notifications logged yet.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map(n => {
+    const badgeColor = n.push_status === 'SENT' || n.push_status === 'DELIVERED_INAPP' ? '#34d399' : (n.push_status === 'FAILED' ? '#f87171' : '#fbbf24');
+    return `
+      <tr style="border-bottom:1px solid #1e293b;">
+        <td style="padding:8px;font-weight:700;color:#38bdf8;">${n.event_type}</td>
+        <td style="padding:8px;color:#e2e8f0;">${getUserLabel(n.recipient_id)}</td>
+        <td style="padding:8px;color:#cbd5e1;"><strong>${n.title}</strong><br/><span style="color:#94a3b8;">${n.body}</span></td>
+        <td style="padding:8px;font-weight:700;color:${badgeColor};">${n.push_status}${n.is_read ? ' (READ)' : ' (UNREAD)'}</td>
+        <td style="padding:8px;color:#94a3b8;">${formatTs(n.created_at)}</td>
+      </tr>
+    `;
+  }).join('');
 }
