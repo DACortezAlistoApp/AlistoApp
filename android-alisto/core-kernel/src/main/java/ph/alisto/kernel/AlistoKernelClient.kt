@@ -129,6 +129,23 @@ data class BookingRecord(
     val contractorVipBadge: Boolean = false
 )
 
+data class PaymentModeInfo(
+    val paymentMode: String = "MANUAL",
+    val checkoutEdgeUrl: String = "",
+    val manualInstructions: String = "Pay via Alisto Clinic Counter or Official GCash / QR Ph, then submit your reference number for Admin verification.",
+    val paymongoConfigured: Boolean = true
+)
+
+data class PaymentTxRecord(
+    val txRef: String,
+    val paymentMode: String,
+    val purpose: String,
+    val tierCode: String?,
+    val amountPhp: Double,
+    val providerReference: String,
+    val status: String
+)
+
 data class LedgerEntry(
     val timestamp: String,
     val entryType: String,
@@ -165,6 +182,8 @@ object AlistoKernelClient {
     val bookings = mutableListOf<BookingRecord>()
     val bookingBids = mutableListOf<BookingBidRecord>()
     val ledgerHistory = mutableListOf<LedgerEntry>()
+    var currentPaymentModeInfo: PaymentModeInfo = PaymentModeInfo()
+    val paymentTransactions = mutableListOf<PaymentTxRecord>()
     val chatTranscripts = mutableMapOf<String, MutableList<ChatMessage>>()
 
     var contractorAvailableCredits: Double = 0.00
@@ -384,8 +403,37 @@ object AlistoKernelClient {
             }
         }
 
+        json.optJSONObject("payment_mode_info")?.let { pm ->
+            currentPaymentModeInfo = PaymentModeInfo(
+                paymentMode = pm.optString("payment_mode", "MANUAL"),
+                checkoutEdgeUrl = pm.optString("checkout_edge_url", ""),
+                manualInstructions = pm.optString("manual_payment_instructions", "Submit your payment receipt reference for Admin verification."),
+                paymongoConfigured = pm.optBoolean("paymongo_configured", true)
+            )
+        }
+
+        json.optJSONArray("payment_transactions")?.let { arr ->
+            paymentTransactions.clear()
+            for (i in 0 until arr.length()) {
+                val t = arr.getJSONObject(i)
+                paymentTransactions.add(
+                    PaymentTxRecord(
+                        txRef = t.optString("tx_ref", ""),
+                        paymentMode = t.optString("payment_mode", "MANUAL"),
+                        purpose = t.optString("purpose", "WALLET_TOPUP"),
+                        tierCode = if (t.isNull("tier_code")) null else t.optString("tier_code"),
+                        amountPhp = t.optDouble("amount_php", 0.0),
+                        providerReference = t.optString("provider_reference", "—"),
+                        status = t.optString("status", "PENDING")
+                    )
+                )
+            }
+        }
+
         json.optJSONArray("ledger_history")?.let { arr ->
             ledgerHistory.clear()
+        paymentTransactions.clear()
+        currentPaymentModeInfo = PaymentModeInfo()
             for (i in 0 until arr.length()) {
                 val l = arr.getJSONObject(i)
                 ledgerHistory.add(
@@ -863,4 +911,73 @@ object AlistoKernelClient {
             return@withContext Result.failure(e)
         }
     }
+
+    suspend fun submitManualPaymentRequestRpc(
+        purpose: String,
+        amountPhp: Double,
+        tierCode: String?,
+        referenceNo: String,
+        notes: String = "Manual receipt submitted via Contractor APK"
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val tok = currentSessionToken ?: return@withContext Result.failure(SecurityException("Session expired."))
+        try {
+            val json = postRpc("secure_submit_manual_payment_request_rpc", JSONObject().apply {
+                put("p_session_token", tok)
+                put("p_purpose", purpose)
+                put("p_amount_php", amountPhp)
+                put("p_tier_code", tierCode ?: JSONObject.NULL)
+                put("p_reference_no", referenceNo.trim())
+                put("p_notes", notes)
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Manual payment submission failed.")))
+            }
+            fetchAppBootStateRpc(tok, currentSessionUser?.role ?: "contractor")
+            return@withContext Result.success(json)
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
+    suspend fun initiatePayMongoCheckout(
+        purpose: String,
+        amountPhp: Double,
+        tierCode: String?
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val tok = currentSessionToken ?: return@withContext Result.failure(SecurityException("Session expired."))
+        val edgeUrl = currentPaymentModeInfo.checkoutEdgeUrl
+        if (edgeUrl.isBlank()) {
+            return@withContext Result.failure(IllegalStateException("PayMongo Checkout Edge URL is not configured."))
+        }
+        try {
+            val payload = JSONObject().apply {
+                put("session_token", tok)
+                put("purpose", purpose)
+                put("amount_php", amountPhp)
+                if (!tierCode.isNullOrBlank()) put("tier_code", tierCode)
+            }
+            val req = Request.Builder()
+                .url(edgeUrl)
+                .addHeader("apikey", supabaseKey)
+                .addHeader("Authorization", "Bearer $supabaseKey")
+                .post(payload.toString().toRequestBody(jsonMedia))
+                .build()
+
+            http.newCall(req).execute().use { resp ->
+                val raw = resp.body?.string().orEmpty().trim()
+                val json = if (raw.startsWith("{")) JSONObject(raw) else JSONObject().apply {
+                    put("status", "ERROR")
+                    put("message", if (raw.isNotBlank()) raw else "HTTP ${resp.code}")
+                }
+                if (json.optString("status") != "SUCCESS" || json.optString("checkout_url").isBlank()) {
+                    return@withContext Result.failure(IllegalStateException(json.optString("message", "Unable to start PayMongo checkout.")))
+                }
+                fetchAppBootStateRpc(tok, currentSessionUser?.role ?: "contractor")
+                return@withContext Result.success(json)
+            }
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
 }

@@ -1,6 +1,8 @@
 package ph.alisto.contractor
 
+import android.content.Intent
 import android.graphics.Color
+import android.net.Uri
 import android.graphics.Typeface
 import android.os.Bundle
 import android.text.InputType
@@ -304,38 +306,38 @@ class ContractorMainActivity : AppCompatActivity() {
         }
         container.addView(dispatchModeBtn)
 
-        // SECTION 2: HYBRID WALLET & SUBSCRIPTION PASSES
+        // SECTION 2: HYBRID WALLET, PAYMENT GATEWAY MODE & SUBSCRIPTION PASSES
+        val payInfo = AlistoKernelClient.currentPaymentModeInfo
         val commPct = "%.1f".format(AlistoKernelClient.effectiveCommissionRate * 100.0)
-        container.addView(sectionTitle("2. Hybrid Wallet & Subscription Passes (Effective Rate: $commPct%)"))
+        container.addView(sectionTitle("2. Hybrid Wallet & Passes (Rate: $commPct% • Gateway: ${payInfo.paymentMode})"))
+        val recentTxLine = AlistoKernelClient.paymentTransactions.firstOrNull()?.let { tx ->
+            "\nLatest Payment: ${tx.txRef} • PHP ${"%.2f".format(tx.amountPhp)} [${tx.status}]"
+        } ?: ""
         container.addView(TextView(this).apply {
             setPadding(24, 18, 24, 18)
             setBackgroundColor(Color.parseColor("#1E293B"))
             setTextColor(Color.WHITE)
             text = "Prepaid Wallet: PHP ${"%.2f".format(AlistoKernelClient.contractorAvailableCredits)} | Held: PHP ${"%.2f".format(AlistoKernelClient.contractorHeldCredits)}\n" +
-                   "Active Pass: ${activePass?.tierCode ?: "STANDARD PAY-AS-YOU-GO (<=12%)"}"
+                   "Active Pass: ${activePass?.tierCode ?: "STANDARD PAY-AS-YOU-GO (<=12%)"} | Mode: ${payInfo.paymentMode}$recentTxLine"
         })
 
         val walletBtnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 8, 0, 12)
             addView(Button(this@ContractorMainActivity).apply {
-                text = "+PHP 500 Top-Up (+₱25 Bonus)"
+                text = if (payInfo.paymentMode == "MANUAL") "+PHP 500 Top-Up (Manual Ref)" else "+PHP 500 Top-Up (PayMongo QR Ph)"
                 setBackgroundColor(Color.parseColor("#10B981"))
                 setTextColor(Color.parseColor("#070D19"))
                 setOnClickListener {
-                    uiScope.launch {
-                        AlistoKernelClient.topUpCreditsQrPhRpc(500.0).onSuccess { routeContractorByAccountState() }.onFailure { err -> AlertDialog.Builder(this@ContractorMainActivity).setTitle("Payment Security Gate").setMessage(err.message).setPositiveButton("OK", null).show() }
-                    }
+                    initiateContractorPaymentFlow("WALLET_TOPUP", 500.0, null, "Prepaid Wallet Top-Up (+PHP 25 Bonus)")
                 }
             })
             addView(Button(this@ContractorMainActivity).apply {
-                text = "Activate Grind Pass (0% 24/7)"
+                text = if (payInfo.paymentMode == "MANUAL") "Grind Pass (Manual Ref)" else "Grind Pass (PayMongo)"
                 setBackgroundColor(Color.parseColor("#FBBF24"))
                 setTextColor(Color.parseColor("#070D19"))
                 setOnClickListener {
-                    uiScope.launch {
-                        AlistoKernelClient.purchaseSubscriptionPassRpc("GRIND_PASS").onSuccess { routeContractorByAccountState() }.onFailure { err -> AlertDialog.Builder(this@ContractorMainActivity).setTitle("Payment Security Gate").setMessage(err.message).setPositiveButton("OK", null).show() }
-                    }
+                    initiateContractorPaymentFlow("SUBSCRIPTION_PASS", 8000.0, "GRIND_PASS", "Hard-Working Grind Pass (0% 24/7)")
                 }
             })
         }
@@ -586,6 +588,77 @@ class ContractorMainActivity : AppCompatActivity() {
             setPadding(0, 0, 0, 4)
         })
         addView(field)
+    }
+
+
+    private fun initiateContractorPaymentFlow(
+        purpose: String,
+        amountPhp: Double,
+        tierCode: String?,
+        titleLabel: String
+    ) {
+        val payInfo = AlistoKernelClient.currentPaymentModeInfo
+        if (payInfo.paymentMode == "MANUAL") {
+            val layout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(36, 24, 36, 16)
+                setBackgroundColor(Color.parseColor("#0F172A"))
+            }
+            layout.addView(TextView(this).apply {
+                text = "Amount Due: PHP ${"%.2f".format(amountPhp)}\n\n${payInfo.manualInstructions}"
+                setTextColor(Color.parseColor("#E2E8F0"))
+                textSize = 13f
+                setPadding(0, 0, 0, 14)
+            })
+            val refInput = styledInput("GCash / QR Ph / Clinic Receipt Reference No.")
+            layout.addView(labeledField("Payment Reference Number", refInput))
+
+            AlertDialog.Builder(this)
+                .setTitle("Manual Payment • $titleLabel")
+                .setView(layout)
+                .setPositiveButton("Submit for Admin Approval") { _, _ ->
+                    val ref = refInput.text.toString().trim()
+                    uiScope.launch {
+                        val res = AlistoKernelClient.submitManualPaymentRequestRpc(purpose, amountPhp, tierCode, ref)
+                        res.onSuccess {
+                            Toast.makeText(
+                                this@ContractorMainActivity,
+                                "Reference submitted! Admin will approve and credit shortly.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            routeContractorByAccountState()
+                        }.onFailure { err ->
+                            AlertDialog.Builder(this@ContractorMainActivity)
+                                .setTitle("Submission Error")
+                                .setMessage(err.message)
+                                .setPositiveButton("OK", null)
+                                .show()
+                        }
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+            return
+        }
+
+        // PAYMONGO_TEST or PAYMONGO_LIVE checkout via dynamic Edge Function
+        Toast.makeText(this, "Preparing PayMongo (${payInfo.paymentMode}) checkout...", Toast.LENGTH_SHORT).show()
+        uiScope.launch {
+            val res = AlistoKernelClient.initiatePayMongoCheckout(purpose, amountPhp, tierCode)
+            res.onSuccess { json ->
+                val url = json.optString("checkout_url", "")
+                val txRef = json.optString("tx_ref", "")
+                Toast.makeText(this@ContractorMainActivity, "Opening PayMongo Checkout [$txRef]", Toast.LENGTH_LONG).show()
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                routeContractorByAccountState()
+            }.onFailure { err ->
+                AlertDialog.Builder(this@ContractorMainActivity)
+                    .setTitle("PayMongo Checkout Gate")
+                    .setMessage(err.message)
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+        }
     }
 
     override fun onDestroy() {
