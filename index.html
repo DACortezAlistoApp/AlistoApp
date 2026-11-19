@@ -3,1163 +3,591 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Alisto Command Console | Alisto Network PH — 11-Engine V3 Hybrid Monetization & RBAC</title>
-  <link rel="stylesheet" href="styles.css" />
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <title>Alisto App | Alisto Network PH — On-Demand Skills, Errands & Local Mobility</title>
+  <meta name="description" content="Alisto App by Alisto Network PH connects Filipino households and businesses with verified skilled trades, multi-stop delivery and errands, and compliant sub-400cc local mobility." />
+  <style>
+    :root {
+      --bg-dark: #070a12;
+      --bg-card: #0f172a;
+      --bg-panel: #1e293b;
+      --cyan-accent: #00f2fe;
+      --amber-core: #fbbf24;
+      --emerald-ok: #34d399;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --border-subtle: #334155;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 15% 10%, rgba(0, 242, 254, 0.08), transparent 36%),
+                  radial-gradient(circle at 85% 0%, rgba(251, 191, 36, 0.06), transparent 32%),
+                  var(--bg-dark);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    .container {
+      width: 100%;
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Header */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: rgba(7, 10, 18, 0.86);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(51, 65, 85, 0.55);
+    }
+    .nav-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 68px;
+      gap: 16px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+    }
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, var(--cyan-accent), #0284c7);
+      color: #070a12;
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      font-size: 1.05rem;
+    }
+    .brand-sub {
+      display: block;
+      font-size: 0.68rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      line-height: 1.1;
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+    .nav-links a:hover { color: var(--cyan-accent); }
+    .nav-cta {
+      padding: 8px 16px;
+      border-radius: 8px;
+      background: var(--cyan-accent);
+      color: #070a12;
+      font-weight: 700;
+      font-size: 0.86rem;
+    }
+    .nav-cta:hover { filter: brightness(1.08); }
+
+    /* Hero */
+    .hero {
+      padding: 84px 0 64px;
+      text-align: center;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid var(--border-subtle);
+      color: var(--cyan-accent);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 22px;
+    }
+    .eyebrow-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--emerald-ok);
+    }
+    h1 {
+      margin: 0 auto 18px;
+      max-width: 820px;
+      font-size: clamp(2.1rem, 4.4vw, 3.35rem);
+      line-height: 1.12;
+      font-weight: 850;
+      letter-spacing: -0.02em;
+    }
+    .hero-accent {
+      background: linear-gradient(90deg, var(--cyan-accent), var(--amber-core));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .hero p {
+      margin: 0 auto 32px;
+      max-width: 680px;
+      font-size: 1.06rem;
+      color: var(--text-muted);
+    }
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 14px;
+    }
+    .btn-primary, .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 13px 24px;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 0.95rem;
+      transition: transform 0.15s ease, border-color 0.15s ease, filter 0.15s ease;
+    }
+    .btn-primary {
+      background: var(--cyan-accent);
+      color: #070a12;
+    }
+    .btn-primary:hover { transform: translateY(-1px); filter: brightness(1.06); }
+    .btn-secondary {
+      background: var(--bg-card);
+      color: var(--text-main);
+      border: 1px solid var(--border-subtle);
+    }
+    .btn-secondary:hover { border-color: var(--cyan-accent); transform: translateY(-1px); }
+
+    .metrics-strip {
+      margin-top: 52px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 14px;
+      text-align: left;
+    }
+    .metric-card {
+      background: rgba(15, 23, 42, 0.78);
+      border: 1px solid rgba(51, 65, 85, 0.75);
+      border-radius: 12px;
+      padding: 16px 18px;
+    }
+    .metric-label {
+      font-size: 0.74rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+    }
+    .metric-value {
+      margin-top: 4px;
+      font-size: 1.08rem;
+      font-weight: 800;
+      color: var(--text-main);
+    }
+
+    /* Sections */
+    section { padding: 56px 0; }
+    .section-head {
+      margin-bottom: 30px;
+      max-width: 720px;
+    }
+    .section-kicker {
+      font-size: 0.76rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--amber-core);
+      margin-bottom: 6px;
+    }
+    h2 {
+      margin: 0 0 10px;
+      font-size: clamp(1.55rem, 2.8vw, 2.15rem);
+      line-height: 1.2;
+      letter-spacing: -0.015em;
+    }
+    .section-head p {
+      margin: 0;
+      color: var(--text-muted);
+      font-size: 0.98rem;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 18px;
+    }
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 24px;
+    }
+    .card-tag {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: rgba(0, 242, 254, 0.1);
+      color: var(--cyan-accent);
+      margin-bottom: 14px;
+    }
+    .card-tag.amber {
+      background: rgba(251, 191, 36, 0.12);
+      color: var(--amber-core);
+    }
+    .card-tag.emerald {
+      background: rgba(52, 211, 153, 0.12);
+      color: var(--emerald-ok);
+    }
+    .card h3 {
+      margin: 0 0 10px;
+      font-size: 1.15rem;
+    }
+    .card p {
+      margin: 0;
+      color: var(--text-muted);
+      font-size: 0.93rem;
+    }
+    .card ul {
+      margin: 14px 0 0;
+      padding-left: 18px;
+      color: #cbd5e1;
+      font-size: 0.88rem;
+    }
+    .card li { margin-bottom: 6px; }
+
+    /* Downloads */
+    .download-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+      gap: 20px;
+    }
+    .download-card {
+      background: linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(15, 23, 42, 0.72));
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 18px;
+    }
+    .download-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .pill {
+      font-size: 0.74rem;
+      padding: 4px 9px;
+      border-radius: 6px;
+      background: var(--bg-panel);
+      color: #cbd5e1;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    .download-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      padding: 13px 18px;
+      border-radius: 10px;
+      font-weight: 800;
+      font-size: 0.92rem;
+      text-align: center;
+    }
+    .download-btn.customer {
+      background: var(--cyan-accent);
+      color: #070a12;
+    }
+    .download-btn.contractor {
+      background: var(--amber-core);
+      color: #070a12;
+    }
+    .download-note {
+      margin-top: 18px;
+      padding: 14px 18px;
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid rgba(51, 65, 85, 0.7);
+      font-size: 0.84rem;
+      color: var(--text-muted);
+    }
+
+    /* Footer + Discreet Authorized Access Control */
+    footer {
+      margin-top: 40px;
+      border-top: 1px solid rgba(51, 65, 85, 0.65);
+      background: rgba(7, 10, 18, 0.92);
+      padding: 26px 0;
+    }
+    .footer-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+    .footer-right {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .staff-gate-btn {
+      background: transparent;
+      border: 1px solid rgba(51, 65, 85, 0.45);
+      border-radius: 7px;
+      width: 30px;
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #64748b;
+      opacity: 0.32;
+      cursor: pointer;
+      transition: opacity 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+    }
+    .staff-gate-btn:hover,
+    .staff-gate-btn:focus-visible {
+      opacity: 0.95;
+      color: var(--cyan-accent);
+      border-color: rgba(0, 242, 254, 0.5);
+      outline: none;
+    }
+
+    @media (max-width: 720px) {
+      .nav-links a:not(.nav-cta) { display: none; }
+      .hero { padding: 56px 0 40px; }
+    }
+  </style>
 </head>
 <body>
-  <!-- ==================================================================== -->
-  <!-- FULL-SCREEN DATABASE AUTHENTICATION GATE (ENGINE 01 RBAC LOCK)       -->
-  <!-- ==================================================================== -->
-  <div id="authGateOverlay" class="auth-gate-overlay">
-    <div class="auth-card">
-      <div class="auth-brand-row">
-        <div class="company-logo-wrap">
-          <svg class="company-svg" viewBox="0 0 660 160" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              <linearGradient id="cyanBorderAuth" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#00f2fe"/>
-                <stop offset="100%" stop-color="#0284c7"/>
-              </linearGradient>
-              <linearGradient id="shieldFacetLeftAuth" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#0284c7"/>
-                <stop offset="100%" stop-color="#0369a1"/>
-              </linearGradient>
-              <linearGradient id="shieldFacetRightAuth" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#38bdf8"/>
-                <stop offset="100%" stop-color="#0284c7"/>
-              </linearGradient>
-              <radialGradient id="amberGlowAuth" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stop-color="#fbbf24" stop-opacity="1"/>
-                <stop offset="70%" stop-color="#f59e0b" stop-opacity="0.7"/>
-                <stop offset="100%" stop-color="#f59e0b" stop-opacity="0"/>
-              </radialGradient>
-            </defs>
-            <g transform="translate(20, 10)">
-              <path d="M 65 5 L 122 30 L 108 114 L 65 142 L 22 114 L 8 30 Z"
-                    fill="#090d16" stroke="url(#cyanBorderAuth)" stroke-width="4.5" stroke-linejoin="round"/>
-              <path d="M 65 10 L 65 136 L 24 110 L 12 32 Z" fill="url(#shieldFacetLeftAuth)" opacity="0.95"/>
-              <path d="M 65 10 L 118 32 L 106 110 L 65 136 Z" fill="url(#shieldFacetRightAuth)" opacity="0.95"/>
-              <circle class="anim-amber" cx="65" cy="76" r="20" fill="url(#amberGlowAuth)"/>
-              <polygon class="anim-amber" points="65,60 74,78 56,78" fill="#fbbf24"/>
-              <path d="M 65 22 L 98 116 L 82 116 L 65 72 L 48 116 L 32 116 Z" fill="#070a12" stroke="#00f2fe" stroke-width="1.5"/>
-              <line x1="42" y1="82" x2="88" y2="82" stroke="#00f2fe" stroke-width="3.5" stroke-linecap="round"/>
-              <circle class="anim-node-left" cx="42" cy="82" r="4.5" fill="#00f2fe"/>
-              <circle class="anim-node-right" cx="88" cy="82" r="4.5" fill="#00f2fe"/>
-            </g>
-            <g transform="translate(-35, 0)">
-              <text x="220" y="73" font-family="'Orbitron', sans-serif" font-weight="900" font-size="50" fill="#ffffff" letter-spacing="3.5">ALISTO</text>
-              <rect x="220" y="87" width="285" height="3.5" fill="#1e293b" rx="1.75"/>
-              <rect class="anim-sweep" x="220" y="87" width="60" height="3.5" fill="#00f2fe" rx="1.75"/>
-              <text x="220" y="121" font-family="'Rajdhani', sans-serif" font-weight="900" font-size="27.5" fill="#38bdf8" letter-spacing="9">NETWORK PH</text>
-            </g>
-          </svg>
-        </div>
-        <div class="app-logo-badge">
-          <svg class="nexus-pin-svg" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
-            <circle class="pulse-ring ring-1" cx="200" cy="200" r="10" />
-            <circle class="pulse-ring ring-2" cx="200" cy="200" r="10" />
-            <path class="a-stroke" d="M 100 100 L 300 100 L 200 320 Z M 150 180 L 250 180" />
-            <text x="200" y="385" text-anchor="middle" font-size="52" letter-spacing="8" class="nexus-text-color">ALISTO</text>
-          </svg>
-        </div>
-      </div>
-
-      <div class="auth-title-block">
-        <h1>MASTER COMMAND CONSOLE (V3)</h1>
-        <p>11-Engine Supabase Micro-Kernel • Biometric & RBAC Governance Gate</p>
-      </div>
-
-      <div id="authErrorBanner" class="auth-error-banner" style="display:none;"></div>
-
-      <div class="form-stack">
-        <div>
-          <label>Username, Mobile Phone, or Email (`public.users`)</label>
-          <input type="text" id="authIdentifierInput" placeholder="e.g., superadmin" autocomplete="username" onkeydown="if(event.key==='Enter') submitConsoleLogin()" />
-        </div>
-        <div>
-          <label>Permanent Non-Expiring Password (`public.user_credentials`)</label>
-          <div class="pw-input-wrap">
-            <input type="password" id="authPasswordInput" placeholder="Enter your password" autocomplete="current-password" onkeydown="if(event.key==='Enter') submitConsoleLogin()" />
-            <button type="button" class="btn-xs" onclick="toggleAuthPasswordVisibility()">Show/Hide</button>
-          </div>
-        </div>
-        <button id="authSubmitBtn" class="btn-primary auth-submit-btn" onclick="submitConsoleLogin()">
-          AUTHENTICATE & UNLOCK CONSOLE
-        </button>
-      </div>
-
-      <div class="auth-footer-meta">
-        <div>Founder, Chief Systems Architect & Full-Lifecycle Architect: <strong>D. A. Cortez</strong></div>
-        <div style="margin-top:0.2rem;">Zero-Cost Operational Mandate • Verified against PostgreSQL <code>authenticate_user_rpc</code></div>
-      </div>
+  <header>
+    <div class="container nav-bar">
+      <a class="brand" href="#top">
+        <span class="brand-mark">A</span>
+        <span>
+          ALISTO APP
+          <span class="brand-sub">Alisto Network PH</span>
+        </span>
+      </a>
+      <nav class="nav-links">
+        <a href="#verticals">Services</a>
+        <a href="#safety">Safety &amp; Compliance</a>
+        <a href="#downloads" class="nav-cta">Download APKs</a>
+      </nav>
     </div>
-  </div>
+  </header>
 
-  <!-- ==================================================================== -->
-  <!-- PROTECTED CONSOLE SHELL (HIDDEN UNTIL AUTHENTICATED)                 -->
-  <!-- ==================================================================== -->
-  <div id="protectedConsoleShell" style="display:none;">
-    <header class="topbar">
-      <!-- LEFT: ALISTO NETWORK PH (COMPANY ANIMATED LOGO) -->
-      <div class="brand-cluster">
-        <div class="company-logo-wrap" title="Alisto Network PH — Official Corporate Emblem">
-          <svg class="company-svg" viewBox="0 0 660 160" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              <linearGradient id="cyanBorderDark" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#00f2fe"/>
-                <stop offset="100%" stop-color="#0284c7"/>
-              </linearGradient>
-              <linearGradient id="shieldFacetLeftDark" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#0284c7"/>
-                <stop offset="100%" stop-color="#0369a1"/>
-              </linearGradient>
-              <linearGradient id="shieldFacetRightDark" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#38bdf8"/>
-                <stop offset="100%" stop-color="#0284c7"/>
-              </linearGradient>
-              <radialGradient id="amberGlowDark" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stop-color="#fbbf24" stop-opacity="1"/>
-                <stop offset="70%" stop-color="#f59e0b" stop-opacity="0.7"/>
-                <stop offset="100%" stop-color="#f59e0b" stop-opacity="0"/>
-              </radialGradient>
-            </defs>
-            <g id="shield-logo" transform="translate(20, 10)">
-              <path d="M 65 5 L 122 30 L 108 114 L 65 142 L 22 114 L 8 30 Z"
-                    fill="#090d16" stroke="url(#cyanBorderDark)" stroke-width="4.5" stroke-linejoin="round"/>
-              <path d="M 65 10 L 65 136 L 24 110 L 12 32 Z" fill="url(#shieldFacetLeftDark)" opacity="0.95"/>
-              <path d="M 65 10 L 118 32 L 106 110 L 65 136 Z" fill="url(#shieldFacetRightDark)" opacity="0.95"/>
-              <circle class="anim-amber" cx="65" cy="76" r="20" fill="url(#amberGlowDark)"/>
-              <polygon class="anim-amber" points="65,60 74,78 56,78" fill="#fbbf24"/>
-              <path d="M 65 22 L 98 116 L 82 116 L 65 72 L 48 116 L 32 116 Z" fill="#070a12" stroke="#00f2fe" stroke-width="1.5"/>
-              <line x1="42" y1="82" x2="88" y2="82" stroke="#00f2fe" stroke-width="3.5" stroke-linecap="round"/>
-              <circle class="anim-node-left" cx="42" cy="82" r="4.5" fill="#00f2fe"/>
-              <circle class="anim-node-right" cx="88" cy="82" r="4.5" fill="#00f2fe"/>
-            </g>
-            <g id="brand-text" transform="translate(-35, 0)">
-              <text x="220" y="73" font-family="'Orbitron', sans-serif" font-weight="900" font-size="50" fill="#ffffff" letter-spacing="3.5">ALISTO</text>
-              <rect x="220" y="87" width="285" height="3.5" fill="#1e293b" rx="1.75"/>
-              <rect class="anim-sweep" x="220" y="87" width="60" height="3.5" fill="#00f2fe" rx="1.75"/>
-              <text x="220" y="121" font-family="'Rajdhani', sans-serif" font-weight="900" font-size="27.5" fill="#38bdf8" letter-spacing="9">NETWORK PH</text>
-            </g>
-          </svg>
+  <main id="top">
+    <section class="hero">
+      <div class="container">
+        <div class="eyebrow">
+          <span class="eyebrow-dot"></span>
+          Android 16 (API 36) Pilot Release • Central Luzon &amp; Nationwide Ready
         </div>
-        <div class="header-divider"></div>
-        <div>
-          <div class="brand-title">MASTER COMMAND CONSOLE <span class="badge-kernel">11-ENGINE V3 MICRO-KERNEL</span></div>
-          <div class="brand-sub">Founder, Chief Systems Architect & Full-Lifecycle Architect: <strong>D. A. Cortez</strong> • Angeles City & Magalang (Region III)</div>
+        <h1>
+          One Native Platform for <span class="hero-accent">Verified Skills, Errands &amp; Local Mobility</span>.
+        </h1>
+        <p>
+          Alisto Network PH connects households, businesses, and independent contractors across the Philippines with transparent bidding, local-road spatial tracking, and regulatory-ready safety controls.
+        </p>
+        <div class="hero-actions">
+          <a href="#downloads" class="btn-primary">Get Alisto for Android</a>
+          <a href="#verticals" class="btn-secondary">Explore Service Verticals</a>
         </div>
-      </div>
 
-      <!-- RIGHT: SESSION IDENTITY BADGE + ALISTO APP CONCEPT LOGO -->
-      <div class="nexus-cluster">
-        <div class="architect-meta">
-          <div id="activeSessionUserLabel" style="font-weight:700;color:#fbbf24;">Not Authenticated</div>
-          <div style="display:flex;gap:0.4rem;justify-content:flex-end;align-items:center;margin-top:0.25rem;">
-            <span id="activeSessionRoleBadge" class="engine-tag">LOCKED</span>
-            <span id="kernelConnectionBadge" class="conn-pill">KERNEL: LIVE</span>
-            <button class="btn-danger" onclick="logoutConsoleSession()" style="padding:0.2rem 0.55rem;">Sign Out / Lock</button>
+        <div class="metrics-strip">
+          <div class="metric-card">
+            <div class="metric-label">Platform Build</div>
+            <div class="metric-value">Native Kotlin • API 36</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Privacy Standard</div>
+            <div class="metric-value">RA 10173 Consent Audited</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Mobility Governance</div>
+            <div class="metric-value">LTFRB 2026 Telemetry Ready</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Routing Policy</div>
+            <div class="metric-value">Sub-400cc Local Roads</div>
           </div>
         </div>
-        <div class="app-logo-badge" title="Alisto Concept Logo (Project Nexus) — Customer & Contractor Apps">
-          <svg class="nexus-pin-svg" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
-            <circle class="pulse-ring ring-1" cx="200" cy="200" r="10" />
-            <circle class="pulse-ring ring-2" cx="200" cy="200" r="10" />
-            <path class="a-stroke" d="M 100 100 L 300 100 L 200 320 Z M 150 180 L 250 180" />
-            <text x="200" y="385" text-anchor="middle" font-size="52" letter-spacing="8" class="nexus-text-color">ALISTO</text>
-          </svg>
-        </div>
-      </div>
-    </header>
-
-    <section class="role-bar">
-      <div class="role-tabs">
-        <button id="tabBtnOperatorOps" class="role-tab" data-view="operator_ops" onclick="switchConsoleView('operator_ops')">
-          ADMIN & OPERATOR CONSOLE (Lookup, Onboarding, KYC Queue & Forensics)
-        </button>
-        <button id="tabBtnSuperAdmin" class="role-tab" data-view="superadmin" onclick="switchConsoleView('superadmin')">
-          SUPERADMIN CONTROL CENTER (Ledger Health, Subscriptions & Verticals)
-        </button>
-        <button id="tabBtnPayMongo" class="role-tab" data-view="paymongo_gateway" onclick="switchConsoleView('paymongo_gateway')" style="display:none;">
-          PAYMENT GATEWAY &amp; PAYMONGO (Mode Switch &amp; API Vault)
-        </button>
-        <button id="tabBtnLguAdmin" class="role-tab" data-view="lgu_admin" onclick="switchConsoleView('lgu_admin')">
-          LGU / PESO & OPERATOR AUDIT TRAIL
-        </button>
-        <button id="tabBtnApkPortal" class="role-tab" data-view="apk_portal" onclick="switchConsoleView('apk_portal')">
-          NATIVE ANDROID KOTLIN APKs & MY ACCOUNT
-        </button>
-      </div>
-      <div class="db-config-bar">
-        <button class="btn-outline" onclick="syncFromSupabase()">Refresh Live Kernel</button>
       </div>
     </section>
 
-    <!-- LIVE SERVICE VERTICAL PENETRATION STRIP -->
-    <section class="vertical-status-strip" id="verticalStatusStrip"></section>
-
-    <main class="workspace">
-      <!-- ==================================================================== -->
-      <!-- 1. ADMIN & OPERATOR CONSOLE (LOOKUP, KYC QUEUE, ONBOARDING, BOOKINGS)-->
-      <!-- ==================================================================== -->
-      <section id="view-operator_ops" class="role-view">
-        <div class="kpi-strip" id="operatorKpiStrip"></div>
-
-        <!-- SECTION 1: USERNAME OR FIRST/LAST NAME COMBO LOOKUP -->
-        <div class="card" style="margin-bottom: 1.25rem; border-color: var(--cyan-accent);">
-          <div class="card-header">
-            <h2>1. User Account Lookup (Search by `@username` or First Name / Last Name Combo)</h2>
-            <span class="engine-tag">CLICK @USERNAME TO OPEN FULL PROFILE COMMAND</span>
-          </div>
-          <p class="muted-note">
-            Search by <strong><code>@username</code></strong> or <strong>First Name / Last Name combination</strong>. Click any matching <strong><code>@username</code></strong> badge to open their full Profile Command Modal (Reset Password, Update Phone/Skills/GPS Home Pin, Upload Compressed VGA Profile Photo & 1024px Certs/OR-CR/License, Approve/Flag `PENDING_REVIEW` KYC, Credit/Debit Wallet with +₱25 Bonus, Activate Subscription Passes, Set Manual User Commission Rate, or View Contractor CSAT).
-          </p>
-          <div class="lookup-search-bar">
-            <input type="text" id="userLookupQueryInput" placeholder="Enter @username or First Name / Last Name combo (e.g. 'marco' or 'Marco Pineda')..." oninput="renderOperatorUsersTable()" />
-            <select id="userRoleFilter" onchange="renderOperatorUsersTable()">
-              <option value="ALL">All Roles & States</option>
-              <option value="PENDING_KYC">Pending KYC / Resubmission Queue</option>
-              <option value="contractor">Contractors Only</option>
-              <option value="customer">Customers Only</option>
-              <option value="admin">Admin Operators</option>
-              <option value="FROZEN">Suspended Accounts</option>
-            </select>
-            <button class="btn-primary" onclick="renderOperatorUsersTable()">Lookup Accounts</button>
-          </div>
-          <div id="userLookupMatchCount" style="font-size:0.78rem;color:var(--amber-core);margin-bottom:0.65rem;font-weight:700;"></div>
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Clickable `@username`</th>
-                <th>Name, Nickname & Role</th>
-                <th>Phone (Call Verify) & GPS Home Pin</th>
-                <th>Wallet, Subscription Pass & Commission</th>
-                <th>CSAT / Docs / Transport</th>
-                <th>Account State (`account_status`)</th>
-                <th>Command</th>
-              </tr>
-            </thead>
-            <tbody id="operatorUsersTable"></tbody>
-          </table>
+    <section id="verticals">
+      <div class="container">
+        <div class="section-head">
+          <div class="section-kicker">Three Integrated Verticals</div>
+          <h2>Built for Everyday Filipino Commerce &amp; Services</h2>
+          <p>Customers request on-demand help from one unified app while verified contractors choose their active shifts across eligible verticals.</p>
         </div>
 
-        <!-- SECTION 2: MANUAL ADMIN VERIFICATION & DOCUMENT RESUBMISSION PIPELINE -->
-        <div class="card" style="margin-bottom: 1.25rem;">
-          <div class="card-header">
-            <h2>2. Contractor Verification, Phone Call Check & Document Resubmission Pipeline (Section 4.3)</h2>
-            <span class="engine-tag">PENDING_REVIEW → ACTIVE / RESUBMISSION_REQUIRED</span>
-          </div>
-          <p class="muted-note">
-            Zero-Cost Operational Verification: Inspect compressed compliance uploads (Driver's License, OR/CR, Vehicle Photo, Trade Certs), place a direct manual verification voice call to the contractor's mobile number, then <strong>Approve & Activate (`ACTIVE`)</strong> or <strong>Flag Specific Blurry Files for Resubmission (`RESUBMISSION_REQUIRED`)</strong> without requiring full re-registration.
-          </p>
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Contractor (`@username`)</th>
-                <th>Direct Call Phone & Anchor</th>
-                <th>Selected Verticals & Vehicle Radius</th>
-                <th>Submitted Compliance Assets (1024px)</th>
-                <th>Verification Status</th>
-                <th>Manual Admin Decision</th>
-              </tr>
-            </thead>
-            <tbody id="operatorKycQueueTable"></tbody>
-          </table>
-        </div>
-
-        <div class="grid-2">
-          <!-- SECTION 3: SEPARATED ONBOARDING CLINIC DESK -->
-          <div class="card">
-            <div class="card-header">
-              <h2>3. Physical Clinic & Operator Onboarding Desk (V2/V3 Spec)</h2>
-              <span class="engine-tag">DYNAMIC VERTICAL EXPANSION</span>
-            </div>
-            <div class="form-stack">
-              <div class="form-row">
-                <div>
-                  <label>Portal / Account Role</label>
-                  <select id="onbRole" onchange="toggleOnboardContractorFields()">
-                    <option value="contractor">Contractor Portal (Skills + Conditional Transport)</option>
-                    <option value="customer">Customer Portal (Household / Business + GPS Pin)</option>
-                    <option id="onbAdminOption" value="admin">Admin Operator (SuperAdmin Only)</option>
-                  </select>
-                </div>
-                <div>
-                  <label>Login Username (Optional Auto-Gen)</label>
-                  <input type="text" id="onbUsername" placeholder="e.g., marco_hvac" />
-                </div>
-              </div>
-
-              <div class="form-row">
-                <div>
-                  <label>First Name (Legal)</label>
-                  <input type="text" id="onbFirstName" placeholder="e.g., Juan" />
-                </div>
-                <div>
-                  <label>Last Name (Legal)</label>
-                  <input type="text" id="onbLastName" placeholder="e.g., Dela Cruz" />
-                </div>
-              </div>
-
-              <div class="form-row">
-                <div>
-                  <label>Preferred Nickname (Friendly Greeting)</label>
-                  <input type="text" id="onbNickname" placeholder="e.g., Kuya Juan" />
-                </div>
-                <div>
-                  <label>Date of Birth (PII Verification)</label>
-                  <input type="date" id="onbBirthDate" value="1992-05-15" />
-                </div>
-              </div>
-
-              <div class="form-row">
-                <div>
-                  <label>Active Mobile Phone Number (Mandatory for Call Coordination)</label>
-                  <input type="text" id="onbPhone" placeholder="+63917XXXXXXX" />
-                </div>
-                <div>
-                  <label>Email Address (Receipts & Password Reset)</label>
-                  <input type="email" id="onbEmail" placeholder="user@alisto.ph" />
-                </div>
-              </div>
-
-              <div class="form-row">
-                <div>
-                  <label>Permanent Non-Expiring Password</label>
-                  <input type="text" id="onbPassword" value="Alisto2026!" />
-                </div>
-                <div>
-                  <label>Municipality & Barangay Zone</label>
-                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.35rem;">
-                    <select id="onbMunicipality">
-                      <option value="Angeles City">Angeles City</option>
-                      <option value="Magalang">Magalang</option>
-                    </select>
-                    <select id="onbBarangay">
-                      <option value="Malabanias">Brgy. Malabanias</option>
-                      <option value="Balibago">Brgy. Balibago</option>
-                      <option value="Sto. Rosario">Brgy. Sto. Rosario</option>
-                      <option value="Pampang">Brgy. Pampang</option>
-                      <option value="Cutcut">Brgy. Cutcut</option>
-                      <option value="San Nicolas (Magalang)">Brgy. San Nicolas</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label>Registered Home / Dispatch Anchor Address & GPS Pin-Drop</label>
-                <div style="display:grid;grid-template-columns:1fr 110px 110px auto;gap:0.4rem;">
-                  <input type="text" id="onbAddressText" placeholder="House No., Street, Subdivision, Brgy" />
-                  <input type="number" id="onbHomeLat" value="15.1450" step="0.0001" title="Home Latitude" />
-                  <input type="number" id="onbHomeLng" value="120.5887" step="0.0001" title="Home Longitude" />
-                  <button type="button" class="btn-xs" onclick="useDeviceGpsForOnboarding()">Use Current GPS</button>
-                </div>
-              </div>
-
-              <!-- CONTRACTOR DYNAMIC VERTICAL EXPANSION -->
-              <div id="onbContractorSection" class="contractor-onb-box">
-                <label style="color:var(--cyan-accent);font-weight:700;">Primary Vertical: On-Demand Skills Marketplace (Default Focus)</label>
-                <div class="checkbox-grid" id="onbSkillsCheckboxes">
-                  <label><input type="checkbox" value="Plumbing" checked /> Plumbing</label>
-                  <label><input type="checkbox" value="Electrical Repair" checked /> Electrical</label>
-                  <label><input type="checkbox" value="Aircon & HVAC" checked /> Aircon Servicing</label>
-                  <label><input type="checkbox" value="Carpentry" /> Carpentry</label>
-                  <label><input type="checkbox" value="Appliance Repair" /> Appliance Repair</label>
-                  <label><input type="checkbox" value="General Handyman" /> General Handyman</label>
-                </div>
-
-                <label style="color:var(--amber-core);font-weight:700;margin-top:0.65rem;">Secondary Verticals: Conditional Transport Opt-In</label>
-                <div class="checkbox-grid">
-                  <label><input type="checkbox" id="onbOptDelivery" onchange="toggleConditionalTransportFields()" /> Opt-In: Delivery & Logistics Rider</label>
-                  <label><input type="checkbox" id="onbOptRideHailing" onchange="toggleConditionalTransportFields()" /> Opt-In: Ride-Hailing Rider (Pending Legislation)</label>
-                </div>
-
-                <!-- CONDITIONAL TRANSPORT CREDENTIALS -->
-                <div id="onbTransportCredentialsBox" style="display:none;margin-top:0.65rem;padding:0.65rem;background:#090d16;border:1px solid var(--amber-core);border-radius:6px;">
-                  <div class="form-row">
-                    <div>
-                      <label>Sub-400cc Vehicle Classification (Automobiles Excluded)</label>
-                      <select id="onbVehicleType">
-                        <option value="motorcycle">Motorcycle (<400cc • 1.5km + 500m radius)</option>
-                        <option value="tricycle">Tricycle (500m deterministic radius)</option>
-                        <option value="micro_mobility">Micro-Mobility / E-Bike (300m radius)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label>Initial Account Verification Gate</label>
-                      <select id="onbInitialStatus">
-                        <option value="PENDING_REVIEW">PENDING_REVIEW (Hold for Admin Call & Doc Check)</option>
-                        <option value="ACTIVE">ACTIVE (Verified On-Site at Alisto Clinic)</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="form-row" style="margin-top:0.65rem;">
-                  <div>
-                    <label>Starter Prepaid Wallet Credits (PHP — ≥₱500 gets +₱25 Bonus)</label>
-                    <input type="number" id="onbCredits" value="500" min="0" step="100" />
-                  </div>
-                  <div>
-                    <label>Manual User Commission Rate (% — Blank for Global ≤12%)</label>
-                    <input type="number" id="onbCustomComm" placeholder="Default (12%)" min="0" max="12" step="0.5" />
-                  </div>
-                </div>
-              </div>
-
-              <button class="btn-primary" onclick="operatorOnboardUser()">+ Submit Onboarding Registration</button>
-            </div>
-          </div>
-
-          <!-- SECTION 4: CONTRACTOR MANUAL COMMISSION & SUBSCRIPTION PASS OVERVIEW -->
-          <div class="card">
-            <div class="card-header">
-              <h2>4. Contractor Commission, Subscription Passes & Shift Status</h2>
-              <span class="engine-tag">ENGINE 03 + ENGINE 04</span>
-            </div>
-            <div class="commission-control-box" style="margin-bottom:0.9rem;">
-              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;">
-                <div>
-                  <div style="font-size:0.76rem;color:var(--text-muted);">Global Pay-As-You-Go Commission Cap (SuperAdmin Exclusive)</div>
-                  <div id="opGlobalCommReadonlyDisplay" style="font-size:1.3rem;font-weight:800;color:var(--amber-core);">12.0%</div>
-                </div>
-                <div id="opSuperAdminJumpWrap"></div>
-              </div>
-              <small style="display:block;margin-top:0.3rem;color:var(--text-muted);">
-                <strong>Privilege Rule:</strong> Only <code>super_admin</code> can enable/disable Service Verticals, set Global Commission Rates, and adjust Subscription Tier Pricing. Both <code>super_admin</code> and <code>admin</code> can set the <strong>Manual Commission Rate</strong> of a specific user or activate Subscription Passes.
-              </small>
-            </div>
-
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Contractor (`@username`)</th>
-                  <th>Wallet & Pass</th>
-                  <th>Vehicle Radius</th>
-                  <th>Effective Rate</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="operatorContractorCommTable"></tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- DEMAND HEAT MAP CLUSTERS & NATIONWIDE LOCAL-ROAD TELEMETRY (MASTER SPEC V2.0) -->
-        <div class="card" style="margin-top: 1.25rem; border-color: var(--emerald-ok);">
-          <div class="card-header">
-            <h2>6. Nationwide Demand Heat Map Clusters & Local-Road Telemetry (`v_demand_heatmap_clusters`)</h2>
-            <span class="engine-tag">AVOID=HT LOCAL-ROAD ROUTING • 10S GPS HEARTBEAT</span>
-          </div>
-          <p class="muted-note">
-            Real-time and historical pickup clustering across nationwide corridors (zero municipal geofencing lockouts). Clicking any cluster center launches Google Maps with <code>avoid=highways,tolls</code> (<code>avoid=ht</code>).
-          </p>
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Corridor / Barangay Zone</th>
-                <th>Vertical</th>
-                <th>Cluster Center (`avoid=ht` Nav)</th>
-                <th>Total Volume</th>
-                <th>Active Live Demand</th>
-                <th>Heat Map Intensity</th>
-              </tr>
-            </thead>
-            <tbody id="operatorHeatmapTable"></tbody>
-          </table>
-        </div>
-
-        <!-- SECTION 5: MASTER BOOKINGS HISTORY & FORENSIC INVESTIGATION EXPLORER -->
-        <div class="card" style="margin-top: 1.25rem;">
-          <div class="card-header">
-            <h2>5. Master Bookings History & Forensic Investigation Explorer (All Lifecycle States)</h2>
-            <span class="engine-tag">ENGINE 02 + 05 + 08 + 09 + 11</span>
-          </div>
-          <div class="filter-bar">
-            <input type="text" id="bookingSearchInput" placeholder="Search by Booking Ref (ALISTO-...), service title, client, contractor, or barangay..." oninput="renderOperatorBookingsTable()" />
-            <select id="bookingStatusFilter" onchange="renderOperatorBookingsTable()">
-              <option value="ALL">All Lifecycle States (Requested, Active, Completed, Cancelled)</option>
-              <option value="SEARCHING">Requested / Searching (SEARCHING)</option>
-              <option value="ACTIVE">Active In-Field (ACCEPTED / ARRIVED / IN_PROGRESS)</option>
-              <option value="COMPLETED">Completed (COMPLETED)</option>
-              <option value="CANCELLED">Cancelled / Disputed (CANCELLED / EXPIRED)</option>
-            </select>
-            <select id="bookingVerticalFilter" onchange="renderOperatorBookingsTable()">
-              <option value="ALL">All 3 Service Verticals</option>
-              <option value="skills_marketplace">On-Demand Skills Marketplace</option>
-              <option value="delivery_logistics">Delivery & Logistics</option>
-              <option value="ride_hailing">Ride-Hailing (Sub-400cc)</option>
-            </select>
-          </div>
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Booking Ref & Vertical</th>
-                <th>Service & Barangay</th>
-                <th>Customer & Contractor</th>
-                <th>Fee / Tip / Hold</th>
-                <th>Lifecycle Timestamps</th>
-                <th>State</th>
-                <th>Forensic Investigation</th>
-              </tr>
-            </thead>
-            <tbody id="operatorBookingsTable"></tbody>
-          </table>
-        </div>
-      
-        <!-- PHASE 3B: LIVE OPERATIONS SPATIAL MAP, DEMAND HEAT MAP & ENGINE 06 PUSH MONITOR -->
-        <div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:18px;margin-top:18px;margin-bottom:18px;">
-          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;">
-            <div>
-              <h3 style="margin:0;color:#00f2fe;font-size:1.05rem;">Live Operations Map, 10s Contractor Telemetry &amp; Demand Heat Map</h3>
-              <p style="margin:4px 0 0;color:#94a3b8;font-size:0.82rem;">
-                Real-time spatial layer for nationwide local-road dispatch (avoid=ht). Toggle active telemetry pins, open bookings, and heat map demand clusters.
-              </p>
-            </div>
-            <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:0.8rem;color:#cbd5e1;">
-              <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;">
-                <input type="checkbox" id="mapLayerTelemetry" checked onchange="renderOperatorLiveSpatialMap()" />
-                <span style="color:#00f2fe;">Live GPS Pings</span>
-              </label>
-              <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;">
-                <input type="checkbox" id="mapLayerBookings" checked onchange="renderOperatorLiveSpatialMap()" />
-                <span style="color:#fbbf24;">Active Bookings</span>
-              </label>
-              <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;">
-                <input type="checkbox" id="mapLayerHeatmap" checked onchange="renderOperatorLiveSpatialMap()" />
-                <span style="color:#f87171;">Demand Heat Map</span>
-              </label>
-              <button type="button" class="btn-outline" onclick="fitOpsMapToActivePins()">Auto-Fit Pins</button>
-              <button type="button" class="btn-outline" onclick="centerOpsMapRegion3()">Angeles / Region III</button>
-            </div>
-          </div>
-
-          <div id="alistoLiveOpsMap" style="width:100%;height:380px;border-radius:10px;border:1px solid #334155;background:#070d19;z-index:1;"></div>
-          <div id="alistoLiveOpsMapStats" style="margin-top:8px;font-size:0.78rem;color:#94a3b8;">
-            Map initializing...
-          </div>
-        </div>
-
-        <div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:18px;margin-bottom:18px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
-            <div>
-              <h3 style="margin:0;color:#fbbf24;font-size:1.0rem;">Engine 06 Live Push Notification Outbox</h3>
-              <p style="margin:3px 0 0;color:#94a3b8;font-size:0.8rem;">
-                Server-triggered real-time alerts for new open bids, lifecycle state transitions, and Engine 11 chat messages.
-              </p>
-            </div>
-            <button type="button" class="btn-outline" onclick="syncFromSupabase()">Refresh Feed</button>
-          </div>
-          <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;font-size:0.81rem;">
-              <thead>
-                <tr style="text-align:left;border-bottom:1px solid #334155;color:#94a3b8;">
-                  <th style="padding:8px;">Event</th>
-                  <th style="padding:8px;">Recipient</th>
-                  <th style="padding:8px;">Alert Title &amp; Message</th>
-                  <th style="padding:8px;">Delivery Status</th>
-                  <th style="padding:8px;">Timestamp</th>
-                </tr>
-              </thead>
-              <tbody id="operatorPushOutboxBody">
-                <tr><td colspan="5" style="padding:14px;text-align:center;color:#64748b;">No Engine 06 notifications logged yet.</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-      
-        <!-- PHASE 5B: LTFRB MC 2026-048 / DOTr DO 2026-006 COMPLIANCE MONITOR -->
-        <div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:18px;margin-bottom:18px;">
-          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;">
-            <div>
-              <h3 style="margin:0;color:#34d399;font-size:1.05rem;">LTFRB 2026 Compliance: 1-Rider-1-Bike Binding &amp; 60 km/h Safety Monitor</h3>
-              <p style="margin:4px 0 0;color:#94a3b8;font-size:0.82rem;">
-                Enforces MC 2026-048 / DOTr DO 2026-006: strict 1-rider-1-motorcycle plate binding, 100cc–399cc ICE or &ge;1.5 kW EV verification, 60 km/h speed alerts, and safety refusal audits.
-              </p>
-            </div>
-            <button type="button" class="btn-outline" onclick="syncFromSupabase()">Refresh Safety Ledger</button>
-          </div>
-
-          <!-- 1-Rider-1-Bike Vehicle Binding Form -->
-          <div style="background:#0b1220;border:1px solid #334155;border-radius:10px;padding:14px;margin-bottom:16px;">
-            <div style="font-size:0.85rem;font-weight:700;color:#e2e8f0;margin-bottom:10px;">
-              1-Accredited-Rider / 1-Authorized-Motorcycle Plate Binding
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:10px;align-items:end;">
-              <div>
-                <label style="display:block;font-size:0.76rem;color:#94a3b8;margin-bottom:4px;">Contractor Account</label>
-                <select id="ltfrbContractorSelect" onchange="populateLtfrbContractorBindingForm(true)" style="width:100%;padding:8px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;"></select>
-              </div>
-              <div>
-                <label style="display:block;font-size:0.76rem;color:#94a3b8;margin-bottom:4px;">Authorized Plate No. (Unique)</label>
-                <input id="ltfrbPlateNo" type="text" oninput="markLtfrbFormDirty()" placeholder="e.g., 123-ABC" style="width:100%;padding:8px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
-              </div>
-              <div>
-                <label style="display:block;font-size:0.76rem;color:#94a3b8;margin-bottom:4px;">Powertrain Type</label>
-                <select id="ltfrbPowertrain" onchange="toggleLtfrbEvFields(); markLtfrbFormDirty();" style="width:100%;padding:8px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;">
-                  <option value="ICE">ICE Motorcycle (100cc–399cc)</option>
-                  <option value="EV">Electric Motorcycle (&ge;1.5 kW)</option>
-                </select>
-              </div>
-              <div id="ltfrbIceCcWrap">
-                <label style="display:block;font-size:0.76rem;color:#94a3b8;margin-bottom:4px;">Engine Displacement (cc)</label>
-                <input id="ltfrbEngineCc" type="number" min="100" max="399" value="125" oninput="markLtfrbFormDirty()" style="width:100%;padding:8px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
-              </div>
-              <div id="ltfrbEvKwWrap" style="display:none;">
-                <label style="display:block;font-size:0.76rem;color:#94a3b8;margin-bottom:4px;">EV Motor Rating (kW)</label>
-                <input id="ltfrbMotorKw" type="number" step="0.1" min="1.5" value="2.0" oninput="markLtfrbFormDirty()" style="width:100%;padding:8px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
-              </div>
-              <div>
-                <label style="display:block;font-size:0.76rem;color:#94a3b8;margin-bottom:4px;">LTFRB Rider ID (Optional)</label>
-                <input id="ltfrbRiderId" type="text" oninput="markLtfrbFormDirty()" placeholder="LTFRB-R3-0001" style="width:100%;padding:8px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
-              </div>
-              <div>
-                <button type="button" onclick="saveLtfrbVehicleBinding()" style="width:100%;padding:9px 12px;border:none;border-radius:6px;background:#10b981;color:#070d19;font-weight:800;cursor:pointer;">
-                  BIND PLATE &amp; VERIFY
-                </button>
-              </div>
-            </div>
-            <div id="ltfrbBindingStatusLine" style="margin-top:8px;font-size:0.78rem;color:#94a3b8;">
-              Select a contractor to view or bind their LTFRB-compliant motorcycle.
-            </div>
-          </div>
-
-          <!-- LTFRB Safety & Overspeed Events Table -->
-          <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;font-size:0.81rem;">
-              <thead>
-                <tr style="text-align:left;border-bottom:1px solid #334155;color:#94a3b8;">
-                  <th style="padding:8px;">Event Type</th>
-                  <th style="padding:8px;">Severity</th>
-                  <th style="padding:8px;">Contractor</th>
-                  <th style="padding:8px;">Speed / Category</th>
-                  <th style="padding:8px;">Audit Notes</th>
-                  <th style="padding:8px;">Timestamp</th>
-                </tr>
-              </thead>
-              <tbody id="operatorLtfrbEventsBody">
-                <tr><td colspan="6" style="padding:14px;text-align:center;color:#64748b;">No LTFRB safety or overspeed events logged yet.</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-      </section>
-
-      <!-- ==================================================================== -->
-      <!-- 2. SUPERADMIN CONTROL CENTER (LEDGER HEALTH, SUBSCRIPTIONS, VERTICALS)-->
-      <!-- ==================================================================== -->
-      <section id="view-superadmin" class="role-view">
-        <!-- EXECUTIVE VIEW: v_universal_ledger_health -->
-        <div class="card" style="margin-bottom: 1.25rem; border-color: var(--amber-core);">
-          <div class="card-header">
-            <h2>Credit Ledger & Universal Financial Health (`public.v_universal_ledger_health`)</h2>
-            <span class="engine-tag">EXECUTIVE TREASURY TELEMETRY</span>
-          </div>
-          <p class="muted-note">
-            Real-time macro-economic accounting across all contractor prepaid wallets, subscription passes, realized commission burns, promotional bonus cushions, and net platform yield.
-          </p>
-          <div class="kpi-strip" id="universalLedgerHealthStrip" style="margin-bottom:0;"></div>
-        </div>
-
-                <!-- DYNAMIC SERVICE CLASS PRICING & ECONOMIC MULTIPLIER CONTROL (ALL VERTICALS) -->
-        <div class="card" style="margin-bottom: 1.25rem; border-color: var(--cyan-accent);">
-          <div class="card-header">
-            <h2>Dynamic Service Class Pricing & Economic Multiplier Control (`public.service_pricing_matrix` — SuperAdmin Exclusive)</h2>
-            <span class="engine-tag">ALL 7 VERTICAL & VEHICLE CLASSES</span>
-          </div>
-          <p class="muted-note">
-            Adjust Base / Call-Out Fees, Included Base Kilometers, Per-KM Rates, Post-Arrival Cancellation Fees, Dispatch Radii, and Economic/Fuel Multipliers across all service classes in real time. Changes sync immediately to both Native Android Kotlin APKs.
-          </p>
-
-          <!-- MACRO ECONOMIC / FUEL INDEX MULTIPLIER BAR -->
-          <div class="commission-control-box" style="margin-bottom: 1rem;">
-            <div style="display:grid;grid-template-columns: 1.2fr 150px 1.5fr auto auto;gap:0.55rem;align-items:end;">
-              <div>
-                <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:0.2rem;">Target Vertical Scope</label>
-                <select id="econTargetVertical" style="width:100%;padding:0.45rem;border-radius:6px;border:1px solid var(--border-subtle);background:#090d16;color:var(--text-main);">
-                  <option value="ALL">All Verticals & Service Classes (Platform-Wide)</option>
-                  <option value="skills_marketplace">On-Demand Skills Marketplace Only</option>
-                  <option value="delivery_logistics">Delivery & Logistics Only</option>
-                  <option value="ride_hailing">Ride-Hailing (Sub-400cc) Only</option>
-                </select>
-              </div>
-              <div>
-                <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:0.2rem;">Economy Multiplier</label>
-                <input type="number" id="econMultiplierInput" value="1.00" min="0.50" max="3.00" step="0.05" />
-              </div>
-              <div>
-                <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:0.2rem;">Economic / Fuel Adjustment Note</label>
-                <input type="text" id="econReasonInput" placeholder="e.g., Region III fuel pump price index adjustment" />
-              </div>
-              <button class="btn-primary" onclick="applyBlanketEconomyMultiplier()">Apply Multiplier</button>
-              <button class="btn-outline" onclick="resetBlanketEconomyMultiplier()">Reset 1.00x</button>
-            </div>
-          </div>
-
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Service Class & Vertical</th>
-                <th>Radius (m)</th>
-                <th>Base / Call-Out Fee (PHP)</th>
-                <th>Included Base KM</th>
-                <th>Per-KM Rate (PHP)</th>
-                <th>Economy Multiplier</th>
-                <th>Arrival Cancel Fee</th>
-                <th>Effective 5km Sample Fare</th>
-                <th>SuperAdmin Action</th>
-              </tr>
-            </thead>
-            <tbody id="superAdminPricingMatrixTable"></tbody>
-          </table>
-        </div>
-
-        <!-- HYBRID MONETIZATION & 4-TIER SUBSCRIPTION PASS CONTROL -->
-        <div class="card" style="margin-bottom: 1.25rem;">
-          <div class="card-header">
-            <h2>Subscription & Pricing Control Tab (`public.subscription_tiers` — SuperAdmin Exclusive)</h2>
-            <span class="engine-tag">HYBRID MONETIZATION V3</span>
-          </div>
-          <p class="muted-note">
-            Adjust monthly tier fees, daily 0%-commission active caps, extended bonus validity days (`30+2`, `30+3`), overtime wallet cushions (`+₱150`, `+₱250`), and the Standard Pay-As-You-Go top-up bonus (`+₱25` on `≥ ₱500` cash-in) in real time without app binary updates.
-          </p>
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Subscription Tier</th>
-                <th>Monthly Fee (PHP)</th>
-                <th>Daily 0% Cap (Hours)</th>
-                <th>Validity + Bonus Days</th>
-                <th>Activation Cushion (PHP)</th>
-                <th>Top-Up Bonus (≥₱500)</th>
-                <th>Built-In Perks & Rollover Rules</th>
-                <th>SuperAdmin Action</th>
-              </tr>
-            </thead>
-            <tbody id="superAdminSubscriptionTiersTable"></tbody>
-          </table>
-        </div>
-
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-header">
-              <h2>Vertical Rollout & Feature Flags Tab (SuperAdmin Exclusive)</h2>
-              <span class="engine-tag">ENGINE 02 + ENGINE 10</span>
-            </div>
-            <p class="muted-note">
-              Controls regional feature toggles and vertical activation sequences (Skills Marketplace & Delivery Logistics vs. Passenger Motorcycle Taxi locked pending legislative enactment).
-            </p>
-            <div id="superAdminVerticalList" class="vertical-toggle-list"></div>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <h2>Global Commission Cap & Runtime Parameters (SuperAdmin Exclusive)</h2>
-              <span class="engine-tag">DYNAMIC KV STORE</span>
-            </div>
-            <div class="param-grid">
-              <div class="param-item">
-                <label>Global Pay-As-You-Go & Overtime Commission Rate (% — Capped ≤ 12%)</label>
-                <input type="number" id="cfgCommission" value="12" min="1" max="12" step="0.5" />
-                <small>Applies to Standard Pay-As-You-Go contractors and Subscription Pass overtime hours (100% of tips belong to contractors).</small>
-              </div>
-              <div class="param-item">
-                <label>Phase 1 Skills Board Maturity Window (Hours)</label>
-                <input type="number" id="cfgMaturity" value="72" min="24" max="168" />
-                <small>Expiration window for barangay-indexed skill postings (48–72h).</small>
-              </div>
-              <div class="param-item">
-                <label>Engine 04 Deterministic Transit Matching Radii (Automobiles Excluded)</label>
-                <input type="text" id="cfgRadius" value="300m (Micro-Mobility) | 500m (Tricycles) | 1.5km + 500m/min (Motorcycles)" readonly />
-                <small>Enforces expressway-free / tollway-free routing across Region III.</small>
-              </div>
-            </div>
-            <button class="btn-primary" onclick="saveRuntimeConfig()">Commit Global Commission & Runtime Parameters</button>
-          </div>
-        </div>
-
-        <div class="grid-2" style="margin-top: 1.25rem;">
-          <div class="card">
-            <div class="card-header">
-              <h2>Engine 11: Real-Time Messaging Moderation Dictionary</h2>
-              <span class="engine-tag">ALISTO-ENG-SPEC-CHAT-2026-V1</span>
-            </div>
-            <div class="inline-form">
-              <select id="newRuleType">
-                <option value="off_platform_solicitation">off_platform_solicitation</option>
-                <option value="hate_speech">hate_speech</option>
-              </select>
-              <input type="text" id="newRulePattern" placeholder="Add prohibited phrase (e.g., pay me cash direct)" />
-              <button class="btn-primary" onclick="addModerationRule()">+ Add Rule</button>
-            </div>
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Rule Type</th>
-                  <th>Pattern / Phrase</th>
-                  <th>Action</th>
-                  <th>Control</th>
-                </tr>
-              </thead>
-              <tbody id="moderationRulesTable"></tbody>
-            </table>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <h2>Engine 11: Moderation Infraction Audit Logs (`moderation_audit_logs`)</h2>
-              <span class="engine-tag">ANTI-CIRCUMVENTION VAULT</span>
-            </div>
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Timestamp</th>
-                  <th>Booking ID</th>
-                  <th>Sender</th>
-                  <th>Flagged Message</th>
-                  <th>Matched Rule</th>
-                </tr>
-              </thead>
-              <tbody id="moderationAuditTable"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- ==================================================================== -->
-      <!-- 3. LGU / PESO ADMIN & OPERATOR AUDIT LOGS VIEW                       -->
-      <!-- ==================================================================== -->
-      
-      <section id="view-paymongo_gateway" class="role-view">
-        <div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:20px;margin-bottom:18px;">
-          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;">
-            <div>
-              <h2 style="margin:0;color:#00f2fe;font-size:1.15rem;">Payment Gateway Control &amp; PayMongo Vault</h2>
-              <p style="margin:4px 0 0;color:#94a3b8;font-size:0.85rem;">
-                SuperAdmin-exclusive switch between Manual Clinic/GCash verification, PayMongo Test (Sandbox), and PayMongo Live (Production). Secret keys stay encrypted under strict RLS.
-              </p>
-            </div>
-            <div style="display:flex;gap:8px;align-items:center;">
-              <span id="pgActiveModeBadge" style="padding:6px 12px;border-radius:999px;font-size:0.78rem;font-weight:700;background:#1e293b;color:#fbbf24;border:1px solid #334155;">MODE: LOADING...</span>
-              <button type="button" class="btn-outline" onclick="reloadPayMongoVaultForm()">Reload Vault</button>
-            </div>
-          </div>
-
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:16px;">
-            <label id="pgCardManual" onclick="selectPaymentModeOption('MANUAL')" style="cursor:pointer;display:block;padding:14px;border-radius:10px;background:#111827;border:2px solid #334155;">
-              <div style="display:flex;align-items:center;gap:8px;">
-                <input type="radio" name="pgPaymentMode" id="pgModeManual" value="MANUAL" onchange="selectPaymentModeOption('MANUAL')" />
-                <strong style="color:#fbbf24;">MANUAL MODE</strong>
-              </div>
-              <div style="color:#94a3b8;font-size:0.8rem;margin-top:6px;">
-                Contractors submit GCash, QR Ph, or Clinic receipt references. Admins approve in 1 click below.
-              </div>
-            </label>
-
-            <label id="pgCardTest" onclick="selectPaymentModeOption('PAYMONGO_TEST')" style="cursor:pointer;display:block;padding:14px;border-radius:10px;background:#111827;border:2px solid #334155;">
-              <div style="display:flex;align-items:center;gap:8px;">
-                <input type="radio" name="pgPaymentMode" id="pgModeTest" value="PAYMONGO_TEST" onchange="selectPaymentModeOption('PAYMONGO_TEST')" />
-                <strong style="color:#38bdf8;">PAYMONGO TEST (SANDBOX)</strong>
-              </div>
-              <div style="color:#94a3b8;font-size:0.8rem;margin-top:6px;">
-                Routes contractor QR Ph wallet top-ups and passes through your PayMongo Sandbox keys and test webhooks.
-              </div>
-            </label>
-
-            <label id="pgCardLive" onclick="selectPaymentModeOption('PAYMONGO_LIVE')" style="cursor:pointer;display:block;padding:14px;border-radius:10px;background:#111827;border:2px solid #334155;">
-              <div style="display:flex;align-items:center;gap:8px;">
-                <input type="radio" name="pgPaymentMode" id="pgModeLive" value="PAYMONGO_LIVE" onchange="selectPaymentModeOption('PAYMONGO_LIVE')" />
-                <strong style="color:#34d399;">PAYMONGO LIVE (PRODUCTION)</strong>
-              </div>
-              <div style="color:#94a3b8;font-size:0.8rem;margin-top:6px;">
-                Charges real PHP via dynamic PayMongo QR Ph and auto-credits wallets upon signed webhook settlement.
-              </div>
-            </label>
-          </div>
-
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px;">
-            <!-- PAYMONGO TEST KEYS -->
-            <div style="background:#0b1220;border:1px solid #1e3a5f;border-radius:10px;padding:16px;">
-              <h3 style="margin:0 0 12px;color:#38bdf8;font-size:0.95rem;">PayMongo Test (Sandbox) Credentials</h3>
-              <div style="display:flex;flex-direction:column;gap:10px;">
-                <div>
-                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Test API Base URL</label>
-                  <input id="pgTestApiUrl" type="text" oninput="markPayMongoFormDirty()" placeholder="https://api.paymongo.com/v1" style="width:100%;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
-                </div>
-                <div>
-                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Test Public Key (pk_test_...)</label>
-                  <input id="pgTestPublicKey" type="text" oninput="markPayMongoFormDirty()" placeholder="pk_test_..." autocomplete="off" style="width:100%;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
-                </div>
-                <div>
-                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Test Secret Key (sk_test_...)</label>
-                  <div style="display:flex;gap:6px;">
-                    <input id="pgTestSecretKey" type="password" oninput="markPayMongoFormDirty()" placeholder="sk_test_..." autocomplete="new-password" style="flex:1;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;" />
-                    <button type="button" class="btn-outline" onclick="toggleSecretInput('pgTestSecretKey', this)">Show</button>
-                  </div>
-                </div>
-                <div>
-                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Test Webhook Signing Secret (whsec_...)</label>
-                  <div style="display:flex;gap:6px;">
-                    <input id="pgTestWebhookSecret" type="password" oninput="markPayMongoFormDirty()" placeholder="whsec_..." autocomplete="new-password" style="flex:1;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;" />
-                    <button type="button" class="btn-outline" onclick="toggleSecretInput('pgTestWebhookSecret', this)">Show</button>
-                  </div>
-                </div>
-                <div>
-                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Test Webhook Listener URL (Paste into PayMongo Dashboard)</label>
-                  <div style="display:flex;gap:6px;">
-                    <input id="pgTestWebhookUrl" type="text" oninput="markPayMongoFormDirty()" style="flex:1;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;" />
-                    <button type="button" class="btn-outline" onclick="copyGatewayField('pgTestWebhookUrl', this)">Copy</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- PAYMONGO LIVE KEYS -->
-            <div style="background:#0b1220;border:1px solid #14532d;border-radius:10px;padding:16px;">
-              <h3 style="margin:0 0 12px;color:#34d399;font-size:0.95rem;">PayMongo Live (Production) Credentials</h3>
-              <div style="display:flex;flex-direction:column;gap:10px;">
-                <div>
-                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Live API Base URL</label>
-                  <input id="pgLiveApiUrl" type="text" oninput="markPayMongoFormDirty()" placeholder="https://api.paymongo.com/v1" style="width:100%;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
-                </div>
-                <div>
-                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Live Public Key (pk_live_...)</label>
-                  <input id="pgLivePublicKey" type="text" oninput="markPayMongoFormDirty()" placeholder="pk_live_..." autocomplete="off" style="width:100%;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
-                </div>
-                <div>
-                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Live Secret Key (sk_live_...)</label>
-                  <div style="display:flex;gap:6px;">
-                    <input id="pgLiveSecretKey" type="password" oninput="markPayMongoFormDirty()" placeholder="sk_live_..." autocomplete="new-password" style="flex:1;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;" />
-                    <button type="button" class="btn-outline" onclick="toggleSecretInput('pgLiveSecretKey', this)">Show</button>
-                  </div>
-                </div>
-                <div>
-                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Live Webhook Signing Secret (whsec_...)</label>
-                  <div style="display:flex;gap:6px;">
-                    <input id="pgLiveWebhookSecret" type="password" oninput="markPayMongoFormDirty()" placeholder="whsec_..." autocomplete="new-password" style="flex:1;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;" />
-                    <button type="button" class="btn-outline" onclick="toggleSecretInput('pgLiveWebhookSecret', this)">Show</button>
-                  </div>
-                </div>
-                <div>
-                  <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Live Webhook Listener URL (Paste into PayMongo Dashboard)</label>
-                  <div style="display:flex;gap:6px;">
-                    <input id="pgLiveWebhookUrl" type="text" oninput="markPayMongoFormDirty()" style="flex:1;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;" />
-                    <button type="button" class="btn-outline" onclick="copyGatewayField('pgLiveWebhookUrl', this)">Copy</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- SHARED ENDPOINTS & MANUAL INSTRUCTIONS -->
-          <div style="background:#0b1220;border:1px solid #334155;border-radius:10px;padding:16px;margin-bottom:16px;">
-            <h3 style="margin:0 0 10px;color:#e2e8f0;font-size:0.92rem;">Shared Checkout Endpoint &amp; Manual Mode Instructions</h3>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-bottom:10px;">
-              <div>
-                <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Checkout Edge Function URL</label>
-                <div style="display:flex;gap:6px;">
-                  <input id="pgCheckoutEdgeUrl" type="text" oninput="markPayMongoFormDirty()" style="flex:1;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;" />
-                  <button type="button" class="btn-outline" onclick="copyGatewayField('pgCheckoutEdgeUrl', this)">Copy</button>
-                </div>
-              </div>
-              <div>
-                <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Checkout Redirect / Return URL</label>
-                <input id="pgCheckoutReturnUrl" type="text" oninput="markPayMongoFormDirty()" style="width:100%;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
-              </div>
-            </div>
-            <div>
-              <label style="display:block;font-size:0.78rem;color:#94a3b8;margin-bottom:4px;">Manual Mode Payment Instructions (Shown in Contractor App when Mode = MANUAL)</label>
-              <textarea id="pgManualInstructions" rows="2" oninput="markPayMongoFormDirty()" style="width:100%;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;"></textarea>
-            </div>
-          </div>
-
-          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;">
-            <span id="pgLastUpdatedLabel" style="font-size:0.8rem;color:#94a3b8;">Last updated: —</span>
-            <button type="button" onclick="savePayMongoGatewayConfig()" style="padding:11px 22px;border:none;border-radius:8px;background:#00f2fe;color:#070d19;font-weight:800;cursor:pointer;">
-              SAVE PAYMENT MODE &amp; PAYMONGO VAULT
-            </button>
-          </div>
-        </div>
-
-        <!-- LIVE PAYMENT TRANSACTIONS & MANUAL SETTLEMENT QUEUE -->
-        <div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:20px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
-            <div>
-              <h3 style="margin:0;color:#fbbf24;font-size:1.02rem;">Payment Transactions &amp; Manual Approval Queue</h3>
-              <p style="margin:4px 0 0;color:#94a3b8;font-size:0.82rem;">
-                Approve or reject Manual Mode receipt submissions in one click, or audit live PayMongo Test/Live QR Ph settlements.
-              </p>
-            </div>
-            <button type="button" class="btn-outline" onclick="syncFromSupabase()">Refresh Queue</button>
-          </div>
-          <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;font-size:0.83rem;">
-              <thead>
-                <tr style="text-align:left;border-bottom:1px solid #334155;color:#94a3b8;">
-                  <th style="padding:10px 8px;">TX Ref</th>
-                  <th style="padding:10px 8px;">Account</th>
-                  <th style="padding:10px 8px;">Mode</th>
-                  <th style="padding:10px 8px;">Purpose / Tier</th>
-                  <th style="padding:10px 8px;">Amount (PHP)</th>
-                  <th style="padding:10px 8px;">Receipt / Provider Ref</th>
-                  <th style="padding:10px 8px;">Status</th>
-                  <th style="padding:10px 8px;">Timestamp</th>
-                  <th style="padding:10px 8px;">Actions</th>
-                </tr>
-              </thead>
-              <tbody id="pgTransactionsTableBody">
-                <tr><td colspan="9" style="padding:16px;text-align:center;color:#64748b;">No payment transactions recorded yet.</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <section id="view-lgu_admin" class="role-view">
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-header">
-              <h2>Engine 01: Barangay KYC & LGU/PESO Contractor Endorsement</h2>
-              <span class="engine-tag">RBAC GOVERNANCE</span>
-            </div>
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Contractor (`@username`)</th>
-                  <th>Barangay Zone</th>
-                  <th>Skills & Certs</th>
-                  <th>Prepaid Credits</th>
-                  <th>Account & PESO Status</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="lguContractorTable"></tbody>
-            </table>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <h2>Immutable Operator & Auth Audit Trail (`operator_audit_logs`)</h2>
-              <span class="engine-tag">COMPLIANCE LEDGER</span>
-            </div>
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Timestamp</th>
-                  <th>Action Type</th>
-                  <th>Summary & Justification</th>
-                </tr>
-              </thead>
-              <tbody id="operatorAuditLogsTable"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- ==================================================================== -->
-      <!-- 4. NATIVE ANDROID KOTLIN APK DOWNLOAD PORTAL & SCOPED USER PROFILE   -->
-      <!-- ==================================================================== -->
-      <section id="view-apk_portal" class="role-view">
-        <div id="scopedAccountSummaryCard" class="card" style="margin-bottom:1.25rem;"></div>
-
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-header">
-              <h2>1. Alisto App — Customer APK (`alisto-customer.apk`)</h2>
-              <span class="engine-tag">:app-customer (ph.alisto.customer)</span>
-            </div>
-            <div class="apk-hero-row">
-              <div class="apk-logo-showcase">
-                <svg viewBox="0 0 400 400" width="96" height="96">
-                  <circle class="pulse-ring ring-1" cx="200" cy="200" r="10" />
-                  <circle class="pulse-ring ring-2" cx="200" cy="200" r="10" />
-                  <path class="a-stroke" d="M 100 100 L 300 100 L 200 320 Z M 150 180 L 250 180" />
-                  <text x="200" y="385" text-anchor="middle" font-size="52" letter-spacing="8" class="nexus-text-color">ALISTO</text>
-                </svg>
-              </div>
-              <div>
-                <p class="muted-note" style="margin-bottom:0.4rem;">
-                  <strong>Separated Customer Portal + Android Keystore Biometric Unlock</strong> (`get_app_boot_state` single-trip boot).
-                </p>
-                <small style="color:var(--cyan-accent)">Includes One-Tap GPS Home Pin-Drop & VGA Profile Photo Compression</small>
-              </div>
-            </div>
-            <ul style="font-size:0.84rem;color:var(--text-main);padding-left:1.2rem;line-height:1.8;margin:1rem 0 1.2rem;">
-              <li><strong>Biometric Session Persistence:</strong> Hardware-bound session unlock via fingerprint/face/PIN—never re-type credentials on subsequent launches.</li>
-              <li><strong>Customer Sign-Up Portal:</strong> Full Name, Nickname, Active Mobile Advisory, Email, GPS Map Pin-Drop, and optional VGA (<80 KB) photo.</li>
-              <li><strong>Engine 11 Moderated Chat:</strong> RLS-bound active booking chat with anti-circumvention trigger protection.</li>
+        <div class="grid-3">
+          <article class="card">
+            <span class="card-tag">Skills Marketplace</span>
+            <h3>Verified Local Trades</h3>
+            <p>Book vetted electricians, plumbers, aircon technicians, mechanics, and home maintenance specialists with upfront callout clarity.</p>
+            <ul>
+              <li>Direct dispatch or competitive open bidding</li>
+              <li>Two-way post-completion quality ratings</li>
+              <li>Moderated in-app coordination chat</li>
             </ul>
-            <a href="alisto-customer.apk" download class="btn-primary" style="display:inline-block;text-decoration:none;">
-              Download alisto-customer.apk (Native Android Kotlin)
-            </a>
+          </article>
+
+          <article class="card">
+            <span class="card-tag amber">Delivery &amp; Pabili</span>
+            <h3>Multi-Stop Errands &amp; Logistics</h3>
+            <p>Pin your origin and sequential pickup or store stops directly on the interactive map for transparent parcel runs and errands.</p>
+            <ul>
+              <li>Visual tap-to-pin multi-stop waypoints</li>
+              <li>Live active-job location updates</li>
+              <li>Flexible cash and digital settlement options</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <span class="card-tag emerald">Local Mobility</span>
+            <h3>Sub-400cc Transit</h3>
+            <p>Point-to-point local-road motorcycle rides engineered around municipal road rules, expressway avoidance, and rider accountability.</p>
+            <ul>
+              <li>1-accredited-rider to 1-authorized-motorcycle binding</li>
+              <li>60 km/h speed limit safety monitoring</li>
+              <li>Documented penalty-free safety refusal policy</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="safety">
+      <div class="container">
+        <div class="section-head">
+          <div class="section-kicker">Trust &amp; Governance</div>
+          <h2>Compliance Engineered Into Every Dispatch</h2>
+          <p>Security, data privacy, and road safety operate at the protocol level rather than as afterthoughts.</p>
+        </div>
+
+        <div class="grid-3">
+          <article class="card">
+            <h3>RA 10173 Data Privacy Act</h3>
+            <p>Users review and record versioned privacy and terms consent prior to dispatch, with personal coordinates shared strictly during active fulfillment.</p>
+          </article>
+          <article class="card">
+            <h3>LTFRB MC 2026-048 Readiness</h3>
+            <p>Supports unique plate-to-rider enforcement, ICE (100cc–399cc) and EV (&ge;1.5 kW) fleet verification, overspeed alerting, and safety incident audit logs.</p>
+          </article>
+          <article class="card">
+            <h3>Hardware-Backed Security</h3>
+            <p>Native Android sessions are protected with hardware keystore storage, real-time dispatch notifications, and verified in-app update checks.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="downloads">
+      <div class="container">
+        <div class="section-head">
+          <div class="section-kicker">Official Android Builds</div>
+          <h2>Download Alisto Native Apps</h2>
+          <p>Install the dedicated Customer or Contractor APK directly on Android 8.0 through Android 16 devices.</p>
+        </div>
+
+        <div class="download-grid">
+          <div class="download-card">
+            <div>
+              <span class="card-tag">For Households &amp; Businesses</span>
+              <h3>Alisto Customer App</h3>
+              <p>Book skilled trades, pin multi-stop Pabili errands, compare contractor bids, and track active dispatches live on the map.</p>
+              <div class="download-meta">
+                <span class="pill">v4.0.0-api36</span>
+                <span class="pill">Android 16 Ready</span>
+                <span class="pill">~6.1 MB APK</span>
+              </div>
+            </div>
+            <a class="download-btn customer" href="alisto-customer.apk" download>Download alisto-customer.apk</a>
           </div>
 
-          <div class="card">
-            <div class="card-header">
-              <h2>2. Alisto Contractor App — Technician & Operator APK (`alisto-contractor.apk`)</h2>
-              <span class="engine-tag">:app-contractor (ph.alisto.contractor)</span>
-            </div>
-            <div class="apk-hero-row">
-              <div class="apk-logo-showcase">
-                <svg viewBox="0 0 400 400" width="96" height="96">
-                  <circle class="pulse-ring ring-1" cx="200" cy="200" r="10" />
-                  <circle class="pulse-ring ring-2" cx="200" cy="200" r="10" />
-                  <path class="a-stroke" d="M 100 100 L 300 100 L 200 320 Z M 150 180 L 250 180" />
-                  <text x="200" y="385" text-anchor="middle" font-size="52" letter-spacing="8" class="nexus-text-color">ALISTO</text>
-                </svg>
-              </div>
-              <div>
-                <p class="muted-note" style="margin-bottom:0.4rem;">
-                  <strong>Separated Contractor Portal + Hybrid Subscription Passes</strong> (`Part-Time ₱3k`, `Full-Time ₱5k`, `Grind ₱8k`).
-                </p>
-                <small style="color:var(--amber-core)">Dynamic Skills + Conditional Transport Docs (1024px Compression) & PENDING_REVIEW Gate</small>
+          <div class="download-card">
+            <div>
+              <span class="card-tag amber">For Verified Riders &amp; Trades</span>
+              <h3>Alisto Contractor App</h3>
+              <p>View live demand heat maps, submit bids on open jobs, run local-road navigation, and manage wallet credits or subscription passes.</p>
+              <div class="download-meta">
+                <span class="pill">v4.0.0-api36</span>
+                <span class="pill">Android 16 Ready</span>
+                <span class="pill">~6.1 MB APK</span>
               </div>
             </div>
-            <ul style="font-size:0.84rem;color:var(--text-main);padding-left:1.2rem;line-height:1.8;margin:1rem 0 1.2rem;">
-              <li><strong>Conditional Transport Expansion:</strong> Skills checklist first; checking Delivery or Ride-Hailing dynamically requires Driver's License, OR/CR, and Vehicle Photo.</li>
-              <li><strong>Hybrid Monetization Wallet:</strong> 0% Commission Subscription Pass windows + automatic +₱25 bonus on ≥₱500 Pay-As-You-Go top-ups.</li>
-              <li><strong>Deterministic Radius Matching:</strong> 300m (micro-mobility), 500m (tricycles), 1.5km + 500m/min (motorcycles; automobiles excluded).</li>
-            </ul>
-            <a href="alisto-contractor.apk" download class="btn-primary" style="display:inline-block;text-decoration:none;">
-              Download alisto-contractor.apk (Native Android Kotlin)
-            </a>
+            <a class="download-btn contractor" href="alisto-contractor.apk" download>Download alisto-contractor.apk</a>
           </div>
         </div>
-      </section>
-    </main>
-  </div>
 
-  <!-- ==================================================================== -->
-  <!-- MODAL 1: FORENSIC BOOKING INVESTIGATION DOSSIER (TIMESTAMPS, CHAT, GPS) -->
-  <!-- ==================================================================== -->
-  <div id="forensicModal" class="modal-backdrop" style="display:none;">
-    <div class="modal-panel modal-wide">
-      <div class="card-header">
-        <h2 id="forensicModalTitle">Forensic Booking Investigation Dossier</h2>
-        <button class="btn-outline" onclick="closeForensicModal()">Close Dossier [X]</button>
+        <div class="download-note">
+          <strong>Pilot Installation Guide:</strong> After downloading the APK on your Android device, open the file and allow installation from your browser if prompted. Subsequent releases notify you directly inside the app.
+        </div>
       </div>
-      <div id="forensicModalBody" class="forensic-body"></div>
-    </div>
-  </div>
+    </section>
+  </main>
 
-  <!-- ==================================================================== -->
-  <!-- MODAL 2: UNIFIED USER PROFILE & GOVERNANCE COMMAND MODAL             -->
-  <!-- ==================================================================== -->
-  <div id="profileModal" class="modal-backdrop" style="display:none;">
-    <div class="modal-panel modal-wide">
-      <div class="card-header">
-        <h2 id="profileModalTitle">User Profile & Governance Command Center</h2>
-        <button class="btn-outline" onclick="closeProfileModal()">Close Profile [X]</button>
+  <footer>
+    <div class="container footer-row">
+      <div>
+        &copy; 2026 <strong>Alisto Network PH</strong>. Architected &amp; Developed by <strong>D. A. Cortez</strong>.
       </div>
-      <div id="profileModalBody" class="forensic-body"></div>
+      <div class="footer-right">
+        <span>Region III Pilot • Philippines</span>
+        <button
+          type="button"
+          id="opsGateTrigger"
+          class="staff-gate-btn"
+          aria-label="Authorized Portal"
+          title="Authorized Personnel"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+        </button>
+      </div>
     </div>
-  </div>
+  </footer>
 
-  <script src="app.js"></script>
+  <script>
+    (function () {
+      var btn = document.getElementById("opsGateTrigger");
+      if (!btn) return;
+      btn.addEventListener("click", function () {
+        var target = String.fromCharCode(111,112,115,45,112,111,114,116,97,108,46,104,116,109,108);
+        window.location.href = target;
+      });
+    })();
+  </script>
 </body>
 </html>

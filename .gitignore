@@ -1,0 +1,7 @@
+.local-source-vault/
+dist-apks/
+*.jks
+*.keystore
+__pycache__/
+*.pyc
+.DS_Store
