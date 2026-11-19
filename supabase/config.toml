@@ -1,0 +1,10 @@
+project_id = "fmjjyhmtdsvhufkgyjpr"
+
+[functions.paymongo-checkout]
+verify_jwt = false
+
+[functions.paymongo-webhook]
+verify_jwt = false
+
+[functions.fcm-push-worker]
+verify_jwt = false
