@@ -19,6 +19,7 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
     private val webView = WebView(context)
     private var mapReady = false
     private var pendingPayloadJson: String? = null
+    private var pendingUserLocJson: String? = null
     private var tapCallback: ((Double, Double) -> Unit)? = null
 
     init {
@@ -59,15 +60,27 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
             override fun onPageFinished(view: WebView?, url: String?) {
                 mapReady = true
                 pendingPayloadJson?.let { pushPayloadToJs(it) }
+                pendingUserLocJson?.let { pushUserLocToJs(it) }
             }
         }
     }
 
-    fun recenter(lat: Double, lng: Double, zoom: Int = 15) {
+    fun recenter(lat: Double, lng: Double, zoom: Int = 16) {
         if (!mapReady) return
         mainHandler.post {
             webView.evaluateJavascript("if (window.recenterAlistoMap) { window.recenterAlistoMap($lat, $lng, $zoom); }", null)
         }
+    }
+
+    fun updateUserLocation(lat: Double, lng: Double, accuracyM: Float = 25f, flyTo: Boolean = false) {
+        val obj = JSONObject().apply {
+            put("lat", lat)
+            put("lng", lng)
+            put("accuracy", accuracyM.toDouble())
+            put("flyTo", flyTo)
+        }.toString()
+        pendingUserLocJson = obj
+        if (mapReady) pushUserLocToJs(obj)
     }
 
     fun loadInteractiveMap(
@@ -97,6 +110,10 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
     .leaflet-popup-content-wrapper { background: #0f172a; color: #f8fafc; border: 1px solid #334155; border-radius: 12px; font-family: sans-serif; font-size: 12px; }
     .leaflet-popup-tip { background: #0f172a; }
     .wp-label { background: #fbbf24; color: #070a12; font-weight: 800; border-radius: 999px; width: 24px; height: 24px; line-height: 24px; text-align: center; border: 2px solid #070a12; font-size: 11px; }
+    .gps-wrap { position: relative; width: 24px; height: 24px; }
+    .gps-pulse { position: absolute; inset: 0; border-radius: 999px; background: rgba(56,189,248,0.45); animation: gpsPulse 1.8s ease-out infinite; }
+    .gps-core { position: absolute; top: 5px; left: 5px; width: 14px; height: 14px; border-radius: 999px; background: #2563eb; border: 2.5px solid #ffffff; box-shadow: 0 0 8px rgba(37,99,235,0.85); }
+    @keyframes gpsPulse { 0% { transform: scale(0.7); opacity: 0.9; } 100% { transform: scale(2.4); opacity: 0; } }
   </style>
 </head>
 <body>
@@ -118,10 +135,22 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
     L.control.layers({ 'Dark Street': osmDark, 'Esri Dark': esriDark, 'Light Street': osmLight, 'Satellite': esriSat }, null, { position: 'bottomright' }).addTo(map);
 
     const layerGroup = L.layerGroup().addTo(map);
+    const userLocGroup = L.layerGroup().addTo(map);
+
     if (typeof ResizeObserver !== 'undefined') { new ResizeObserver(function() { map.invalidateSize(); }).observe(document.getElementById('map')); }
     setTimeout(function() { map.invalidateSize(); }, 250);
 
-    window.recenterAlistoMap = function(lat, lng, zoom) { map.flyTo([lat, lng], zoom || 15, { duration: 0.6 }); };
+    window.recenterAlistoMap = function(lat, lng, zoom) { map.flyTo([lat, lng], zoom || 16, { duration: 0.55 }); };
+
+    window.updateUserGpsDot = function(loc) {
+      userLocGroup.clearLayers();
+      if (!loc || typeof loc.lat !== 'number' || typeof loc.lng !== 'number') return;
+      const acc = Math.min(Math.max(loc.accuracy || 20, 12), 180);
+      L.circle([loc.lat, loc.lng], { radius: acc, color: '#38bdf8', weight: 1, fillColor: '#2563eb', fillOpacity: 0.16, interactive: false }).addTo(userLocGroup);
+      const gpsIcon = L.divIcon({ className: 'gps-icon', html: '<div class="gps-wrap"><div class="gps-pulse"></div><div class="gps-core"></div></div>', iconSize: [24, 24], iconAnchor: [12, 12] });
+      L.marker([loc.lat, loc.lng], { icon: gpsIcon, zIndexOffset: 900 }).bindPopup('<b>Your Live GPS Location</b>').addTo(userLocGroup);
+      if (loc.flyTo) map.flyTo([loc.lat, loc.lng], 16, { duration: 0.6 });
+    };
 
     if (${if (enableTapToPin) "true" else "false"}) {
       map.on('click', function(e) { if (window.AlistoMapBridge) window.AlistoMapBridge.onMapTapped(e.latlng.lat, e.latlng.lng); });
@@ -216,6 +245,12 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
     private fun pushPayloadToJs(jsonStr: String) {
         mainHandler.post {
             webView.evaluateJavascript("if (window.updateAlistoLayers) { window.updateAlistoLayers($jsonStr); }", null)
+        }
+    }
+
+    private fun pushUserLocToJs(jsonStr: String) {
+        mainHandler.post {
+            webView.evaluateJavascript("if (window.updateUserGpsDot) { window.updateUserGpsDot($jsonStr); }", null)
         }
     }
 }

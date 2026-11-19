@@ -24,6 +24,8 @@ class ContractorMainActivity : AppCompatActivity() {
     private var autoAcceptEnabled = false
     private var realtimePollJob: Job? = null
     private var contractorMapView: AlistoInteractiveMapView? = null
+    private var promptedLocationPerm = false
+    private var hasAutoCenteredGps = false
     private var compressedProfileUrl: String? = null
     private var compressedLicenseUrl: String? = null
     private var compressedOrcrUrl: String? = null
@@ -38,6 +40,26 @@ class ContractorMainActivity : AppCompatActivity() {
             triggerFrictionlessBiometricEntry()
         } else {
             showContractorEntryGate()
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == AlistoLocationTracker.REQ_LOCATION_PERMISSION && AlistoLocationTracker.hasPermission(this)) {
+            startContractorLiveGps(forceCenter = true)
+        }
+    }
+
+    private fun startContractorLiveGps(forceCenter: Boolean) {
+        if (!AlistoLocationTracker.hasPermission(this)) return
+        AlistoLocationTracker.startLiveUpdates(this) { lat, lng, acc ->
+            val shouldFly = forceCenter || !hasAutoCenteredGps
+            contractorMapView?.updateUserLocation(lat, lng, acc, flyTo = shouldFly)
+            if (shouldFly) hasAutoCenteredGps = true
         }
     }
 
@@ -57,6 +79,7 @@ class ContractorMainActivity : AppCompatActivity() {
     }
 
     private fun showContractorEntryGate() {
+        AlistoLocationTracker.stopLiveUpdates()
         val scroll = ScrollView(this).apply {
             setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
             isFillViewport = true
@@ -264,6 +287,12 @@ class ContractorMainActivity : AppCompatActivity() {
         startContractorRealtimeLoop()
         AlistoComplianceGate.checkOtaUpdate(this, "contractor", BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
         AlistoComplianceGate.enforceRa10173ConsentIfRequired(this, uiScope, "contractor")
+        if (!AlistoLocationTracker.hasPermission(this) && !promptedLocationPerm) {
+            promptedLocationPerm = true
+            AlistoLocationTracker.requestPermission(this)
+        } else if (AlistoLocationTracker.hasPermission(this)) {
+            startContractorLiveGps(forceCenter = false)
+        }
 
         val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -327,7 +356,14 @@ class ContractorMainActivity : AppCompatActivity() {
             cMap,
             FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         )
-        cMap.loadInteractiveMap(user.homeLat, user.homeLng, enableTapToPin = false)
+        val initLat = AlistoLocationTracker.lastLat ?: user.homeLat
+        val initLng = AlistoLocationTracker.lastLng ?: user.homeLng
+        cMap.loadInteractiveMap(initLat, initLng, enableTapToPin = false)
+        AlistoLocationTracker.lastLat?.let { lat ->
+            AlistoLocationTracker.lastLng?.let { lng ->
+                cMap.updateUserLocation(lat, lng, AlistoLocationTracker.lastAccuracyM, flyTo = false)
+            }
+        }
         cMap.updateMapLayers(
             bookings = AlistoKernelClient.bookings,
             telemetryPins = AlistoKernelClient.liveTelemetryPins,
@@ -399,7 +435,16 @@ class ContractorMainActivity : AppCompatActivity() {
                 leftMargin = dp(14)
                 bottomMargin = dp(12)
             }
-            setOnClickListener { contractorMapView?.recenter(user.homeLat, user.homeLng, 14) }
+            setOnClickListener {
+                if (!AlistoLocationTracker.hasPermission(this@ContractorMainActivity)) {
+                    AlistoLocationTracker.requestPermission(this@ContractorMainActivity)
+                } else {
+                    val lat = AlistoLocationTracker.lastLat ?: user.homeLat
+                    val lng = AlistoLocationTracker.lastLng ?: user.homeLng
+                    contractorMapView?.recenter(lat, lng, 15)
+                    startContractorLiveGps(forceCenter = true)
+                }
+            }
         }
         mapStage.addView(radarStats)
         root.addView(mapStage)
@@ -723,7 +768,7 @@ class ContractorMainActivity : AppCompatActivity() {
         }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) } })
 
         container.addView(AlistoUiKit.pillButton(this, "Sign Out & Lock", "#450A0A", "#FCA5A5", "#7F1D1D", heightDp = 46) {
-            realtimePollJob?.cancel(); AlistoSpatialEngine.stopHeartbeat(); AlistoKernelClient.signOut(); showContractorEntryGate()
+            realtimePollJob?.cancel(); AlistoLocationTracker.stopLiveUpdates(); AlistoSpatialEngine.stopHeartbeat(); AlistoKernelClient.signOut(); showContractorEntryGate()
         }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT) })
 
         scroll.addView(container)
@@ -1016,6 +1061,7 @@ class ContractorMainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         realtimePollJob?.cancel()
+        AlistoLocationTracker.stopLiveUpdates()
         AlistoSpatialEngine.stopHeartbeat()
         uiScope.cancel()
     }
