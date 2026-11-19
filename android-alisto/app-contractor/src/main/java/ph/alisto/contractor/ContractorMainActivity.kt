@@ -112,7 +112,7 @@ class ContractorMainActivity : AppCompatActivity() {
                     uiScope.launch {
                         val res = AlistoKernelClient.authenticateUserRpc(idInput.text.toString(), pwInput.text.toString(), "contractor")
                         res.onSuccess { user ->
-                            AlistoBiometricVault.saveEncryptedSession(this@ContractorMainActivity, "contractor", user.id, "${user.fullName} (@${user.username})")
+                            AlistoBiometricVault.saveEncryptedSession(this@ContractorMainActivity, "contractor", AlistoKernelClient.currentSessionToken ?: "", "${user.fullName} (@${user.username})")
                             routeContractorByAccountState()
                         }.onFailure { err ->
                             AlertDialog.Builder(this@ContractorMainActivity).setTitle("Login Failed").setMessage(err.message).setPositiveButton("OK", null).show()
@@ -164,7 +164,7 @@ class ContractorMainActivity : AppCompatActivity() {
                             vehiclePhotoUrl = compressedVehicleUrl
                         )
                         res.onSuccess { user ->
-                            AlistoBiometricVault.saveEncryptedSession(this@ContractorMainActivity, "contractor", user.id, "${user.fullName} (@${user.username})")
+                            AlistoBiometricVault.saveEncryptedSession(this@ContractorMainActivity, "contractor", AlistoKernelClient.currentSessionToken ?: "", "${user.fullName} (@${user.username})")
                             routeContractorByAccountState()
                         }
                     }
@@ -189,7 +189,7 @@ class ContractorMainActivity : AppCompatActivity() {
                 })
                 box.addView(Button(this).apply {
                     text = "Refresh Boot State"
-                    setOnClickListener { uiScope.launch { AlistoKernelClient.fetchAppBootStateRpc(user.id, "contractor"); routeContractorByAccountState() } }
+                    setOnClickListener { uiScope.launch { AlistoKernelClient.fetchAppBootStateRpc(AlistoKernelClient.currentSessionToken ?: "", "contractor"); routeContractorByAccountState() } }
                 })
                 scroll.addView(box)
                 setContentView(scroll)
@@ -324,8 +324,7 @@ class ContractorMainActivity : AppCompatActivity() {
                 setTextColor(Color.parseColor("#070D19"))
                 setOnClickListener {
                     uiScope.launch {
-                        AlistoKernelClient.topUpCreditsQrPhRpc(500.0)
-                        routeContractorByAccountState()
+                        AlistoKernelClient.topUpCreditsQrPhRpc(500.0).onSuccess { routeContractorByAccountState() }.onFailure { err -> AlertDialog.Builder(this@ContractorMainActivity).setTitle("Payment Security Gate").setMessage(err.message).setPositiveButton("OK", null).show() }
                     }
                 }
             })
@@ -335,8 +334,7 @@ class ContractorMainActivity : AppCompatActivity() {
                 setTextColor(Color.parseColor("#070D19"))
                 setOnClickListener {
                     uiScope.launch {
-                        AlistoKernelClient.purchaseSubscriptionPassRpc("GRIND_PASS")
-                        routeContractorByAccountState()
+                        AlistoKernelClient.purchaseSubscriptionPassRpc("GRIND_PASS").onSuccess { routeContractorByAccountState() }.onFailure { err -> AlertDialog.Builder(this@ContractorMainActivity).setTitle("Payment Security Gate").setMessage(err.message).setPositiveButton("OK", null).show() }
                     }
                 }
             })

@@ -1,6 +1,8 @@
 package ph.alisto.kernel
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -153,6 +155,7 @@ object AlistoKernelClient {
     var supabaseUrl: String = BuildConfig.SUPABASE_URL
     var supabaseKey: String = BuildConfig.SUPABASE_ANON_KEY
 
+    var currentSessionToken: String? = null
     var currentSessionUser: AuthenticatedUser? = null
     var currentContractorProfile: ContractorProfileState? = null
     var currentSubscriptionPass: ActiveSubscriptionPass? = null
@@ -168,105 +171,241 @@ object AlistoKernelClient {
     var contractorHeldCredits: Double = 0.00
     var effectiveCommissionRate: Double = 0.12
 
-    suspend fun fetchAppBootStateRpc(userId: String, expectedRole: String): Result<AuthenticatedUser> = withContext(Dispatchers.IO) {
-        try {
-            val payload = JSONObject().apply { put("p_user_id", userId) }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/get_app_boot_state")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                if (json.optString("status") != "SUCCESS" || json.isNull("user")) {
-                    return@withContext Result.failure(IllegalStateException("Boot state user not found."))
-                }
-                val u = json.getJSONObject("user")
-                val role = u.getString("role")
-                if (role != expectedRole && role != "super_admin") {
-                    return@withContext Result.failure(SecurityException("Portal Isolation: Role [$role] cannot enter [$expectedRole] portal."))
-                }
-
-                val customComm = if (u.isNull("custom_commission_rate")) null else u.optDouble("custom_commission_rate")
-                val userObj = AuthenticatedUser(
-                    id = u.getString("id"),
-                    username = u.optString("username", ""),
-                    fullName = u.getString("full_name"),
-                    nickname = u.optString("nickname", u.getString("full_name")),
-                    phone = u.getString("phone"),
-                    email = u.optString("email", ""),
-                    role = role,
-                    accountStatus = if (u.optBoolean("account_frozen", false)) "SUSPENDED" else u.optString("account_status", "ACTIVE"),
-                    municipality = u.optString("municipality", "Angeles City"),
-                    barangayZone = u.optString("barangay_zone", "Sto. Rosario"),
-                    addressText = u.optString("address_text", ""),
-                    homeLat = u.optDouble("home_lat", 15.1450),
-                    homeLng = u.optDouble("home_lng", 120.5887),
-                    kycVerified = u.optBoolean("kyc_verified", true),
-                    lguPesoEndorsed = u.optBoolean("lgu_peso_endorsed", false),
-                    creditBalance = u.optDouble("credit_balance", 0.0),
-                    heldCredits = u.optDouble("held_credits", 0.0),
-                    customCommissionRate = customComm,
-                    vipGrindBadge = u.optBoolean("vip_grind_badge", false),
-                    thumbsUpCount = u.optInt("thumbs_up_count", 5),
-                    thumbsDownCount = u.optInt("thumbs_down_count", 0),
-                    customerTrustScore = u.optDouble("customer_trust_score", 100.0)
-                )
-                currentSessionUser = userObj
-                contractorAvailableCredits = userObj.creditBalance
-                contractorHeldCredits = userObj.heldCredits
-
-                if (!json.isNull("contractor_profile")) {
-                    val cp = json.getJSONObject("contractor_profile")
-                    val skills = mutableListOf<String>()
-                    cp.optJSONArray("skill_tags")?.let { arr ->
-                        for (i in 0 until arr.length()) skills.add(arr.getString(i))
-                    }
-                    val flagged = mutableListOf<String>()
-                    cp.optJSONArray("flagged_docs")?.let { arr ->
-                        for (i in 0 until arr.length()) flagged.add(arr.getString(i))
-                    }
-                    val shifts = mutableListOf<String>()
-                    cp.optJSONArray("active_shift_verticals")?.let { arr ->
-                        for (i in 0 until arr.length()) shifts.add(arr.getString(i))
-                    }
-                    currentContractorProfile = ContractorProfileState(
-                        offersSkills = cp.optBoolean("offers_skills", true),
-                        skillTags = skills,
-                        offersDelivery = cp.optBoolean("offers_delivery", false),
-                        offersRideHailing = cp.optBoolean("offers_ride_hailing", false),
-                        vehicleType = cp.optString("vehicle_type", "motorcycle"),
-                        dispatchRadiusM = cp.optInt("dispatch_radius_m", 1500),
-                        flaggedDocs = flagged,
-                        resubmissionNotes = if (cp.isNull("resubmission_notes")) null else cp.optString("resubmission_notes"),
-                        activeShiftVerticals = if (shifts.isEmpty()) listOf("skills_marketplace") else shifts,
-                        isOnline = cp.optBoolean("is_online", true),
-                        autoAcceptEnabled = cp.optBoolean("auto_accept_enabled", false)
-                    )
-                }
-
-                if (!json.isNull("active_subscription")) {
-                    val sub = json.getJSONObject("active_subscription")
-                    currentSubscriptionPass = ActiveSubscriptionPass(
-                        tierCode = sub.getString("tier_code"),
-                        feePaid = sub.optDouble("fee_paid", 0.0),
-                        dailyCapMinutes = sub.optInt("daily_cap_minutes", 1440),
-                        expiresAt = sub.optString("expires_at", "")
-                    )
-                    effectiveCommissionRate = 0.00
-                } else {
-                    currentSubscriptionPass = null
-                    effectiveCommissionRate = customComm ?: 0.12
-                }
-
-                syncServiceVerticals()
-                return@withContext Result.success(userObj)
+    private fun postRpc(rpcName: String, payload: JSONObject): JSONObject {
+        val req = Request.Builder()
+            .url("$supabaseUrl/rest/v1/rpc/$rpcName")
+            .addHeader("apikey", supabaseKey)
+            .addHeader("Authorization", "Bearer $supabaseKey")
+            .post(payload.toString().toRequestBody(jsonMedia))
+            .build()
+        http.newCall(req).execute().use { resp ->
+            val raw = resp.body?.string().orEmpty().trim()
+            return if (raw.startsWith("{")) JSONObject(raw) else JSONObject().apply {
+                put("status", if (resp.isSuccessful) "SUCCESS" else "ERROR")
+                put("message", if (raw.isNotBlank()) raw else "HTTP ${resp.code}")
             }
+        }
+    }
+
+    // Loads full scoped mobile state in one authenticated round-trip under strict RLS
+    suspend fun fetchAppBootStateRpc(sessionToken: String, expectedRole: String): Result<AuthenticatedUser> = withContext(Dispatchers.IO) {
+        if (sessionToken.length < 32) {
+            return@withContext Result.failure(SecurityException("Session token missing or outdated. Please sign in."))
+        }
+        try {
+            val json = postRpc("secure_get_mobile_state_rpc", JSONObject().apply {
+                put("p_session_token", sessionToken)
+            })
+            if (json.optString("status") != "SUCCESS" || json.isNull("user")) {
+                return@withContext Result.failure(SecurityException(json.optString("message", "Session expired. Please sign in again.")))
+            }
+
+            val u = json.getJSONObject("user")
+            val role = u.getString("role")
+            if (role != expectedRole && role != "super_admin") {
+                return@withContext Result.failure(SecurityException("Portal Isolation: Role [$role] cannot enter [$expectedRole] portal."))
+            }
+
+            val customComm = if (u.isNull("custom_commission_rate")) null else u.optDouble("custom_commission_rate")
+            val userObj = AuthenticatedUser(
+                id = u.getString("id"),
+                username = u.optString("username", ""),
+                fullName = u.getString("full_name"),
+                nickname = u.optString("nickname", u.getString("full_name")),
+                phone = u.getString("phone"),
+                email = u.optString("email", ""),
+                role = role,
+                accountStatus = if (u.optBoolean("account_frozen", false)) "SUSPENDED" else u.optString("account_status", "ACTIVE"),
+                municipality = u.optString("municipality", "Angeles City"),
+                barangayZone = u.optString("barangay_zone", "Sto. Rosario"),
+                addressText = u.optString("address_text", ""),
+                homeLat = u.optDouble("home_lat", 15.1450),
+                homeLng = u.optDouble("home_lng", 120.5887),
+                kycVerified = u.optBoolean("kyc_verified", true),
+                lguPesoEndorsed = u.optBoolean("lgu_peso_endorsed", false),
+                creditBalance = u.optDouble("credit_balance", 0.0),
+                heldCredits = u.optDouble("held_credits", 0.0),
+                customCommissionRate = customComm,
+                vipGrindBadge = u.optBoolean("vip_grind_badge", false),
+                thumbsUpCount = u.optInt("thumbs_up_count", 5),
+                thumbsDownCount = u.optInt("thumbs_down_count", 0),
+                customerTrustScore = u.optDouble("customer_trust_score", 100.0)
+            )
+            currentSessionToken = sessionToken
+            currentSessionUser = userObj
+            contractorAvailableCredits = userObj.creditBalance
+            contractorHeldCredits = userObj.heldCredits
+
+            if (!json.isNull("contractor_profile")) {
+                val cp = json.getJSONObject("contractor_profile")
+                val skills = mutableListOf<String>()
+                cp.optJSONArray("skill_tags")?.let { arr -> for (i in 0 until arr.length()) skills.add(arr.getString(i)) }
+                val flagged = mutableListOf<String>()
+                cp.optJSONArray("flagged_docs")?.let { arr -> for (i in 0 until arr.length()) flagged.add(arr.getString(i)) }
+                val shifts = mutableListOf<String>()
+                cp.optJSONArray("active_shift_verticals")?.let { arr -> for (i in 0 until arr.length()) shifts.add(arr.getString(i)) }
+                currentContractorProfile = ContractorProfileState(
+                    offersSkills = cp.optBoolean("offers_skills", true),
+                    skillTags = skills,
+                    offersDelivery = cp.optBoolean("offers_delivery", false),
+                    offersRideHailing = cp.optBoolean("offers_ride_hailing", false),
+                    vehicleType = cp.optString("vehicle_type", "motorcycle"),
+                    dispatchRadiusM = cp.optInt("dispatch_radius_m", 1500),
+                    flaggedDocs = flagged,
+                    resubmissionNotes = if (cp.isNull("resubmission_notes")) null else cp.optString("resubmission_notes"),
+                    activeShiftVerticals = if (shifts.isEmpty()) listOf("skills_marketplace") else shifts,
+                    isOnline = cp.optBoolean("is_online", true),
+                    autoAcceptEnabled = cp.optBoolean("auto_accept_enabled", false)
+                )
+            } else {
+                currentContractorProfile = null
+            }
+
+            if (!json.isNull("active_subscription")) {
+                val sub = json.getJSONObject("active_subscription")
+                currentSubscriptionPass = ActiveSubscriptionPass(
+                    tierCode = sub.getString("tier_code"),
+                    feePaid = sub.optDouble("fee_paid", 0.0),
+                    dailyCapMinutes = sub.optInt("daily_cap_minutes", 1440),
+                    expiresAt = sub.optString("expires_at", "")
+                )
+                effectiveCommissionRate = 0.00
+            } else {
+                currentSubscriptionPass = null
+                effectiveCommissionRate = customComm ?: 0.12
+            }
+
+            hydrateCollectionsFromSnapshot(json)
+            return@withContext Result.success(userObj)
         } catch (e: Exception) {
             return@withContext Result.failure(e)
         }
+    }
+
+    private fun hydrateCollectionsFromSnapshot(json: JSONObject) {
+        json.optJSONArray("verticals_list")?.let { arr ->
+            verticals.clear()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                verticals.add(
+                    ServiceVertical(
+                        key = o.getString("vertical_key"),
+                        displayName = o.getString("display_name"),
+                        isEnabled = o.getBoolean("is_enabled"),
+                        dispatchMode = o.getString("dispatch_mode"),
+                        requiresSub400cc = o.optBoolean("requires_sub_400cc_routing", false),
+                        description = o.optString("description", "")
+                    )
+                )
+            }
+        }
+
+        json.optJSONArray("pricing_matrix")?.let { arr ->
+            pricingClasses.clear()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                pricingClasses.add(
+                    ServicePricingClass(
+                        classCode = o.getString("class_code"),
+                        verticalKey = o.getString("vertical_key"),
+                        className = o.getString("class_name"),
+                        vehicleOrTradeType = o.optString("vehicle_or_trade_type", ""),
+                        dispatchRadiusM = o.optInt("dispatch_radius_m", 1500),
+                        baseOrCalloutFee = o.optDouble("base_or_callout_fee", 350.0),
+                        baseIncludedKm = o.optDouble("base_included_km", 0.0),
+                        perKmRate = o.optDouble("per_km_rate", 0.0),
+                        economyMultiplier = o.optDouble("economy_multiplier", 1.0),
+                        arrivalCancellationFee = o.optDouble("arrival_cancellation_fee", 100.0)
+                    )
+                )
+            }
+        }
+
+        json.optJSONArray("bookings")?.let { arr ->
+            bookings.clear()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                bookings.add(
+                    BookingRecord(
+                        id = o.getString("id"),
+                        bookingRef = o.getString("booking_ref"),
+                        verticalKey = o.getString("vertical_key"),
+                        jobSubtype = o.optString("job_subtype", "ON_SITE_SKILL"),
+                        clientId = o.getString("client_id"),
+                        contractorId = if (o.isNull("contractor_id")) null else o.getString("contractor_id"),
+                        municipality = o.optString("municipality", "Angeles City"),
+                        barangayZone = o.getString("barangay_zone"),
+                        skillCategory = o.optString("skill_category", "General Service"),
+                        serviceTitle = o.getString("service_title"),
+                        pickupAddress = o.getString("pickup_address"),
+                        dropoffAddress = o.optString("dropoff_address", ""),
+                        quotedFee = o.getDouble("quoted_fee"),
+                        tipAmount = o.optDouble("tip_amount", 0.0),
+                        commissionLocked = o.optDouble("commission_locked", 0.0),
+                        status = o.getString("status"),
+                        clientNickname = o.optString("client_nickname", "Customer"),
+                        clientThumbsUp = o.optInt("client_thumbs_up", 5),
+                        clientThumbsDown = o.optInt("client_thumbs_down", 0),
+                        clientTrustScore = o.optDouble("client_trust_score", 100.0),
+                        contractorFullName = if (o.isNull("contractor_full_name")) null else o.optString("contractor_full_name"),
+                        contractorRatingAvg = o.optDouble("contractor_rating_avg", 5.0),
+                        contractorRatingCount = o.optInt("contractor_rating_count", 1),
+                        contractorVipBadge = o.optBoolean("contractor_vip_badge", false)
+                    )
+                )
+            }
+        }
+
+        json.optJSONArray("booking_bids")?.let { arr ->
+            bookingBids.clear()
+            for (i in 0 until arr.length()) {
+                val b = arr.getJSONObject(i)
+                val highlights = mutableListOf<String>()
+                b.optJSONArray("review_highlights")?.let { hArr ->
+                    for (k in 0 until hArr.length()) highlights.add(hArr.getString(k))
+                }
+                bookingBids.add(
+                    BookingBidRecord(
+                        id = b.getString("id"),
+                        bookingId = b.getString("booking_id"),
+                        contractorId = b.getString("contractor_id"),
+                        contractorName = b.optString("contractor_name", "Verified Contractor"),
+                        contractorUsername = b.optString("contractor_username", "contractor"),
+                        contractorRatingAvg = b.optDouble("contractor_rating_avg", 5.0),
+                        contractorRatingCount = b.optInt("contractor_rating_count", 1),
+                        contractorVipBadge = b.optBoolean("contractor_vip_badge", false),
+                        reviewHighlights = highlights,
+                        bidAmountPhp = b.getDouble("bid_amount_php"),
+                        estimatedEtaMin = b.optInt("estimated_eta_min", 20),
+                        bidNotes = b.optString("bid_notes", ""),
+                        status = b.optString("status", "ACTIVE")
+                    )
+                )
+            }
+        }
+
+        json.optJSONArray("ledger_history")?.let { arr ->
+            ledgerHistory.clear()
+            for (i in 0 until arr.length()) {
+                val l = arr.getJSONObject(i)
+                ledgerHistory.add(
+                    LedgerEntry(
+                        timestamp = l.optString("created_at", "Recent"),
+                        entryType = l.getString("entry_type"),
+                        amount = l.getDouble("amount").toString(),
+                        balanceAfter = l.getDouble("balance_after"),
+                        heldAfter = l.getDouble("held_after"),
+                        notes = l.optString("notes", "")
+                    )
+                )
+            }
+        }
+    }
+
+    suspend fun syncBookingsAndWallet() = withContext(Dispatchers.IO) {
+        val tok = currentSessionToken ?: return@withContext
+        val role = currentSessionUser?.role ?: "customer"
+        fetchAppBootStateRpc(tok, if (role == "super_admin") "customer" else role)
     }
 
     suspend fun authenticateUserRpc(
@@ -275,33 +414,26 @@ object AlistoKernelClient {
         expectedAppRole: String
     ): Result<AuthenticatedUser> = withContext(Dispatchers.IO) {
         try {
-            val payload = JSONObject().apply {
+            val json = postRpc("authenticate_user_secure_rpc", JSONObject().apply {
                 put("p_identifier", identifier.trim())
                 put("p_password", password)
+                put("p_device_label", "android_${expectedAppRole}_apk")
+            })
+            if (json.optString("status") != "SUCCESS" || !json.has("user")) {
+                return@withContext Result.failure(SecurityException(json.optString("message", "Invalid credentials.")))
             }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/authenticate_user_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-
-            var uid = ""
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                if (json.optString("status") != "SUCCESS" || !json.has("user")) {
-                    return@withContext Result.failure(SecurityException(json.optString("message", "Invalid credentials.")))
-                }
-                val u = json.getJSONObject("user")
-                val role = u.getString("role")
-                if (role != expectedAppRole && role != "super_admin") {
-                    return@withContext Result.failure(
-                        SecurityException("PORTAL ISOLATION BLOCK: Account role [$role] cannot sign into the [$expectedAppRole] app.")
-                    )
-                }
-                uid = u.getString("id")
+            val u = json.getJSONObject("user")
+            val role = u.getString("role")
+            if (role != expectedAppRole && role != "super_admin") {
+                return@withContext Result.failure(
+                    SecurityException("PORTAL ISOLATION BLOCK: Account role [$role] cannot sign into the [$expectedAppRole] app.")
+                )
             }
-            return@withContext fetchAppBootStateRpc(uid, expectedAppRole)
+            val token = json.optString("session_token", "")
+            if (token.length < 32) {
+                return@withContext Result.failure(SecurityException("Server failed to mint session token."))
+            }
+            return@withContext fetchAppBootStateRpc(token, expectedAppRole)
         } catch (e: Exception) {
             return@withContext Result.failure(e)
         }
@@ -321,7 +453,7 @@ object AlistoKernelClient {
         profilePhotoUrl: String?
     ): Result<AuthenticatedUser> = withContext(Dispatchers.IO) {
         try {
-            val payload = JSONObject().apply {
+            val json = postRpc("register_customer_portal_rpc", JSONObject().apply {
                 put("p_full_name", fullName)
                 put("p_nickname", nickname)
                 put("p_phone", phone)
@@ -333,23 +465,11 @@ object AlistoKernelClient {
                 put("p_home_lat", homeLat)
                 put("p_home_lng", homeLng)
                 put("p_profile_photo_url", profilePhotoUrl)
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Customer sign-up failed.")))
             }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/register_customer_portal_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-
-            var newUid = ""
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                if (json.optString("status") != "SUCCESS" || !json.has("user")) {
-                    return@withContext Result.failure(IllegalStateException(json.optString("message", "Customer sign-up failed.")))
-                }
-                newUid = json.getJSONObject("user").getString("id")
-            }
-            return@withContext fetchAppBootStateRpc(newUid, "customer")
+            return@withContext authenticateUserRpc(phone.ifBlank { email }, password, "customer")
         } catch (e: Exception) {
             return@withContext Result.failure(e)
         }
@@ -378,7 +498,7 @@ object AlistoKernelClient {
         vehiclePhotoUrl: String?
     ): Result<AuthenticatedUser> = withContext(Dispatchers.IO) {
         try {
-            val payload = JSONObject().apply {
+            val json = postRpc("register_contractor_portal_rpc", JSONObject().apply {
                 put("p_first_name", firstName)
                 put("p_last_name", lastName)
                 put("p_birth_date", birthDate)
@@ -400,23 +520,11 @@ object AlistoKernelClient {
                 put("p_orcr_doc_url", orcrDocUrl)
                 put("p_vehicle_photo_url", vehiclePhotoUrl)
                 put("p_skill_cert_urls", JSONArray())
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Contractor sign-up failed.")))
             }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/register_contractor_portal_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-
-            var newUid = ""
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                if (json.optString("status") != "SUCCESS" || !json.has("user")) {
-                    return@withContext Result.failure(IllegalStateException(json.optString("message", "Contractor sign-up failed.")))
-                }
-                newUid = json.getJSONObject("user").getString("id")
-            }
-            return@withContext fetchAppBootStateRpc(newUid, "contractor")
+            return@withContext authenticateUserRpc(phone.ifBlank { email }, password, "contractor")
         } catch (e: Exception) {
             return@withContext Result.failure(e)
         }
@@ -424,26 +532,18 @@ object AlistoKernelClient {
 
     suspend fun purchaseSubscriptionPassRpc(tierCode: String): Result<Boolean> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated"))
+        val tok = currentSessionToken ?: return@withContext Result.failure(SecurityException("Session token missing"))
         try {
-            val payload = JSONObject().apply {
+            val json = postRpc("secure_purchase_subscription_pass_rpc", JSONObject().apply {
+                put("p_session_token", tok)
                 put("p_contractor_id", activeUser.id)
                 put("p_tier_code", tierCode)
                 put("p_payment_ref", "APK-PASS-${System.currentTimeMillis()}")
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Pass activation requires Admin clinic or verified PayMongo settlement.")))
             }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/purchase_subscription_pass_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                if (json.optString("status") != "SUCCESS") {
-                    return@withContext Result.failure(IllegalStateException(json.optString("message", "Pass activation failed.")))
-                }
-            }
-            fetchAppBootStateRpc(activeUser.id, "contractor")
+            fetchAppBootStateRpc(tok, "contractor")
             return@withContext Result.success(true)
         } catch (e: Exception) {
             return@withContext Result.failure(e)
@@ -451,6 +551,15 @@ object AlistoKernelClient {
     }
 
     fun signOut() {
+        val tok = currentSessionToken
+        if (!tok.isNullOrBlank()) {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    postRpc("logout_session_rpc", JSONObject().apply { put("p_session_token", tok) })
+                } catch (_: Exception) {}
+            }
+        }
+        currentSessionToken = null
         currentSessionUser = null
         currentContractorProfile = null
         currentSubscriptionPass = null
@@ -460,179 +569,18 @@ object AlistoKernelClient {
         chatTranscripts.clear()
     }
 
-    suspend fun syncServiceVerticals(): List<ServiceVertical> = withContext(Dispatchers.IO) {
-        try {
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/service_verticals?select=*&order=vertical_key.asc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .get()
-                .build()
-
-            http.newCall(req).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val arr = JSONArray(resp.body?.string() ?: "[]")
-                    if (arr.length() > 0) {
-                        verticals.clear()
-                        for (i in 0 until arr.length()) {
-                            val o = arr.getJSONObject(i)
-                            verticals.add(
-                                ServiceVertical(
-                                    key = o.getString("vertical_key"),
-                                    displayName = o.getString("display_name"),
-                                    isEnabled = o.getBoolean("is_enabled"),
-                                    dispatchMode = o.getString("dispatch_mode"),
-                                    requiresSub400cc = o.optBoolean("requires_sub_400cc_routing", false),
-                                    description = o.optString("description", "")
-                                )
-                            )
-                        }
-                    }
-                }
-            }
-        } catch (_: Exception) {}
-        syncBookingsAndWallet()
-        return@withContext verticals
-    }
-
-    suspend fun syncBookingsAndWallet() = withContext(Dispatchers.IO) {
-        val activeUser = currentSessionUser ?: return@withContext
-        try {
-            // Sync bookings enriched with Mutual Reputation Transparency (Customer 👍/👎 & Contractor ★ CSAT)
-            val bReq = Request.Builder()
-                .url("$supabaseUrl/rest/v1/v_bookings_with_reputation?select=*&order=created_at.desc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .get()
-                .build()
-
-            http.newCall(bReq).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val arr = JSONArray(resp.body?.string() ?: "[]")
-                    bookings.clear()
-                    for (i in 0 until arr.length()) {
-                        val o = arr.getJSONObject(i)
-                        bookings.add(
-                            BookingRecord(
-                                id = o.getString("id"),
-                                bookingRef = o.getString("booking_ref"),
-                                verticalKey = o.getString("vertical_key"),
-                                jobSubtype = o.optString("job_subtype", "ON_SITE_SKILL"),
-                                clientId = o.getString("client_id"),
-                                contractorId = if (o.isNull("contractor_id")) null else o.getString("contractor_id"),
-                                municipality = o.optString("municipality", "Angeles City"),
-                                barangayZone = o.getString("barangay_zone"),
-                                skillCategory = o.optString("skill_category", "General Service"),
-                                serviceTitle = o.getString("service_title"),
-                                pickupAddress = o.getString("pickup_address"),
-                                dropoffAddress = o.optString("dropoff_address", ""),
-                                quotedFee = o.getDouble("quoted_fee"),
-                                tipAmount = o.optDouble("tip_amount", 0.0),
-                                commissionLocked = o.optDouble("commission_locked", 0.0),
-                                status = o.getString("status"),
-                                clientNickname = o.optString("client_nickname", "Customer"),
-                                clientThumbsUp = o.optInt("client_thumbs_up", 5),
-                                clientThumbsDown = o.optInt("client_thumbs_down", 0),
-                                clientTrustScore = o.optDouble("client_trust_score", 100.0),
-                                contractorFullName = if (o.isNull("contractor_full_name")) null else o.optString("contractor_full_name"),
-                                contractorRatingAvg = o.optDouble("contractor_rating_avg", 5.0),
-                                contractorRatingCount = o.optInt("contractor_rating_count", 1),
-                                contractorVipBadge = o.optBoolean("contractor_vip_badge", false)
-                            )
-                        )
-                    }
-                }
-            }
-
-            // Sync Open Bids enriched with Contractor CSAT Star Rating & Review Highlights
-            val bidsReq = Request.Builder()
-                .url("$supabaseUrl/rest/v1/v_booking_bids_enriched?status=eq.ACTIVE&order=created_at.desc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .get()
-                .build()
-
-            http.newCall(bidsReq).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val arr = JSONArray(resp.body?.string() ?: "[]")
-                    bookingBids.clear()
-                    for (i in 0 until arr.length()) {
-                        val b = arr.getJSONObject(i)
-                        val highlights = mutableListOf<String>()
-                        b.optJSONArray("review_highlights")?.let { hArr ->
-                            for (k in 0 until hArr.length()) highlights.add(hArr.getString(k))
-                        }
-                        bookingBids.add(
-                            BookingBidRecord(
-                                id = b.getString("id"),
-                                bookingId = b.getString("booking_id"),
-                                contractorId = b.getString("contractor_id"),
-                                contractorName = b.optString("contractor_name", "Verified Contractor"),
-                                contractorUsername = b.optString("contractor_username", "contractor"),
-                                contractorRatingAvg = b.optDouble("contractor_rating_avg", 5.0),
-                                contractorRatingCount = b.optInt("contractor_rating_count", 1),
-                                contractorVipBadge = b.optBoolean("contractor_vip_badge", false),
-                                reviewHighlights = highlights,
-                                bidAmountPhp = b.getDouble("bid_amount_php"),
-                                estimatedEtaMin = b.optInt("estimated_eta_min", 20),
-                                bidNotes = b.optString("bid_notes", ""),
-                                status = b.optString("status", "ACTIVE")
-                            )
-                        )
-                    }
-                }
-            }
-
-            val lReq = Request.Builder()
-                .url("$supabaseUrl/rest/v1/credit_ledger?user_id=eq.${activeUser.id}&select=*&order=created_at.desc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .get()
-                .build()
-
-            http.newCall(lReq).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val arr = JSONArray(resp.body?.string() ?: "[]")
-                    ledgerHistory.clear()
-                    for (i in 0 until arr.length()) {
-                        val l = arr.getJSONObject(i)
-                        ledgerHistory.add(
-                            LedgerEntry(
-                                timestamp = l.optString("created_at", "Recent"),
-                                entryType = l.getString("entry_type"),
-                                amount = l.getDouble("amount").toString(),
-                                balanceAfter = l.getDouble("balance_after"),
-                                heldAfter = l.getDouble("held_after"),
-                                notes = l.optString("notes", "")
-                            )
-                        )
-                    }
-                }
-            }
-        } catch (_: Exception) {}
-    }
-
     suspend fun claimBookingRpc(bookingId: String): Result<BookingRecord> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
+        val tok = currentSessionToken ?: return@withContext Result.failure(SecurityException("Session expired."))
         try {
-            val payload = JSONObject().apply {
+            val json = postRpc("claim_booking_rpc", JSONObject().apply {
                 put("p_booking_id", bookingId)
                 put("p_contractor_id", activeUser.id)
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Unable to claim job.")))
             }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/claim_booking_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                if (json.optString("status") != "SUCCESS") {
-                    return@withContext Result.failure(IllegalStateException(json.optString("message", "Unable to claim job.")))
-                }
-            }
-            fetchAppBootStateRpc(activeUser.id, "contractor")
+            fetchAppBootStateRpc(tok, "contractor")
             val updated = bookings.find { it.id == bookingId }
             if (updated != null) return@withContext Result.success(updated)
         } catch (e: Exception) {
@@ -643,26 +591,17 @@ object AlistoKernelClient {
 
     suspend fun advanceBookingStateRpc(bookingId: String, nextStatus: String): Result<BookingRecord> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
+        val tok = currentSessionToken ?: return@withContext Result.failure(SecurityException("Session expired."))
         try {
-            val payload = JSONObject().apply {
+            val json = postRpc("transition_booking_status_rpc", JSONObject().apply {
                 put("p_booking_id", bookingId)
                 put("p_actor_id", activeUser.id)
                 put("p_next_status", nextStatus)
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Transition failed.")))
             }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/transition_booking_status_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                if (json.optString("status") != "SUCCESS") {
-                    return@withContext Result.failure(IllegalStateException(json.optString("message", "Transition failed.")))
-                }
-            }
-            fetchAppBootStateRpc(activeUser.id, "contractor")
+            fetchAppBootStateRpc(tok, "contractor")
             val updated = bookings.find { it.id == bookingId }
             if (updated != null) return@withContext Result.success(updated)
         } catch (e: Exception) {
@@ -673,59 +612,39 @@ object AlistoKernelClient {
 
     suspend fun topUpCreditsQrPhRpc(amount: Double): Result<Double> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
+        val tok = currentSessionToken ?: return@withContext Result.failure(SecurityException("Session expired."))
         try {
-            val payload = JSONObject().apply {
-                put("p_user_id", activeUser.id)
+            val json = postRpc("secure_topup_prepaid_credits_rpc", JSONObject().apply {
+                put("p_session_token", tok)
+                put("p_target_user_id", activeUser.id)
                 put("p_amount", amount)
                 put("p_qrph_ref", "QRPH-${System.currentTimeMillis()}")
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Wallet top-ups require Admin clinic or verified PayMongo QR Ph settlement.")))
             }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/topup_prepaid_credits_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-
-            var bonusGranted = 0.0
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                bonusGranted = json.optDouble("bonus_granted", 0.0)
-            }
-            fetchAppBootStateRpc(activeUser.id, "contractor")
+            val bonusGranted = json.optDouble("bonus_granted", 0.0)
+            fetchAppBootStateRpc(tok, "contractor")
             return@withContext Result.success(bonusGranted)
         } catch (e: Exception) {
             return@withContext Result.failure(e)
         }
     }
 
-    suspend fun sendModeratedChatMessageRpc(
-        bookingId: String,
-        messageBody: String
-    ): Result<ChatMessage> = withContext(Dispatchers.IO) {
+    suspend fun sendModeratedChatMessageRpc(bookingId: String, messageBody: String): Result<ChatMessage> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
-            val payload = JSONObject().apply {
+            val json = postRpc("send_booking_message_rpc", JSONObject().apply {
                 put("p_booking_id", bookingId)
                 put("p_sender_id", activeUser.id)
                 put("p_message_body", messageBody)
-            }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/send_booking_message_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                val status = json.optString("status")
-                if (status == "BLOCKED_MODERATION" || status == "LOCKED_STATE" || status == "ERROR") {
-                    return@withContext Result.failure(SecurityException(json.optString("message", "Message blocked by moderation trigger.")))
-                }
+            })
+            val status = json.optString("status")
+            if (status == "BLOCKED_MODERATION" || status == "LOCKED_STATE" || status == "ERROR") {
+                return@withContext Result.failure(SecurityException(json.optString("message", "Message blocked by moderation trigger.")))
             }
             val msg = ChatMessage(activeUser.nickname, messageBody.trim(), "Live")
-            val list = chatTranscripts.getOrPut(bookingId) { mutableListOf() }
-            list.add(msg)
+            chatTranscripts.getOrPut(bookingId) { mutableListOf() }.add(msg)
             return@withContext Result.success(msg)
         } catch (e: Exception) {
             return@withContext Result.failure(e)
@@ -740,21 +659,14 @@ object AlistoKernelClient {
         speedKph: Double = 26.5
     ) {
         try {
-            val payload = JSONObject().apply {
+            postRpc("record_booking_telemetry_rpc", JSONObject().apply {
                 put("p_booking_id", bookingId)
                 put("p_contractor_id", contractorId)
                 put("p_lat", lat)
                 put("p_lng", lng)
                 put("p_speed_kph", speedKph)
                 put("p_heading", 45.0)
-            }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/record_booking_telemetry_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-            http.newCall(req).execute().close()
+            })
         } catch (_: Exception) {}
     }
 
@@ -775,7 +687,7 @@ object AlistoKernelClient {
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
-            val payload = JSONObject().apply {
+            val json = postRpc("create_booking_v2_rpc", JSONObject().apply {
                 put("p_client_id", activeUser.id)
                 put("p_vertical_key", verticalKey)
                 put("p_job_subtype", jobSubtype)
@@ -795,22 +707,12 @@ object AlistoKernelClient {
                 put("p_tip_amount", tipAmount)
                 put("p_errand_item_cost", errandItemCostPhp)
                 put("p_deadhead_return_km", deadheadReturnKm)
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Booking blocked.")))
             }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/create_booking_v2_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                if (json.optString("status") != "SUCCESS") {
-                    return@withContext Result.failure(IllegalStateException(json.optString("message", "Booking blocked.")))
-                }
-                syncBookingsAndWallet()
-                return@withContext Result.success(json)
-            }
+            syncBookingsAndWallet()
+            return@withContext Result.success(json)
         } catch (e: Exception) {
             return@withContext Result.failure(e)
         }
@@ -824,28 +726,18 @@ object AlistoKernelClient {
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
-            val payload = JSONObject().apply {
+            val json = postRpc("submit_contractor_bid_rpc", JSONObject().apply {
                 put("p_booking_id", bookingId)
                 put("p_contractor_id", activeUser.id)
                 put("p_bid_amount_php", bidAmountPhp)
                 put("p_eta_min", etaMin)
                 put("p_notes", notes)
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Pre-bid wallet check failed.")))
             }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/submit_contractor_bid_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                if (json.optString("status") != "SUCCESS") {
-                    return@withContext Result.failure(IllegalStateException(json.optString("message", "Pre-bid wallet check failed.")))
-                }
-                syncBookingsAndWallet()
-                return@withContext Result.success(json)
-            }
+            syncBookingsAndWallet()
+            return@withContext Result.success(json)
         } catch (e: Exception) {
             return@withContext Result.failure(e)
         }
@@ -854,22 +746,12 @@ object AlistoKernelClient {
     suspend fun withdrawContractorBidRpc(bookingId: String): Result<Boolean> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
-            val payload = JSONObject().apply {
+            val json = postRpc("withdraw_contractor_bid_rpc", JSONObject().apply {
                 put("p_booking_id", bookingId)
                 put("p_contractor_id", activeUser.id)
-            }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/withdraw_contractor_bid_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                if (json.optString("status") != "SUCCESS") {
-                    return@withContext Result.failure(IllegalStateException(json.optString("message", "Unable to withdraw bid.")))
-                }
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Unable to withdraw bid.")))
             }
             syncBookingsAndWallet()
             return@withContext Result.success(true)
@@ -881,23 +763,13 @@ object AlistoKernelClient {
     suspend fun acceptContractorBidRpc(bookingId: String, bidId: String): Result<Boolean> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
-            val payload = JSONObject().apply {
+            val json = postRpc("accept_contractor_bid_rpc", JSONObject().apply {
                 put("p_booking_id", bookingId)
                 put("p_bid_id", bidId)
                 put("p_client_id", activeUser.id)
-            }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/accept_contractor_bid_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                if (json.optString("status") != "SUCCESS") {
-                    return@withContext Result.failure(IllegalStateException(json.optString("message", "Unable to accept bid.")))
-                }
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Unable to accept bid.")))
             }
             syncBookingsAndWallet()
             return@withContext Result.success(true)
@@ -915,26 +787,16 @@ object AlistoKernelClient {
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
-            val payload = JSONObject().apply {
+            val json = postRpc("submit_customer_star_rating_rpc", JSONObject().apply {
                 put("p_booking_id", bookingId)
                 put("p_client_id", activeUser.id)
                 put("p_contractor_id", contractorId)
                 put("p_stars", stars)
                 put("p_tags", JSONArray(tags))
                 put("p_comments", comments)
-            }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/submit_customer_star_rating_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                syncBookingsAndWallet()
-                return@withContext Result.success(json)
-            }
+            })
+            syncBookingsAndWallet()
+            return@withContext Result.success(json)
         } catch (e: Exception) {
             return@withContext Result.failure(e)
         }
@@ -946,23 +808,17 @@ object AlistoKernelClient {
         activeShiftVerticals: List<String>? = null
     ): Result<Boolean> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
+        val tok = currentSessionToken ?: return@withContext Result.failure(SecurityException("Session expired."))
         try {
-            val payload = JSONObject().apply {
+            postRpc("toggle_contractor_dispatch_mode_rpc", JSONObject().apply {
                 put("p_contractor_id", activeUser.id)
                 put("p_is_online", isOnline)
                 put("p_auto_accept", autoAccept)
                 if (activeShiftVerticals != null) {
                     put("p_active_shift_verticals", JSONArray(activeShiftVerticals))
                 }
-            }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/toggle_contractor_dispatch_mode_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-            http.newCall(req).execute().close()
-            fetchAppBootStateRpc(activeUser.id, "contractor")
+            })
+            fetchAppBootStateRpc(tok, "contractor")
             return@withContext Result.success(true)
         } catch (e: Exception) {
             return@withContext Result.failure(e)
@@ -974,25 +830,16 @@ object AlistoKernelClient {
         cancelMode: String,
         reason: String
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
-        val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
+        val tok = currentSessionToken ?: return@withContext Result.failure(SecurityException("Session expired."))
         try {
-            val payload = JSONObject().apply {
+            val json = postRpc("secure_cancel_booking_rpc", JSONObject().apply {
+                put("p_session_token", tok)
                 put("p_booking_id", bookingId)
-                put("p_actor_id", activeUser.id)
                 put("p_cancel_mode", cancelMode)
                 put("p_reason", reason)
-            }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/execute_mutual_or_noshow_cancel_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                syncBookingsAndWallet()
-                return@withContext Result.success(json)
-            }
+            })
+            syncBookingsAndWallet()
+            return@withContext Result.success(json)
         } catch (e: Exception) {
             return@withContext Result.failure(e)
         }
@@ -1005,22 +852,13 @@ object AlistoKernelClient {
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
-            val payload = JSONObject().apply {
+            val json = postRpc("submit_contractor_thumb_review_rpc", JSONObject().apply {
                 put("p_booking_id", bookingId)
                 put("p_contractor_id", activeUser.id)
                 put("p_thumb_vote", thumbVote)
                 put("p_feedback_note", feedbackNote)
-            }
-            val req = Request.Builder()
-                .url("$supabaseUrl/rest/v1/rpc/submit_contractor_thumb_review_rpc")
-                .addHeader("apikey", supabaseKey)
-                .addHeader("Authorization", "Bearer $supabaseKey")
-                .post(payload.toString().toRequestBody(jsonMedia))
-                .build()
-            http.newCall(req).execute().use { resp ->
-                val json = JSONObject(resp.body?.string() ?: "{}")
-                return@withContext Result.success(json)
-            }
+            })
+            return@withContext Result.success(json)
         } catch (e: Exception) {
             return@withContext Result.failure(e)
         }

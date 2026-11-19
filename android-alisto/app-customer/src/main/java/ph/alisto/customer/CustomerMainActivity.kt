@@ -113,7 +113,7 @@ class CustomerMainActivity : AppCompatActivity() {
                     uiScope.launch {
                         val res = AlistoKernelClient.authenticateUserRpc(idInput.text.toString(), pwInput.text.toString(), "customer")
                         res.onSuccess { user ->
-                            AlistoBiometricVault.saveEncryptedSession(this@CustomerMainActivity, "customer", user.id, "${user.nickname} (@${user.username})")
+                            AlistoBiometricVault.saveEncryptedSession(this@CustomerMainActivity, "customer", AlistoKernelClient.currentSessionToken ?: "", "${user.nickname} (@${user.username})")
                             showAuthenticatedCustomerPortal()
                         }.onFailure { err ->
                             AlertDialog.Builder(this@CustomerMainActivity).setTitle("Login Denied").setMessage(err.message).setPositiveButton("OK", null).show()
@@ -180,7 +180,7 @@ class CustomerMainActivity : AppCompatActivity() {
                             profilePhotoUrl = compressedProfilePhotoDataUrl
                         )
                         res.onSuccess { user ->
-                            AlistoBiometricVault.saveEncryptedSession(this@CustomerMainActivity, "customer", user.id, "${user.nickname} (@${user.username})")
+                            AlistoBiometricVault.saveEncryptedSession(this@CustomerMainActivity, "customer", AlistoKernelClient.currentSessionToken ?: "", "${user.nickname} (@${user.username})")
                             showAuthenticatedCustomerPortal()
                         }.onFailure { err ->
                             AlertDialog.Builder(this@CustomerMainActivity).setTitle("Sign-Up Error").setMessage(err.message).setPositiveButton("OK", null).show()
@@ -223,7 +223,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 setTextColor(Color.WHITE)
                 setOnClickListener {
                     uiScope.launch {
-                        AlistoKernelClient.fetchAppBootStateRpc(user.id, "customer")
+                        AlistoKernelClient.fetchAppBootStateRpc(AlistoKernelClient.currentSessionToken ?: "", "customer")
                         showAuthenticatedCustomerPortal()
                     }
                 }

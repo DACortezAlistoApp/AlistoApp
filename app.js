@@ -11,6 +11,31 @@ let currentAuthUser = null;
 let activeProfileModalUserId = null;
 const SESSION_STORAGE_KEY = 'ALISTO_AUTH_SESSION_V1';
 
+let currentSessionToken = sessionStorage.getItem('alisto_session_token') || null;
+let securePollTimer = null;
+
+function getActiveSessionToken() {
+  return currentSessionToken || sessionStorage.getItem('alisto_session_token') || '';
+}
+
+function setActiveSessionToken(token) {
+  currentSessionToken = token || null;
+  if (currentSessionToken) {
+    sessionStorage.setItem('alisto_session_token', currentSessionToken);
+  } else {
+    sessionStorage.removeItem('alisto_session_token');
+  }
+}
+
+function startSecureConsolePolling() {
+  if (securePollTimer) clearInterval(securePollTimer);
+  securePollTimer = setInterval(() => {
+    if (currentAuthUser && getActiveSessionToken()) {
+      syncFromSupabase();
+    }
+  }, 20000);
+}
+
 const consoleState = {
   globalCommissionRate: 0.12,
   maturityHours: 72,
@@ -69,7 +94,7 @@ async function submitConsoleLogin() {
   submitBtn.textContent = 'VERIFYING AGAINST PUBLIC.USERS...';
 
   try {
-    const { data, error } = await supabaseClient.rpc('authenticate_user_rpc', {
+    const { data, error } = await supabaseClient.rpc('authenticate_user_secure_rpc', {
       p_identifier: identifier,
       p_password: password
     });
@@ -90,6 +115,8 @@ async function submitConsoleLogin() {
     }
 
     currentAuthUser = data.user;
+    setActiveSessionToken(data.session_token || null);
+    startSecureConsolePolling();
     sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(currentAuthUser));
     pwInput.value = '';
     await unlockConsoleForAuthenticatedUser();
@@ -160,6 +187,13 @@ function applyRoleBasedAccessControl() {
 }
 
 function logoutConsoleSession() {
+  const tok = getActiveSessionToken();
+  if (tok && typeof supabaseClient !== 'undefined') {
+    supabaseClient.rpc('logout_session_rpc', { p_session_token: tok }).catch(() => {});
+  }
+  setActiveSessionToken(null);
+  if (securePollTimer) { clearInterval(securePollTimer); securePollTimer = null; }
+
   currentAuthUser = null;
   sessionStorage.removeItem(SESSION_STORAGE_KEY);
   document.getElementById('protectedConsoleShell').style.display = 'none';
@@ -237,78 +271,57 @@ function splitFirstLastName(u) {
 }
 
 async function syncFromSupabase() {
-  if (!supabaseClient || !currentAuthUser) return;
+  const token = getActiveSessionToken();
+  if (!token) return;
+
   try {
-    await supabaseClient.rpc('sweep_expired_bookings_rpc');
-    const [
-      vRes, priceRes, heatRes, bidsRes, cfgRes, healthRes, subTiersRes, subActRes, cProfRes,
-      uRes, bRes, lRes, ratRes, mRes, tRes, rRes, aRes, opRes
-    ] = await Promise.all([
-      supabaseClient.from('service_verticals').select('*').order('vertical_key'),
-      supabaseClient.from('service_pricing_matrix').select('*').order('vertical_key'),
-      supabaseClient.from('v_demand_heatmap_clusters').select('*'),
-      supabaseClient.from('booking_bids').select('*').order('created_at', { ascending: false }),
-      supabaseClient.from('system_config').select('*'),
-      supabaseClient.from('v_universal_ledger_health').select('*').limit(1),
-      supabaseClient.from('subscription_tiers').select('*').order('monthly_fee', { ascending: true }),
-      supabaseClient.from('contractor_subscriptions').select('*').order('started_at', { ascending: false }),
-      supabaseClient.from('contractor_profiles').select('*'),
-      supabaseClient.from('users').select('*').order('created_at', { ascending: false }),
-      supabaseClient.from('bookings').select('*').order('created_at', { ascending: false }),
-      supabaseClient.from('credit_ledger').select('*').order('created_at', { ascending: false }),
-      supabaseClient.from('booking_ratings').select('*').order('created_at', { ascending: false }),
-      supabaseClient.from('booking_messages').select('*').order('sent_at', { ascending: true }),
-      supabaseClient.from('booking_telemetry').select('*').order('recorded_at', { ascending: false }),
-      supabaseClient.from('moderation_rules').select('*').order('created_at'),
-      supabaseClient.from('moderation_audit_logs').select('*').order('logged_at', { ascending: false }),
-      supabaseClient.from('operator_audit_logs').select('*').order('created_at', { ascending: false })
-    ]);
+    const { data, error } = await supabaseClient.rpc('secure_get_console_snapshot_rpc', {
+      p_session_token: token
+    });
 
-    if (vRes.data) consoleState.verticals = vRes.data;
-    if (priceRes && priceRes.data) consoleState.servicePricingMatrix = priceRes.data;
-    if (heatRes && heatRes.data) consoleState.heatmapClusters = heatRes.data;
-    if (bidsRes && bidsRes.data) consoleState.bookingBids = bidsRes.data;
-    if (cfgRes.data) {
-      const commRow = cfgRes.data.find(c => c.config_key === 'platform_commission_rate');
-      const matRow = cfgRes.data.find(c => c.config_key === 'skills_maturity_window_hours');
-      if (commRow) {
-        consoleState.globalCommissionRate = parseFloat(commRow.config_value) || 0.12;
-        const pct = +(consoleState.globalCommissionRate * 100).toFixed(2);
-        if (document.getElementById('cfgCommission')) document.getElementById('cfgCommission').value = pct;
-      }
-      if (matRow) {
-        consoleState.maturityHours = parseInt(matRow.config_value, 10) || 72;
-        if (document.getElementById('cfgMaturity')) document.getElementById('cfgMaturity').value = consoleState.maturityHours;
-      }
+    if (error) {
+      console.error('Secure console snapshot error:', error);
+      return;
     }
-    if (healthRes.data && healthRes.data.length > 0) consoleState.ledgerHealth = healthRes.data[0];
-    if (subTiersRes.data) consoleState.subscriptionTiers = subTiersRes.data;
-    if (subActRes.data) consoleState.contractorSubscriptions = subActRes.data;
-    if (cProfRes.data) consoleState.contractorProfiles = cProfRes.data;
 
-    if (uRes.data) {
-      consoleState.users = uRes.data;
-      const freshSelf = consoleState.users.find(u => u.id === currentAuthUser.id);
-      if (freshSelf && freshSelf.account_frozen) {
-        alert('Your account has been suspended. Signing out.');
-        logoutConsoleSession();
-        return;
-      }
+    if (!data || data.status === 'UNAUTHORIZED') {
+      alert('Your session has expired or was revoked. Please sign in again.');
+      logoutConsoleSession();
+      return;
     }
-    if (bRes.data) consoleState.bookings = bRes.data;
-    if (lRes.data) consoleState.ledger = lRes.data;
-    if (ratRes.data) consoleState.ratings = ratRes.data;
-    if (mRes.data) consoleState.messages = mRes.data;
-    if (tRes.data) consoleState.telemetry = tRes.data;
-    if (rRes.data) consoleState.moderationRules = rRes.data;
-    if (aRes.data) consoleState.moderationAuditLogs = aRes.data;
-    if (opRes.data) consoleState.operatorAuditLogs = opRes.data;
+
+    if (data.actor) currentAuthUser = data.actor;
+    consoleState.verticals = data.verticals || [];
+    consoleState.servicePricingMatrix = data.service_pricing_matrix || [];
+    consoleState.heatmapClusters = data.heatmap_clusters || [];
+    consoleState.bookingBids = data.booking_bids || [];
+    consoleState.ledgerHealth = data.ledger_health || null;
+    consoleState.subscriptionTiers = data.subscription_tiers || [];
+    consoleState.contractorSubscriptions = data.contractor_subscriptions || [];
+    consoleState.contractorProfiles = data.contractor_profiles || [];
+    consoleState.users = data.users || [];
+    consoleState.bookings = data.bookings || [];
+    consoleState.ledger = data.credit_ledger || [];
+    consoleState.ratings = data.booking_ratings || [];
+    consoleState.messages = data.booking_messages || [];
+    consoleState.telemetry = data.booking_telemetry || [];
+    consoleState.moderationRules = data.moderation_rules || [];
+    consoleState.moderationAuditLogs = data.moderation_audit_logs || [];
+    consoleState.operatorAuditLogs = data.operator_audit_logs || [];
+
+    const cfgRows = data.system_config || [];
+    const commRow = cfgRows.find(c => c.config_key === 'platform_commission_rate');
+    if (commRow && commRow.config_value) {
+      consoleState.globalCommissionRate = parseFloat(commRow.config_value) || 0.12;
+    }
+    const matRow = cfgRows.find(c => c.config_key === 'skills_job_maturity_hours' || c.config_key === 'job_maturity_hours');
+    if (matRow && matRow.config_value) {
+      consoleState.maturityHours = parseInt(matRow.config_value, 10) || 72;
+    }
+
+    renderAll();
   } catch (err) {
-    console.warn('Kernel sync notice:', err);
-  }
-  renderAll();
-  if (activeProfileModalUserId && document.getElementById('profileModal').style.display === 'flex') {
-    openProfileInspector(activeProfileModalUserId);
+    console.error('syncFromSupabase unexpected error:', err);
   }
 }
 
@@ -776,8 +789,9 @@ async function operatorOnboardUser() {
       });
     }
     if (initCredits > 0) {
-      await supabaseClient.rpc('topup_prepaid_credits_rpc', {
-        p_user_id: newUid,
+      await supabaseClient.rpc('secure_topup_prepaid_credits_rpc', {
+    p_session_token: getActiveSessionToken(),
+        p_target_user_id: newUid,
         p_amount: initCredits,
         p_qrph_ref: 'CLINIC-INIT-' + Date.now()
       });
@@ -1142,7 +1156,8 @@ function openProfileInspector(userId) {
             ${u.account_frozen
               ? `<button class="btn-primary" style="background:var(--emerald-ok);" onclick="saveProfileSuspensionToggle('${u.id}', false)" ${!canSuspendTarget ? 'disabled' : ''}>
                    Lift Suspension Manually
-                 </button>`
+                 </button>
+            <button class="btn-outline" style="border-color:var(--crimson-err);color:#fca5a5;" onclick="revokeUserSessions('${u.id}', '${u.username || u.full_name}')">Revoke Active Sessions</button>`
               : `<button class="btn-danger" onclick="saveProfileSuspensionToggle('${u.id}', true)" ${!canSuspendTarget ? 'disabled' : ''}>
                    Suspend User Manually
                  </button>`}
@@ -1310,7 +1325,8 @@ async function saveProfileModalChanges(userId) {
 async function activateContractorSubscriptionPass(contractorId) {
   if (!currentAuthUser) return;
   const tierCode = document.getElementById('profSubPassSelect').value;
-  const { data, error } = await supabaseClient.rpc('purchase_subscription_pass_rpc', {
+  const { data, error } = await supabaseClient.rpc('secure_purchase_subscription_pass_rpc', {
+    p_session_token: getActiveSessionToken(),
     p_contractor_id: contractorId,
     p_tier_code: tierCode,
     p_payment_ref: 'PASS-OP-' + Date.now()
@@ -1413,8 +1429,9 @@ async function executeProfileWalletAdjustment(userId) {
   }
 
   if (direction === 'TOPUP_QRPH') {
-    const { data, error } = await supabaseClient.rpc('topup_prepaid_credits_rpc', {
-      p_user_id: userId,
+    const { data, error } = await supabaseClient.rpc('secure_topup_prepaid_credits_rpc', {
+    p_session_token: getActiveSessionToken(),
+      p_target_user_id: userId,
       p_amount: amount,
       p_qrph_ref: 'QRPH-' + Date.now()
     });
@@ -2208,8 +2225,8 @@ async function saveServicePricingRow(classCode) {
   const mult = parseFloat(document.getElementById('pr_mult_' + classCode).value) || 1.0;
   const cancelFee = parseFloat(document.getElementById('pr_canc_' + classCode).value) || 0;
 
-  const { data, error } = await supabaseClient.rpc('admin_update_service_pricing_rpc', {
-    p_actor_id: currentAuthUser.id,
+  const { data, error } = await supabaseClient.rpc('secure_admin_update_service_pricing_rpc', {
+    p_session_token: getActiveSessionToken(),
     p_class_code: classCode,
     p_base_fee: baseFee,
     p_included_km: incKm,
@@ -2237,8 +2254,8 @@ async function applyBlanketEconomyMultiplier() {
   const mult = parseFloat(document.getElementById('econMultiplierInput').value) || 1.00;
   const reason = document.getElementById('econReasonInput').value.trim() || 'SuperAdmin economic/fuel index adjustment';
 
-  const { data, error } = await supabaseClient.rpc('admin_apply_economy_multiplier_rpc', {
-    p_actor_id: currentAuthUser.id,
+  const { data, error } = await supabaseClient.rpc('secure_admin_apply_economy_multiplier_rpc', {
+    p_session_token: getActiveSessionToken(),
     p_target_vertical: targetVert,
     p_multiplier: mult,
     p_reason: reason
@@ -2293,9 +2310,9 @@ function renderOperatorHeatmapTable() {
 async function operatorTriggerMutualCancel(bookingId, bookingRef) {
   const reason = prompt(`Execute Mutual Cancellation (50/50 Commission Recovery Split) for ${bookingRef}:`, 'Counterparty-confirmed mutual cancellation');
   if (!reason || !currentAuthUser) return;
-  const { data, error } = await supabaseClient.rpc('execute_mutual_or_noshow_cancel_rpc', {
+  const { data, error } = await supabaseClient.rpc('secure_cancel_booking_rpc', {
     p_booking_id: bookingId,
-    p_actor_id: currentAuthUser.id,
+    p_session_token: getActiveSessionToken(),
     p_cancel_mode: 'MUTUAL_CONFIRMED',
     p_reason: reason
   });
@@ -2310,9 +2327,9 @@ async function operatorTriggerMutualCancel(bookingId, bookingRef) {
 
 async function operatorTriggerNoShowCancel(bookingId, bookingRef) {
   if (!confirm(`Confirm Contractor No-Show (>30 mins) on ${bookingRef}? This unlocks penalty-free customer cancellation and logs 1 accountability strike on the contractor.`)) return;
-  const { data, error } = await supabaseClient.rpc('execute_mutual_or_noshow_cancel_rpc', {
+  const { data, error } = await supabaseClient.rpc('secure_cancel_booking_rpc', {
     p_booking_id: bookingId,
-    p_actor_id: currentAuthUser.id,
+    p_session_token: getActiveSessionToken(),
     p_cancel_mode: 'CONTRACTOR_NO_SHOW_30MIN',
     p_reason: 'Contractor no-show past 30 minutes'
   });
@@ -2322,5 +2339,20 @@ async function operatorTriggerNoShowCancel(bookingId, bookingRef) {
   }
   alert('30-Minute No-Show Cancellation completed & accountability strike logged.');
   closeForensicModal();
+  await syncFromSupabase();
+}
+
+
+async function revokeUserSessions(userId, label) {
+  if (!confirm(`Revoke all active Web & Mobile sessions for ${label}? They will be forced to sign in again immediately.`)) return;
+  const { data, error } = await supabaseClient.rpc('admin_revoke_user_sessions_rpc', {
+    p_session_token: getActiveSessionToken(),
+    p_target_user_id: userId
+  });
+  if (error || (data && data.status === 'ERROR')) {
+    alert('Session Kill-Switch Error: ' + (error ? error.message : data.message));
+    return;
+  }
+  alert(`Kill-Switch Executed: Revoked ${data.revoked_count || 0} active session(s) for ${label}.`);
   await syncFromSupabase();
 }
