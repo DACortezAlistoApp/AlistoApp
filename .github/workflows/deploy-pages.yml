@@ -1,0 +1,58 @@
+name: Deploy Alisto Public Site & Obfuscated Ops Portal to GitHub Pages
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "index.html"
+      - "ops-portal.html"
+      - "alisto-customer.apk"
+      - "alisto-contractor.apk"
+      - ".nojekyll"
+      - ".github/workflows/deploy-pages.yml"
+  workflow_run:
+    workflows: [ "Build & Publish Alisto Native Android Kotlin APKs" ]
+    types: [ completed ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+
+      - name: Stage Public Web & APK Assets Only
+        run: |
+          mkdir -p _site
+          cp index.html ops-portal.html .nojekyll _site/
+          [ -f alisto-customer.apk ] && cp alisto-customer.apk _site/
+          [ -f alisto-contractor.apk ] && cp alisto-contractor.apk _site/
+          ls -lh _site/
+
+      - name: Setup GitHub Pages (Auto-Enable)
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '_site'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
