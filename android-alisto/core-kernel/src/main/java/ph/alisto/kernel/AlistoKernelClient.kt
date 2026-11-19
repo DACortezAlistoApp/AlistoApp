@@ -126,7 +126,36 @@ data class BookingRecord(
     val contractorFullName: String? = null,
     val contractorRatingAvg: Double = 5.0,
     val contractorRatingCount: Int = 1,
-    val contractorVipBadge: Boolean = false
+    val contractorVipBadge: Boolean = false,
+    val pickupLat: Double = 15.1450,
+    val pickupLng: Double = 120.5887
+)
+
+data class UnreadNotificationRecord(
+    val id: String,
+    val bookingId: String?,
+    val eventType: String,
+    val title: String,
+    val body: String,
+    val createdAt: String
+)
+
+data class LiveTelemetryPin(
+    val bookingId: String,
+    val bookingRef: String,
+    val bookingStatus: String,
+    val contractorId: String,
+    val lat: Double,
+    val lng: Double,
+    val speedKph: Double,
+    val pingTime: String
+)
+
+data class HeatmapCluster(
+    val label: String,
+    val lat: Double,
+    val lng: Double,
+    val demandCount: Int
 )
 
 data class PaymentModeInfo(
@@ -184,6 +213,9 @@ object AlistoKernelClient {
     val ledgerHistory = mutableListOf<LedgerEntry>()
     var currentPaymentModeInfo: PaymentModeInfo = PaymentModeInfo()
     val paymentTransactions = mutableListOf<PaymentTxRecord>()
+    val unreadNotifications = mutableListOf<UnreadNotificationRecord>()
+    val liveTelemetryPins = mutableListOf<LiveTelemetryPin>()
+    val heatmapClusters = mutableListOf<HeatmapCluster>()
     val chatTranscripts = mutableMapOf<String, MutableList<ChatMessage>>()
 
     var contractorAvailableCredits: Double = 0.00
@@ -369,7 +401,9 @@ object AlistoKernelClient {
                         contractorFullName = if (o.isNull("contractor_full_name")) null else o.optString("contractor_full_name"),
                         contractorRatingAvg = o.optDouble("contractor_rating_avg", 5.0),
                         contractorRatingCount = o.optInt("contractor_rating_count", 1),
-                        contractorVipBadge = o.optBoolean("contractor_vip_badge", false)
+                        contractorVipBadge = o.optBoolean("contractor_vip_badge", false),
+                        pickupLat = o.optDouble("pickup_lat", 15.1450),
+                        pickupLng = o.optDouble("pickup_lng", 120.5887)
                     )
                 )
             }
@@ -427,6 +461,69 @@ object AlistoKernelClient {
                         status = t.optString("status", "PENDING")
                     )
                 )
+            }
+        }
+
+        json.optJSONArray("unread_notifications")?.let { arr ->
+            unreadNotifications.clear()
+            for (i in 0 until arr.length()) {
+                val n = arr.getJSONObject(i)
+                unreadNotifications.add(
+                    UnreadNotificationRecord(
+                        id = n.getString("id"),
+                        bookingId = if (n.isNull("booking_id")) null else n.optString("booking_id"),
+                        eventType = n.optString("event_type", "ALERT"),
+                        title = n.optString("title", "Alisto Alert"),
+                        body = n.optString("body", ""),
+                        createdAt = n.optString("created_at", "")
+                    )
+                )
+            }
+        }
+
+        json.optJSONArray("live_telemetry_pins")?.let { arr ->
+            liveTelemetryPins.clear()
+            for (i in 0 until arr.length()) {
+                val p = arr.getJSONObject(i)
+                liveTelemetryPins.add(
+                    LiveTelemetryPin(
+                        bookingId = p.getString("booking_id"),
+                        bookingRef = p.optString("booking_ref", ""),
+                        bookingStatus = p.optString("booking_status", "ON_THE_WAY"),
+                        contractorId = p.optString("contractor_id", ""),
+                        lat = p.optDouble("lat", 15.1450),
+                        lng = p.optDouble("lng", 120.5887),
+                        speedKph = p.optDouble("speed_kph", 0.0),
+                        pingTime = p.optString("ping_time", "")
+                    )
+                )
+            }
+        }
+
+        json.optJSONArray("heatmap_clusters")?.let { arr ->
+            heatmapClusters.clear()
+            for (i in 0 until arr.length()) {
+                val h = arr.getJSONObject(i)
+                val lat = when {
+                    h.has("centroid_lat") -> h.optDouble("centroid_lat", 15.1450)
+                    h.has("center_lat") -> h.optDouble("center_lat", 15.1450)
+                    h.has("avg_lat") -> h.optDouble("avg_lat", 15.1450)
+                    else -> h.optDouble("lat", 15.1450)
+                }
+                val lng = when {
+                    h.has("centroid_lng") -> h.optDouble("centroid_lng", 120.5887)
+                    h.has("center_lng") -> h.optDouble("center_lng", 120.5887)
+                    h.has("avg_lng") -> h.optDouble("avg_lng", 120.5887)
+                    else -> h.optDouble("lng", 120.5887)
+                }
+                val demand = when {
+                    h.has("open_requests") -> h.optInt("open_requests", 1)
+                    h.has("active_demand") -> h.optInt("active_demand", 1)
+                    h.has("request_count") -> h.optInt("request_count", 1)
+                    else -> h.optInt("booking_count", 1)
+                }
+                val lbl = h.optString("barangay_zone", h.optString("municipality", "Active Zone"))
+                heatmapClusters.add(HeatmapCluster(lbl, lat, lng, demand))
             }
         }
 
@@ -731,7 +828,9 @@ object AlistoKernelClient {
         quotedFee: Double,
         tipAmount: Double,
         errandItemCostPhp: Double,
-        deadheadReturnKm: Double
+        deadheadReturnKm: Double,
+        pickupLat: Double? = null,
+        pickupLng: Double? = null
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
@@ -746,8 +845,10 @@ object AlistoKernelClient {
                 put("p_service_notes", "Nationwide Local-Road (avoid=ht) • Client: ${activeUser.nickname}")
                 put("p_pickup_address", pickupAddress)
                 put("p_dropoff_address", dropoffAddress)
-                put("p_pickup_lat", activeUser.homeLat)
-                put("p_pickup_lng", activeUser.homeLng)
+                val pLat = pickupLat ?: activeUser.homeLat
+                val pLng = pickupLng ?: activeUser.homeLng
+                put("p_pickup_lat", pLat)
+                put("p_pickup_lng", pLng)
                 put("p_dropoff_lat", activeUser.homeLat + 0.012)
                 put("p_dropoff_lng", activeUser.homeLng + 0.012)
                 put("p_waypoints", waypointsJson)
@@ -975,6 +1076,34 @@ object AlistoKernelClient {
                 fetchAppBootStateRpc(tok, currentSessionUser?.role ?: "contractor")
                 return@withContext Result.success(json)
             }
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
+
+    suspend fun markNotificationsReadRpc(notificationIds: List<String>): Result<Boolean> = withContext(Dispatchers.IO) {
+        val tok = currentSessionToken ?: return@withContext Result.failure(SecurityException("Session expired."))
+        try {
+            postRpc("secure_mark_notifications_read_rpc", JSONObject().apply {
+                put("p_session_token", tok)
+                put("p_notification_ids", JSONArray(notificationIds))
+            })
+            unreadNotifications.removeAll { it.id in notificationIds }
+            return@withContext Result.success(true)
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
+    suspend fun registerDeviceTokenRpc(fcmToken: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        val tok = currentSessionToken ?: return@withContext Result.failure(SecurityException("Session expired."))
+        try {
+            postRpc("secure_register_device_token_rpc", JSONObject().apply {
+                put("p_session_token", tok)
+                put("p_fcm_token", fcmToken)
+            })
+            return@withContext Result.success(true)
         } catch (e: Exception) {
             return@withContext Result.failure(e)
         }

@@ -20,6 +20,11 @@ class CustomerMainActivity : AppCompatActivity() {
     private var entryMode = "LOGIN"
     private var compressedProfilePhotoDataUrl: String? = null
     private val sequentialWaypoints = mutableListOf<JSONObject>()
+    private var realtimePollJob: Job? = null
+    private var customerMapView: AlistoInteractiveMapView? = null
+    private var mapTapMode: String = "WAYPOINT"
+    private var activeOriginLat: Double = 15.1450
+    private var activeOriginLng: Double = 120.5887
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -195,6 +200,11 @@ class CustomerMainActivity : AppCompatActivity() {
 
     private fun showAuthenticatedCustomerPortal() {
         val user = AlistoKernelClient.currentSessionUser ?: return showEntryPortalGate()
+        AlistoPushCenter.ensureNotificationPermission(this)
+        AlistoPushCenter.dispatchUnreadNotifications(this, uiScope)
+        activeOriginLat = user.homeLat
+        activeOriginLng = user.homeLng
+        startCustomerRealtimeLoop()
         val rootScroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor("#070D19")) }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -240,12 +250,52 @@ class CustomerMainActivity : AppCompatActivity() {
                 text = "Lock"
                 setBackgroundColor(Color.parseColor("#334155"))
                 setTextColor(Color.WHITE)
-                setOnClickListener { AlistoKernelClient.signOut(); showEntryPortalGate() }
+                setOnClickListener { realtimePollJob?.cancel(); AlistoKernelClient.signOut(); showEntryPortalGate() }
             })
         }
         container.addView(sessionBar)
 
-        container.addView(sectionTitle("1. Select Service Vertical & Subtype"))
+        container.addView(sectionTitle("Live Tracking & Tap-to-Pin Map (avoid=ht)"))
+        val mapModeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, 8)
+            val btnWp = Button(this@CustomerMainActivity)
+            val btnOrig = Button(this@CustomerMainActivity)
+            fun styleMapBtns() {
+                btnWp.text = "Tap Map: +Waypoint"
+                btnWp.setBackgroundColor(Color.parseColor(if (mapTapMode == "WAYPOINT") "#FBBF24" else "#1E293B"))
+                btnWp.setTextColor(Color.parseColor(if (mapTapMode == "WAYPOINT") "#070D19" else "#FFFFFF"))
+                btnOrig.text = "Tap Map: Set Origin Pin"
+                btnOrig.setBackgroundColor(Color.parseColor(if (mapTapMode == "ORIGIN") "#10B981" else "#1E293B"))
+                btnOrig.setTextColor(Color.parseColor(if (mapTapMode == "ORIGIN") "#070D19" else "#FFFFFF"))
+            }
+            styleMapBtns()
+            btnWp.setOnClickListener { mapTapMode = "WAYPOINT"; styleMapBtns() }
+            btnOrig.setOnClickListener { mapTapMode = "ORIGIN"; styleMapBtns() }
+            addView(btnWp)
+            addView(btnOrig)
+        }
+        container.addView(mapModeRow)
+
+        val liveTrackingBadge = TextView(this).apply {
+            val pins = AlistoKernelClient.liveTelemetryPins.size
+            text = if (pins > 0) "LIVE TRACKING: $pins contractor(s) streaming 10s GPS • Tap map to pin stops" else "Tap anywhere on the map to pin origin or numbered errand stops"
+            setTextColor(Color.parseColor("#00F2FE"))
+            textSize = 12f
+            setPadding(0, 0, 0, 6)
+        }
+        container.addView(liveTrackingBadge)
+
+        val mapContainer = AlistoInteractiveMapView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (270 * resources.displayMetrics.density).toInt()
+            ).apply { setMargins(0, 0, 0, 14) }
+        }
+        customerMapView = mapContainer
+        container.addView(mapContainer)
+
+                container.addView(sectionTitle("1. Select Service Vertical & Subtype"))
         val subtypeSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(
                 this@CustomerMainActivity,
@@ -269,6 +319,38 @@ class CustomerMainActivity : AppCompatActivity() {
             setPadding(0, 4, 0, 6)
         }
         container.addView(waypointsStatus)
+
+        fun refreshCustomerMapLayers() {
+            customerMapView?.updateMapLayers(
+                originLat = activeOriginLat,
+                originLng = activeOriginLng,
+                originAddress = pickupInput.text.toString().ifBlank { user.addressText },
+                waypoints = sequentialWaypoints,
+                bookings = AlistoKernelClient.bookings.filter { user.role == "super_admin" || it.clientId == user.id },
+                telemetryPins = AlistoKernelClient.liveTelemetryPins
+            )
+        }
+        customerMapView?.loadInteractiveMap(activeOriginLat, activeOriginLng, enableTapToPin = true) { lat, lng ->
+            val rev = AlistoSpatialEngine.reverseGeocodePin(this@CustomerMainActivity, lat, lng)
+            if (mapTapMode == "ORIGIN") {
+                activeOriginLat = lat
+                activeOriginLng = lng
+                pickupInput.setText(rev)
+                Toast.makeText(this@CustomerMainActivity, "Origin pinned: $rev", Toast.LENGTH_SHORT).show()
+            } else {
+                val stopNum = sequentialWaypoints.size + 1
+                sequentialWaypoints.add(JSONObject().apply {
+                    put("stop_number", stopNum)
+                    put("lat", lat)
+                    put("lng", lng)
+                    put("address", rev)
+                })
+                waypointsStatus.text = "Sequential Waypoints: " + sequentialWaypoints.joinToString(" -> ") { "#${it.getInt("stop_number")}: ${it.getString("address")}" }
+                Toast.makeText(this@CustomerMainActivity, "Stop #$stopNum pinned: $rev", Toast.LENGTH_SHORT).show()
+            }
+            refreshCustomerMapLayers()
+        }
+        refreshCustomerMapLayers()
 
         container.addView(Button(this).apply {
             text = "+ DROP NUMBERED WAYPOINT PIN (#${sequentialWaypoints.size + 1}) & REVERSE-GEOCODE"
@@ -338,7 +420,9 @@ class CustomerMainActivity : AppCompatActivity() {
                         quotedFee = fee,
                         tipAmount = tip,
                         errandItemCostPhp = errandCost,
-                        deadheadReturnKm = deadheadKm
+                        deadheadReturnKm = deadheadKm,
+                        pickupLat = activeOriginLat,
+                        pickupLng = activeOriginLng
                     )
                     res.onSuccess { json ->
                         val buf = json.optDouble("gcash_cashout_buffer_php", 0.0)
@@ -608,8 +692,35 @@ class CustomerMainActivity : AppCompatActivity() {
         addView(field)
     }
 
+    private fun startCustomerRealtimeLoop() {
+        realtimePollJob?.cancel()
+        realtimePollJob = uiScope.launch {
+            while (isActive) {
+                delay(15_000L)
+                if (AlistoKernelClient.currentSessionToken.isNullOrBlank()) break
+                AlistoKernelClient.syncBookingsAndWallet()
+                val fired = AlistoPushCenter.dispatchUnreadNotifications(this@CustomerMainActivity, uiScope)
+                val u = AlistoKernelClient.currentSessionUser
+                if (u != null) {
+                    customerMapView?.updateMapLayers(
+                        originLat = activeOriginLat,
+                        originLng = activeOriginLng,
+                        originAddress = u.addressText,
+                        waypoints = sequentialWaypoints,
+                        bookings = AlistoKernelClient.bookings.filter { u.role == "super_admin" || it.clientId == u.id },
+                        telemetryPins = AlistoKernelClient.liveTelemetryPins
+                    )
+                }
+                if (fired > 0) {
+                    Toast.makeText(this@CustomerMainActivity, "$fired new live update(s) received", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        realtimePollJob?.cancel()
         uiScope.cancel()
     }
 }

@@ -18,6 +18,8 @@ class ContractorMainActivity : AppCompatActivity() {
     private val uiScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var entryMode = "LOGIN"
     private var autoAcceptEnabled = false
+    private var realtimePollJob: Job? = null
+    private var contractorMapView: AlistoInteractiveMapView? = null
     private var compressedProfileUrl: String? = null
     private var compressedLicenseUrl: String? = null
     private var compressedOrcrUrl: String? = null
@@ -201,6 +203,9 @@ class ContractorMainActivity : AppCompatActivity() {
     }
 
     private fun showActiveContractorPortal(user: AuthenticatedUser) {
+        AlistoPushCenter.ensureNotificationPermission(this)
+        AlistoPushCenter.dispatchUnreadNotifications(this, uiScope)
+        startContractorRealtimeLoop()
         val prof = AlistoKernelClient.currentContractorProfile
         val activePass = AlistoKernelClient.currentSubscriptionPass
         val currentShifts = prof?.activeShiftVerticals ?: listOf("skills_marketplace")
@@ -225,7 +230,30 @@ class ContractorMainActivity : AppCompatActivity() {
             }
         )
 
-        // SECTION 1: MULTI-VERTICAL DAILY SHIFT SELECTOR & DUAL-DISPATCH MODE
+        // LIVE DEMAND HEAT MAP & OPEN JOB BOARD RADAR
+        container.addView(sectionTitle("Live Demand Heat Map & Open Job Radar"))
+        container.addView(TextView(this).apply {
+            text = "Demand Clusters: ${AlistoKernelClient.heatmapClusters.size} | Open/Active Pins: ${AlistoKernelClient.bookings.count { it.status !in listOf("COMPLETED", "CANCELLED", "EXPIRED") }} | Live GPS: ${AlistoKernelClient.liveTelemetryPins.size}"
+            setTextColor(Color.parseColor("#00F2FE"))
+            textSize = 12f
+            setPadding(0, 0, 0, 6)
+        })
+        val cMap = AlistoInteractiveMapView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (250 * resources.displayMetrics.density).toInt()
+            ).apply { setMargins(0, 0, 0, 14) }
+        }
+        contractorMapView = cMap
+        container.addView(cMap)
+        cMap.loadInteractiveMap(user.homeLat, user.homeLng, enableTapToPin = false)
+        cMap.updateMapLayers(
+            bookings = AlistoKernelClient.bookings,
+            telemetryPins = AlistoKernelClient.liveTelemetryPins,
+            heatClusters = AlistoKernelClient.heatmapClusters
+        )
+
+                // SECTION 1: MULTI-VERTICAL DAILY SHIFT SELECTOR & DUAL-DISPATCH MODE
         container.addView(sectionTitle("1. Daily Shift Verticals & Dual-Dispatch Mode"))
         val shiftBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -490,7 +518,8 @@ class ContractorMainActivity : AppCompatActivity() {
                     setTextColor(Color.parseColor("#070D19"))
                     setTypeface(null, Typeface.BOLD)
                     setOnClickListener {
-                        AlistoSpatialEngine.stopHeartbeat()
+                        realtimePollJob?.cancel()
+        AlistoSpatialEngine.stopHeartbeat()
                         transitionJob(b.id, "COMPLETED")
                     }
                 })
@@ -657,6 +686,26 @@ class ContractorMainActivity : AppCompatActivity() {
                     .setMessage(err.message)
                     .setPositiveButton("OK", null)
                     .show()
+            }
+        }
+    }
+
+    private fun startContractorRealtimeLoop() {
+        realtimePollJob?.cancel()
+        realtimePollJob = uiScope.launch {
+            while (isActive) {
+                delay(15_000L)
+                if (AlistoKernelClient.currentSessionToken.isNullOrBlank()) break
+                AlistoKernelClient.syncBookingsAndWallet()
+                val fired = AlistoPushCenter.dispatchUnreadNotifications(this@ContractorMainActivity, uiScope)
+                contractorMapView?.updateMapLayers(
+                    bookings = AlistoKernelClient.bookings,
+                    telemetryPins = AlistoKernelClient.liveTelemetryPins,
+                    heatClusters = AlistoKernelClient.heatmapClusters
+                )
+                if (fired > 0) {
+                    Toast.makeText(this@ContractorMainActivity, "$fired new dispatch alert(s)", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
