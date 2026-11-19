@@ -5,3 +5,4 @@ dist-apks/
 __pycache__/
 *.pyc
 .DS_Store
+supabase/.temp/
