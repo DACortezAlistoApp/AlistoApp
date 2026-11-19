@@ -27,6 +27,8 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+          cache: 'gradle'
+          cache-dependency-path: 'android-alisto/**/*.gradle*'
 
       - name: Configure Android 16 (API 36) SDK & Install Gradle 8.11.1
         run: |
