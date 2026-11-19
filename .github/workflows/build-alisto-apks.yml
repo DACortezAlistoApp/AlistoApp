@@ -5,6 +5,7 @@ on:
     branches: [ "main", "master" ]
     paths-ignore:
       - "*.apk"
+      - "*.aab"
   workflow_dispatch:
 
 permissions:
@@ -15,42 +16,62 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Configure Pre-Installed Android SDK & Install Gradle 8.5
+      - name: Configure Android 16 (API 36) SDK & Install Gradle 8.11.1
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0"
-          curl -sL https://services.gradle.org/distributions/gradle-8.5-bin.zip -o gradle-8.5.zip
-          unzip -q gradle-8.5.zip -d /tmp
-          echo "/tmp/gradle-8.5/bin" >> $GITHUB_PATH
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          curl -sL https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o gradle-8.11.1.zip
+          unzip -q gradle-8.11.1.zip -d /tmp
+          echo "/tmp/gradle-8.11.1/bin" >> $GITHUB_PATH
 
-      - name: Assemble Alisto Customer APK & Alisto Contractor APK
+      - name: Assemble Alisto API 36 APKs (Signed Release + AAB when Keystore Secrets Set)
         working-directory: ./android-alisto
+        env:
+          ALISTO_KEYSTORE_BASE64: ${{ secrets.ALISTO_KEYSTORE_BASE64 }}
+          ALISTO_KEYSTORE_PASSWORD: ${{ secrets.ALISTO_KEYSTORE_PASSWORD }}
+          ALISTO_KEY_ALIAS: ${{ secrets.ALISTO_KEY_ALIAS }}
+          ALISTO_KEY_PASSWORD: ${{ secrets.ALISTO_KEY_PASSWORD }}
         run: |
-          gradle :app-customer:assembleDebug :app-contractor:assembleDebug --no-daemon --stacktrace
+          if [ -n "$ALISTO_KEYSTORE_BASE64" ] && [ -n "$ALISTO_KEYSTORE_PASSWORD" ] && [ -n "$ALISTO_KEY_ALIAS" ]; then
+            echo "$ALISTO_KEYSTORE_BASE64" | base64 --decode > /tmp/alisto-release.jks
+            export ALISTO_KEYSTORE_PATH="/tmp/alisto-release.jks"
+            echo "BUILD_VARIANT=release" >> $GITHUB_ENV
+            gradle :app-customer:assembleRelease :app-contractor:assembleRelease :app-customer:bundleRelease :app-contractor:bundleRelease --no-daemon --stacktrace
+          else
+            echo "BUILD_VARIANT=debug" >> $GITHUB_ENV
+            gradle :app-customer:assembleDebug :app-contractor:assembleDebug --no-daemon --stacktrace
+          fi
 
       - name: Publish Compiled APKs to Repository Root & Artifacts
         run: |
           mkdir -p dist-apks
-          cp android-alisto/app-customer/build/outputs/apk/debug/app-customer-debug.apk alisto-customer.apk
-          cp android-alisto/app-contractor/build/outputs/apk/debug/app-contractor-debug.apk alisto-contractor.apk
+          if [ "$BUILD_VARIANT" = "release" ]; then
+            cp android-alisto/app-customer/build/outputs/apk/release/app-customer-release.apk alisto-customer.apk
+            cp android-alisto/app-contractor/build/outputs/apk/release/app-contractor-release.apk alisto-contractor.apk
+            cp android-alisto/app-customer/build/outputs/bundle/release/app-customer-release.aab dist-apks/alisto-customer-release.aab
+            cp android-alisto/app-contractor/build/outputs/bundle/release/app-contractor-release.aab dist-apks/alisto-contractor-release.aab
+          else
+            cp android-alisto/app-customer/build/outputs/apk/debug/app-customer-debug.apk alisto-customer.apk
+            cp android-alisto/app-contractor/build/outputs/apk/debug/app-contractor-debug.apk alisto-contractor.apk
+          fi
           cp alisto-customer.apk dist-apks/alisto-customer.apk
           cp alisto-contractor.apk dist-apks/alisto-contractor.apk
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add alisto-customer.apk alisto-contractor.apk
-          git diff --staged --quiet || git commit -m "Auto-publish compiled V3 Native Kotlin APKs"
+          git diff --staged --quiet || git commit -m "Auto-publish compiled API 36 ($BUILD_VARIANT) Native Kotlin APKs"
           git push origin HEAD:main
 
-      - name: Upload Native Android APKs Artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload Native Android APKs & Play Bundles Artifact
+        uses: actions/upload-artifact@v6
         with:
-          name: alisto-native-android-apks
-          path: dist-apks/*.apk
+          name: alisto-native-android-api36-${{ env.BUILD_VARIANT }}
+          path: dist-apks/*

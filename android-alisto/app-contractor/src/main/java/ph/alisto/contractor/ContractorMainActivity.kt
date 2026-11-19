@@ -206,6 +206,8 @@ class ContractorMainActivity : AppCompatActivity() {
         AlistoPushCenter.ensureNotificationPermission(this)
         AlistoPushCenter.dispatchUnreadNotifications(this, uiScope)
         startContractorRealtimeLoop()
+        AlistoComplianceGate.checkOtaUpdate(this, "contractor", BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
+        AlistoComplianceGate.enforceRa10173ConsentIfRequired(this, uiScope, "contractor")
         val prof = AlistoKernelClient.currentContractorProfile
         val activePass = AlistoKernelClient.currentSubscriptionPass
         val currentShifts = prof?.activeShiftVerticals ?: listOf("skills_marketplace")

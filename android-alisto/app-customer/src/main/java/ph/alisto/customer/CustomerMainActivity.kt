@@ -205,6 +205,8 @@ class CustomerMainActivity : AppCompatActivity() {
         activeOriginLat = user.homeLat
         activeOriginLng = user.homeLng
         startCustomerRealtimeLoop()
+        AlistoComplianceGate.checkOtaUpdate(this, "customer", BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
+        AlistoComplianceGate.enforceRa10173ConsentIfRequired(this, uiScope, "customer")
         val rootScroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor("#070D19")) }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL

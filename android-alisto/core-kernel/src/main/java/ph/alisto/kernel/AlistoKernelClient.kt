@@ -131,6 +131,22 @@ data class BookingRecord(
     val pickupLng: Double = 120.5887
 )
 
+data class ReleaseManifestInfo(
+    val latestVersionCode: Int,
+    val latestVersionName: String,
+    val minSupportedVersionCode: Int,
+    val customerApkUrl: String,
+    val contractorApkUrl: String,
+    val releaseNotes: String,
+    val requiredPrivacyVersion: String
+)
+
+data class ConsentStateInfo(
+    val requiredVersion: String,
+    val acceptedVersion: String?,
+    val requiresConsent: Boolean
+)
+
 data class UnreadNotificationRecord(
     val id: String,
     val bookingId: String?,
@@ -212,6 +228,8 @@ object AlistoKernelClient {
     val bookingBids = mutableListOf<BookingBidRecord>()
     val ledgerHistory = mutableListOf<LedgerEntry>()
     var currentPaymentModeInfo: PaymentModeInfo = PaymentModeInfo()
+    var currentReleaseManifest: ReleaseManifestInfo? = null
+    var currentConsentState: ConsentStateInfo? = null
     val paymentTransactions = mutableListOf<PaymentTxRecord>()
     val unreadNotifications = mutableListOf<UnreadNotificationRecord>()
     val liveTelemetryPins = mutableListOf<LiveTelemetryPin>()
@@ -437,6 +455,26 @@ object AlistoKernelClient {
             }
         }
 
+        json.optJSONObject("release_manifest")?.let { rel ->
+            currentReleaseManifest = ReleaseManifestInfo(
+                latestVersionCode = rel.optInt("latest_version_code", 4),
+                latestVersionName = rel.optString("latest_version_name", "4.0.0-api36"),
+                minSupportedVersionCode = rel.optInt("min_supported_version_code", 1),
+                customerApkUrl = rel.optString("customer_apk_url", ""),
+                contractorApkUrl = rel.optString("contractor_apk_url", ""),
+                releaseNotes = rel.optString("release_notes", ""),
+                requiredPrivacyVersion = rel.optString("required_privacy_version", "RA10173-2026-v1")
+            )
+        }
+
+        json.optJSONObject("consent_state")?.let { cs ->
+            currentConsentState = ConsentStateInfo(
+                requiredVersion = cs.optString("required_version", "RA10173-2026-v1"),
+                acceptedVersion = if (cs.isNull("accepted_version")) null else cs.optString("accepted_version"),
+                requiresConsent = cs.optBoolean("requires_consent", false)
+            )
+        }
+
         json.optJSONObject("payment_mode_info")?.let { pm ->
             currentPaymentModeInfo = PaymentModeInfo(
                 paymentMode = pm.optString("payment_mode", "MANUAL"),
@@ -531,6 +569,8 @@ object AlistoKernelClient {
             ledgerHistory.clear()
         paymentTransactions.clear()
         currentPaymentModeInfo = PaymentModeInfo()
+        currentReleaseManifest = null
+        currentConsentState = null
             for (i in 0 until arr.length()) {
                 val l = arr.getJSONObject(i)
                 ledgerHistory.add(
@@ -1103,6 +1143,33 @@ object AlistoKernelClient {
                 put("p_session_token", tok)
                 put("p_fcm_token", fcmToken)
             })
+            return@withContext Result.success(true)
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
+
+    suspend fun recordPrivacyConsentRpc(
+        consentVersion: String?,
+        deviceLabel: String
+    ): Result<Boolean> = withContext(Dispatchers.IO) {
+        val tok = currentSessionToken ?: return@withContext Result.failure(SecurityException("Session expired."))
+        try {
+            val json = postRpc("secure_record_privacy_consent_rpc", JSONObject().apply {
+                put("p_session_token", tok)
+                put("p_consent_version", consentVersion ?: "RA10173-2026-v1")
+                put("p_device_label", deviceLabel)
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Unable to record consent.")))
+            }
+            val accepted = json.optString("consent_version", consentVersion ?: "RA10173-2026-v1")
+            currentConsentState = ConsentStateInfo(
+                requiredVersion = accepted,
+                acceptedVersion = accepted,
+                requiresConsent = false
+            )
             return@withContext Result.success(true)
         } catch (e: Exception) {
             return@withContext Result.failure(e)

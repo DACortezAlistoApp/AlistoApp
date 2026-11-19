@@ -5,19 +5,39 @@ plugins {
 
 android {
     namespace = "ph.alisto.contractor"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "ph.alisto.contractor"
         minSdk = 26
-        targetSdk = 34
-        versionCode = 3
-        versionName = "3.0.0-nexus-v3"
+        targetSdk = 36
+        versionCode = 4
+        versionName = "4.0.0-api36"
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    signingConfigs {
+        create("release") {
+            val ksPath = System.getenv("ALISTO_KEYSTORE_PATH")
+            if (!ksPath.isNullOrBlank()) {
+                storeFile = file(ksPath)
+                storePassword = System.getenv("ALISTO_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ALISTO_KEY_ALIAS")
+                keyPassword = System.getenv("ALISTO_KEY_PASSWORD") ?: System.getenv("ALISTO_KEYSTORE_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (!System.getenv("ALISTO_KEYSTORE_PATH").isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
