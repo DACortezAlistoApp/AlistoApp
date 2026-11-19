@@ -218,12 +218,17 @@ class ContractorMainActivity : AppCompatActivity() {
             setPadding(36, 42, 36, 64)
         }
 
-        val heartbeatBadge = if (AlistoSpatialEngine.isHeartbeatStreaming) "10s GPS HEARTBEAT: ACTIVE" else "GPS TELEMETRY: OFF (0 WRITES)"
+        val heartbeatBadge = if (AlistoSpatialEngine.isHeartbeatStreaming) "10s GPS ACTIVE (60 km/h MAX)" else "GPS OFF (0 WRITES)"
+        val ltfrbBadge = if (prof?.ltfrbCompliant == true && !prof.authorizedPlateNo.isNullOrBlank()) {
+            "LTFRB Plate: ${prof.authorizedPlateNo}"
+        } else {
+            "LTFRB Plate: Unbound"
+        }
         container.addView(
             AlistoBrandHeaderView(
                 this,
                 "${user.fullName} (@${user.username})",
-                "$heartbeatBadge • Nationwide (avoid=ht)"
+                "$heartbeatBadge • $ltfrbBadge • avoid=ht"
             ).apply {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
@@ -559,7 +564,73 @@ class ContractorMainActivity : AppCompatActivity() {
                 card.addView(thumbRow)
             }
         }
+        if (b.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED") && (b.contractorId == user.id || user.role == "super_admin")) {
+            card.addView(Button(this).apply {
+                text = "LOG LTFRB SAFETY REFUSAL (PENALTY-FREE)"
+                setBackgroundColor(Color.parseColor("#451A03"))
+                setTextColor(Color.parseColor("#FBBF24"))
+                setOnClickListener { promptLtfrbSafetyRefusal(b, user) }
+            })
+        }
         return card
+    }
+
+
+    private fun promptLtfrbSafetyRefusal(b: BookingRecord, user: AuthenticatedUser) {
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(36, 24, 36, 16)
+            setBackgroundColor(Color.parseColor("#0F172A"))
+        }
+        val categories = listOf(
+            "INTOXICATED_PASSENGER",
+            "NO_HELMET_REFUSAL",
+            "UNSAFE_BEHAVIOR_THREAT",
+            "OVERWEIGHT_OR_PROHIBITED_CARGO",
+            "MINOR_UNACCOMPANIED",
+            "OTHER_SAFETY_RISK"
+        )
+        val catSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@ContractorMainActivity, android.R.layout.simple_spinner_dropdown_item, categories)
+            setBackgroundColor(Color.parseColor("#1E293B"))
+        }
+        layout.addView(labeledField("LTFRB MC 2026-048 Safety Refusal Category", catSpinner))
+        val notesInput = styledInput("Document safety reason (releases hold penalty-free)...")
+        layout.addView(labeledField("Incident Details", notesInput))
+
+        AlertDialog.Builder(this)
+            .setTitle("LTFRB Safety Refusal • ${b.bookingRef}")
+            .setView(layout)
+            .setPositiveButton("Log Refusal & Release Hold") { _, _ ->
+                val chosenCat = catSpinner.selectedItem.toString()
+                val noteText = notesInput.text.toString().ifBlank { "Safety refusal logged by contractor" }
+                AlistoSpatialEngine.stopHeartbeat()
+                uiScope.launch {
+                    val res = AlistoKernelClient.logSafetyRefusalRpc(
+                        bookingId = b.id,
+                        refusalCategory = chosenCat,
+                        notes = noteText,
+                        lat = user.homeLat,
+                        lng = user.homeLng
+                    )
+                    res.onSuccess {
+                        Toast.makeText(
+                            this@ContractorMainActivity,
+                            "LTFRB Safety Refusal logged ($chosenCat). Commission hold released penalty-free.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        routeContractorByAccountState()
+                    }.onFailure { err ->
+                        AlertDialog.Builder(this@ContractorMainActivity)
+                            .setTitle("Safety Refusal Error")
+                            .setMessage(err.message)
+                            .setPositiveButton("OK", null)
+                            .show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun promptSubmitOpenBid(b: BookingRecord) {

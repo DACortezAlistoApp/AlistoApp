@@ -8,15 +8,22 @@ import android.location.LocationManager
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.util.Locale
 
 object AlistoSpatialEngine {
+    const val LTFRB_MAX_SPEED_KPH = 60.0
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var heartbeatRunnable: Runnable? = null
+    private var lastOverspeedToastMs: Long = 0L
+
     var isHeartbeatStreaming: Boolean = false
+        private set
+    var lastRecordedSpeedKph: Double = 0.0
         private set
 
     fun launchLocalRoadNavigation(context: Context, destLat: Double, destLng: Double) {
@@ -76,9 +83,26 @@ object AlistoSpatialEngine {
                         if (loc != null) {
                             lat = loc.latitude
                             lng = loc.longitude
-                            speedKph = (loc.speed * 3.6).coerceAtLeast(18.0)
+                            speedKph = if (loc.hasSpeed()) (loc.speed * 3.6) else 18.0
                         }
                     } catch (_: Exception) {}
+
+                    lastRecordedSpeedKph = speedKph
+
+                    // On-device LTFRB MC 2026-048 60 km/h speed limit alert
+                    if (speedKph > LTFRB_MAX_SPEED_KPH) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastOverspeedToastMs >= 20_000L) {
+                            lastOverspeedToastMs = now
+                            mainHandler.post {
+                                Toast.makeText(
+                                    appCtx,
+                                    "LTFRB SPEED ALERT: ${"%.1f".format(speedKph)} km/h exceeds 60 km/h limit. Please slow down.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
 
                     AlistoKernelClient.recordTelemetryPingRpc(
                         bookingId = bookingId,
@@ -99,5 +123,6 @@ object AlistoSpatialEngine {
         heartbeatRunnable?.let { mainHandler.removeCallbacks(it) }
         heartbeatRunnable = null
         isHeartbeatStreaming = false
+        lastRecordedSpeedKph = 0.0
     }
 }

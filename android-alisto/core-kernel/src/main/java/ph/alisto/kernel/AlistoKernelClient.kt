@@ -48,7 +48,12 @@ data class ContractorProfileState(
     val resubmissionNotes: String?,
     var activeShiftVerticals: List<String>,
     var isOnline: Boolean,
-    var autoAcceptEnabled: Boolean = false
+    var autoAcceptEnabled: Boolean = false,
+    val authorizedPlateNo: String? = null,
+    val isElectricVehicle: Boolean = false,
+    val engineDisplacementCc: Int = 0,
+    val electricMotorKw: Double? = null,
+    val ltfrbCompliant: Boolean = false
 )
 
 data class ActiveSubscriptionPass(
@@ -324,7 +329,12 @@ object AlistoKernelClient {
                     resubmissionNotes = if (cp.isNull("resubmission_notes")) null else cp.optString("resubmission_notes"),
                     activeShiftVerticals = if (shifts.isEmpty()) listOf("skills_marketplace") else shifts,
                     isOnline = cp.optBoolean("is_online", true),
-                    autoAcceptEnabled = cp.optBoolean("auto_accept_enabled", false)
+                    autoAcceptEnabled = cp.optBoolean("auto_accept_enabled", false),
+                    authorizedPlateNo = if (cp.isNull("authorized_plate_no")) null else cp.optString("authorized_plate_no"),
+                    isElectricVehicle = cp.optBoolean("is_electric_vehicle", false),
+                    engineDisplacementCc = cp.optInt("engine_displacement_cc", 0),
+                    electricMotorKw = if (cp.isNull("electric_motor_kw")) null else cp.optDouble("electric_motor_kw"),
+                    ltfrbCompliant = cp.optBoolean("ltfrb_compliant", false)
                 )
             } else {
                 currentContractorProfile = null
@@ -1171,6 +1181,34 @@ object AlistoKernelClient {
                 requiresConsent = false
             )
             return@withContext Result.success(true)
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
+
+    suspend fun logSafetyRefusalRpc(
+        bookingId: String,
+        refusalCategory: String,
+        notes: String,
+        lat: Double? = null,
+        lng: Double? = null
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val tok = currentSessionToken ?: return@withContext Result.failure(SecurityException("Session expired."))
+        try {
+            val json = postRpc("secure_log_safety_refusal_rpc", JSONObject().apply {
+                put("p_session_token", tok)
+                put("p_booking_id", bookingId)
+                put("p_refusal_category", refusalCategory)
+                put("p_notes", notes)
+                if (lat != null) put("p_lat", lat)
+                if (lng != null) put("p_lng", lng)
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Unable to log LTFRB safety refusal.")))
+            }
+            fetchAppBootStateRpc(tok, currentSessionUser?.role ?: "contractor")
+            return@withContext Result.success(json)
         } catch (e: Exception) {
             return@withContext Result.failure(e)
         }
