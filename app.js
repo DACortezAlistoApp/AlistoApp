@@ -44,6 +44,7 @@ const consoleState = {
   paymentTransactions: [],
   liveTelemetryPins: [],
   pushOutboxRecent: [],
+  ltfrbSafetyEvents: [],
   verticals: [],
   heatmapClusters: [],
   bookingBids: [],
@@ -311,6 +312,7 @@ async function syncFromSupabase() {
     consoleState.paymentTransactions = data.payment_transactions || [];
     consoleState.liveTelemetryPins = data.live_telemetry_pins || [];
     consoleState.pushOutboxRecent = data.push_outbox_recent || [];
+    consoleState.ltfrbSafetyEvents = data.ltfrb_safety_events || [];
     consoleState.subscriptionTiers = data.subscription_tiers || [];
     consoleState.contractorSubscriptions = data.contractor_subscriptions || [];
     consoleState.contractorProfiles = data.contractor_profiles || [];
@@ -2205,6 +2207,7 @@ function renderAll() {
     renderOperatorHeatmapTable();
     renderOperatorLiveSpatialMap();
     renderOperatorPushOutboxFeed();
+    renderOperatorLtfrbMonitor();
     renderOperatorBookingsTable();
     renderLguAdmin();
   }
@@ -2726,17 +2729,19 @@ function renderOperatorLiveSpatialMap() {
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
       const riderName = getUserLabel(p.contractor_id);
 
+      const speedNum = Number(p.speed_kph || 0);
+      const isOverspeed = speedNum > 60;
       window.L.circleMarker([lat, lng], {
-        radius: 9,
-        color: '#ffffff',
-        weight: 2,
-        fillColor: '#00f2fe',
-        fillOpacity: 0.95
+        radius: isOverspeed ? 11 : 9,
+        color: isOverspeed ? '#fef08a' : '#ffffff',
+        weight: 2.5,
+        fillColor: isOverspeed ? '#ef4444' : '#00f2fe',
+        fillOpacity: 0.96
       }).bindPopup(
         `<div style="color:#0f172a;font-size:12px;">
-          <strong>LIVE RIDER PING • ${p.booking_ref}</strong><br/>
+          <strong>${isOverspeed ? 'LTFRB OVERSPEED ALERT (>60 km/h)' : 'LIVE RIDER PING'} • ${p.booking_ref}</strong><br/>
           Contractor: ${riderName}<br/>
-          State: <b>${p.booking_status}</b> | Speed: <b>${Number(p.speed_kph || 0).toFixed(1)} km/h</b><br/>
+          State: <b>${p.booking_status}</b> | Speed: <b style="color:${isOverspeed ? '#dc2626' : '#0f172a'};">${speedNum.toFixed(1)} km/h</b><br/>
           Last Ping: ${formatTs(p.ping_time)}
         </div>`
       ).addTo(alistoOpsLayerGroup);
@@ -2778,6 +2783,155 @@ function renderOperatorPushOutboxFeed() {
         <td style="padding:8px;color:#cbd5e1;"><strong>${n.title}</strong><br/><span style="color:#94a3b8;">${n.body}</span></td>
         <td style="padding:8px;font-weight:700;color:${badgeColor};">${n.push_status}${n.is_read ? ' (READ)' : ' (UNREAD)'}</td>
         <td style="padding:8px;color:#94a3b8;">${formatTs(n.created_at)}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+
+// ============================================================================
+// PHASE 5B: LTFRB 2026 COMPLIANCE MONITOR & 1-RIDER-1-BIKE PLATE BINDING
+// ============================================================================
+
+let ltfrbFormDirty = false;
+let ltfrbSelectedContractorId = '';
+
+function markLtfrbFormDirty() {
+  ltfrbFormDirty = true;
+}
+
+function toggleLtfrbEvFields() {
+  const mode = document.getElementById('ltfrbPowertrain')?.value || 'ICE';
+  const iceWrap = document.getElementById('ltfrbIceCcWrap');
+  const evWrap = document.getElementById('ltfrbEvKwWrap');
+  if (iceWrap) iceWrap.style.display = (mode === 'ICE') ? 'block' : 'none';
+  if (evWrap) evWrap.style.display = (mode === 'EV') ? 'block' : 'none';
+}
+
+function populateLtfrbContractorBindingForm(forceReload) {
+  const sel = document.getElementById('ltfrbContractorSelect');
+  if (!sel || !sel.value) return;
+  if (!forceReload && ltfrbFormDirty && ltfrbSelectedContractorId === sel.value) return;
+
+  ltfrbSelectedContractorId = sel.value;
+  ltfrbFormDirty = false;
+
+  const prof = getContractorProfile(sel.value);
+  const plateInp = document.getElementById('ltfrbPlateNo');
+  const ptSel = document.getElementById('ltfrbPowertrain');
+  const ccInp = document.getElementById('ltfrbEngineCc');
+  const kwInp = document.getElementById('ltfrbMotorKw');
+  const ridInp = document.getElementById('ltfrbRiderId');
+  const statusEl = document.getElementById('ltfrbBindingStatusLine');
+
+  if (prof) {
+    if (plateInp) plateInp.value = prof.authorized_plate_no || '';
+    if (ptSel) ptSel.value = prof.is_electric_vehicle ? 'EV' : 'ICE';
+    if (ccInp) ccInp.value = prof.engine_displacement_cc || 125;
+    if (kwInp) kwInp.value = prof.electric_motor_kw || 2.0;
+    if (ridInp) ridInp.value = prof.ltfrb_rider_id || '';
+    toggleLtfrbEvFields();
+
+    if (statusEl) {
+      if (prof.ltfrb_compliant && prof.authorized_plate_no) {
+        const spec = prof.is_electric_vehicle
+          ? `EV ${prof.electric_motor_kw} kW`
+          : `${prof.engine_displacement_cc}cc ICE`;
+        statusEl.style.color = '#34d399';
+        statusEl.textContent = `VERIFIED 1-RIDER-1-BIKE: Plate [${prof.authorized_plate_no}] (${spec}) • Verified ${formatTs(prof.ltfrb_verified_at)}`;
+      } else {
+        statusEl.style.color = '#fbbf24';
+        statusEl.textContent = 'UNBOUND: No LTFRB 2026 authorized motorcycle plate bound to this contractor yet.';
+      }
+    }
+  }
+}
+
+async function saveLtfrbVehicleBinding() {
+  const contractorId = document.getElementById('ltfrbContractorSelect')?.value || '';
+  const plateNo = (document.getElementById('ltfrbPlateNo')?.value || '').trim();
+  const isEv = (document.getElementById('ltfrbPowertrain')?.value || 'ICE') === 'EV';
+  const engineCc = parseInt(document.getElementById('ltfrbEngineCc')?.value || '0', 10);
+  const motorKw = parseFloat(document.getElementById('ltfrbMotorKw')?.value || '0');
+  const riderId = (document.getElementById('ltfrbRiderId')?.value || '').trim();
+
+  if (!contractorId) {
+    alert('Select a contractor account first.');
+    return;
+  }
+  if (plateNo.length < 4) {
+    alert('Enter a valid authorized motorcycle plate number.');
+    return;
+  }
+
+  const { data, error } = await supabaseClient.rpc('secure_update_ltfrb_vehicle_binding_rpc', {
+    p_session_token: getActiveSessionToken(),
+    p_contractor_id: contractorId,
+    p_plate_no: plateNo,
+    p_is_electric: isEv,
+    p_engine_cc: isEv ? 0 : engineCc,
+    p_motor_kw: isEv ? motorKw : null,
+    p_ltfrb_rider_id: riderId || null
+  });
+
+  if (error || (data && data.status !== 'SUCCESS')) {
+    alert('LTFRB Compliance Gate: ' + (error ? error.message : (data?.message || 'Binding failed')));
+    await syncFromSupabase();
+    return;
+  }
+
+  ltfrbFormDirty = false;
+  await syncFromSupabase();
+  populateLtfrbContractorBindingForm(true);
+  alert(`LTFRB 1-Rider-1-Bike binding saved cleanly for plate [${plateNo.toUpperCase()}].`);
+}
+
+function renderOperatorLtfrbMonitor() {
+  // 1. Populate contractor selector without interrupting active edits
+  const sel = document.getElementById('ltfrbContractorSelect');
+  if (sel) {
+    const contractors = (consoleState.users || []).filter(u => u.role === 'contractor');
+    const prevVal = sel.value || ltfrbSelectedContractorId;
+    const expectedOptions = contractors.map(c => {
+      const p = getContractorProfile(c.id);
+      const badge = (p && p.ltfrb_compliant && p.authorized_plate_no) ? `[${p.authorized_plate_no}]` : '[UNBOUND]';
+      return `<option value="${c.id}">${c.full_name} (@${c.username}) ${badge}</option>`;
+    }).join('');
+
+    if (sel.innerHTML !== expectedOptions) {
+      sel.innerHTML = expectedOptions || '<option value="">No contractors found</option>';
+      if (prevVal && contractors.some(c => c.id === prevVal)) {
+        sel.value = prevVal;
+      }
+    }
+    if (sel.value) {
+      populateLtfrbContractorBindingForm(false);
+    }
+  }
+
+  // 2. Render LTFRB safety & overspeed events table
+  const tbody = document.getElementById('operatorLtfrbEventsBody');
+  if (!tbody) return;
+  const events = (consoleState.ltfrbSafetyEvents || []).slice(0, 30);
+  if (!events.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="padding:14px;text-align:center;color:#64748b;">No LTFRB safety or overspeed events logged yet.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = events.map(ev => {
+    const sevColor = ev.severity === 'CRITICAL' ? '#f87171' : (ev.severity === 'WARNING' ? '#fbbf24' : '#34d399');
+    const detailCell = ev.recorded_speed_kph
+      ? `<strong style="color:#f87171;">${Number(ev.recorded_speed_kph).toFixed(1)} km/h</strong> (Limit ${Number(ev.speed_limit_kph || 60).toFixed(0)})`
+      : (ev.refusal_category || '—');
+
+    return `
+      <tr style="border-bottom:1px solid #1e293b;">
+        <td style="padding:8px;font-weight:700;color:#38bdf8;">${ev.event_type}</td>
+        <td style="padding:8px;font-weight:700;color:${sevColor};">${ev.severity}</td>
+        <td style="padding:8px;color:#e2e8f0;">${ev.contractor_id ? getUserLabel(ev.contractor_id) : '—'}</td>
+        <td style="padding:8px;color:#e2e8f0;">${detailCell}</td>
+        <td style="padding:8px;color:#cbd5e1;">${ev.notes || '—'}</td>
+        <td style="padding:8px;color:#94a3b8;">${formatTs(ev.created_at)}</td>
       </tr>
     `;
   }).join('');

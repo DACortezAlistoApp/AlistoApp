@@ -571,6 +571,83 @@
           </div>
         </div>
 
+      
+        <!-- PHASE 5B: LTFRB MC 2026-048 / DOTr DO 2026-006 COMPLIANCE MONITOR -->
+        <div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:18px;margin-bottom:18px;">
+          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;">
+            <div>
+              <h3 style="margin:0;color:#34d399;font-size:1.05rem;">LTFRB 2026 Compliance: 1-Rider-1-Bike Binding &amp; 60 km/h Safety Monitor</h3>
+              <p style="margin:4px 0 0;color:#94a3b8;font-size:0.82rem;">
+                Enforces MC 2026-048 / DOTr DO 2026-006: strict 1-rider-1-motorcycle plate binding, 100cc–399cc ICE or &ge;1.5 kW EV verification, 60 km/h speed alerts, and safety refusal audits.
+              </p>
+            </div>
+            <button type="button" class="btn-outline" onclick="syncFromSupabase()">Refresh Safety Ledger</button>
+          </div>
+
+          <!-- 1-Rider-1-Bike Vehicle Binding Form -->
+          <div style="background:#0b1220;border:1px solid #334155;border-radius:10px;padding:14px;margin-bottom:16px;">
+            <div style="font-size:0.85rem;font-weight:700;color:#e2e8f0;margin-bottom:10px;">
+              1-Accredited-Rider / 1-Authorized-Motorcycle Plate Binding
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:10px;align-items:end;">
+              <div>
+                <label style="display:block;font-size:0.76rem;color:#94a3b8;margin-bottom:4px;">Contractor Account</label>
+                <select id="ltfrbContractorSelect" onchange="populateLtfrbContractorBindingForm(true)" style="width:100%;padding:8px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;"></select>
+              </div>
+              <div>
+                <label style="display:block;font-size:0.76rem;color:#94a3b8;margin-bottom:4px;">Authorized Plate No. (Unique)</label>
+                <input id="ltfrbPlateNo" type="text" oninput="markLtfrbFormDirty()" placeholder="e.g., 123-ABC" style="width:100%;padding:8px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
+              </div>
+              <div>
+                <label style="display:block;font-size:0.76rem;color:#94a3b8;margin-bottom:4px;">Powertrain Type</label>
+                <select id="ltfrbPowertrain" onchange="toggleLtfrbEvFields(); markLtfrbFormDirty();" style="width:100%;padding:8px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;">
+                  <option value="ICE">ICE Motorcycle (100cc–399cc)</option>
+                  <option value="EV">Electric Motorcycle (&ge;1.5 kW)</option>
+                </select>
+              </div>
+              <div id="ltfrbIceCcWrap">
+                <label style="display:block;font-size:0.76rem;color:#94a3b8;margin-bottom:4px;">Engine Displacement (cc)</label>
+                <input id="ltfrbEngineCc" type="number" min="100" max="399" value="125" oninput="markLtfrbFormDirty()" style="width:100%;padding:8px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
+              </div>
+              <div id="ltfrbEvKwWrap" style="display:none;">
+                <label style="display:block;font-size:0.76rem;color:#94a3b8;margin-bottom:4px;">EV Motor Rating (kW)</label>
+                <input id="ltfrbMotorKw" type="number" step="0.1" min="1.5" value="2.0" oninput="markLtfrbFormDirty()" style="width:100%;padding:8px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
+              </div>
+              <div>
+                <label style="display:block;font-size:0.76rem;color:#94a3b8;margin-bottom:4px;">LTFRB Rider ID (Optional)</label>
+                <input id="ltfrbRiderId" type="text" oninput="markLtfrbFormDirty()" placeholder="LTFRB-R3-0001" style="width:100%;padding:8px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;box-sizing:border-box;" />
+              </div>
+              <div>
+                <button type="button" onclick="saveLtfrbVehicleBinding()" style="width:100%;padding:9px 12px;border:none;border-radius:6px;background:#10b981;color:#070d19;font-weight:800;cursor:pointer;">
+                  BIND PLATE &amp; VERIFY
+                </button>
+              </div>
+            </div>
+            <div id="ltfrbBindingStatusLine" style="margin-top:8px;font-size:0.78rem;color:#94a3b8;">
+              Select a contractor to view or bind their LTFRB-compliant motorcycle.
+            </div>
+          </div>
+
+          <!-- LTFRB Safety & Overspeed Events Table -->
+          <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:0.81rem;">
+              <thead>
+                <tr style="text-align:left;border-bottom:1px solid #334155;color:#94a3b8;">
+                  <th style="padding:8px;">Event Type</th>
+                  <th style="padding:8px;">Severity</th>
+                  <th style="padding:8px;">Contractor</th>
+                  <th style="padding:8px;">Speed / Category</th>
+                  <th style="padding:8px;">Audit Notes</th>
+                  <th style="padding:8px;">Timestamp</th>
+                </tr>
+              </thead>
+              <tbody id="operatorLtfrbEventsBody">
+                <tr><td colspan="6" style="padding:14px;text-align:center;color:#64748b;">No LTFRB safety or overspeed events logged yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
       </section>
 
       <!-- ==================================================================== -->
