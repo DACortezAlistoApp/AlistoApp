@@ -21,6 +21,7 @@ import org.json.JSONArray
 import java.net.URLEncoder
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.math.max
 
 data class LandmarkResult(
     val title: String,
@@ -40,11 +41,19 @@ object AlistoLocationTracker {
     private var activeManager: LocationManager? = null
     private var activeListener: LocationListener? = null
 
+    private var lastGpsFixMs: Long = 0L
+    private var lastGpsAccuracyM: Float = 999f
+    private var lastAcceptedMs: Long = 0L
+    private var smoothedLat: Double? = null
+    private var smoothedLng: Double? = null
+
     var lastLat: Double? = null
         private set
     var lastLng: Double? = null
         private set
     var lastAccuracyM: Float = 25f
+        private set
+    var lastProviderName: String = "unknown"
         private set
 
     fun hasPermission(context: Context): Boolean {
@@ -65,18 +74,26 @@ object AlistoLocationTracker {
     fun getBestLastKnown(context: Context): Location? {
         if (!hasPermission(context)) return null
         val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
+        val now = System.currentTimeMillis()
         val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER)
         var best: Location? = null
         for (p in providers) {
             val loc = try { lm.getLastKnownLocation(p) } catch (_: Exception) { null } ?: continue
-            if (best == null || loc.accuracy < best.accuracy || (loc.time - best.time) > 120_000L) {
+            val ageMs = now - loc.time
+            if (ageMs > 180_000L && best != null) continue
+            if (best == null || (loc.accuracy < best.accuracy && ageMs < 90_000L)) {
                 best = loc
             }
         }
         best?.let {
-            lastLat = it.latitude
-            lastLng = it.longitude
+            if (smoothedLat == null) {
+                smoothedLat = it.latitude
+                smoothedLng = it.longitude
+            }
+            lastLat = smoothedLat ?: it.latitude
+            lastLng = smoothedLng ?: it.longitude
             lastAccuracyM = it.accuracy.coerceAtLeast(8f)
+            lastProviderName = it.provider ?: "cached"
         }
         return best
     }
@@ -84,8 +101,8 @@ object AlistoLocationTracker {
     @SuppressLint("MissingPermission")
     fun startLiveUpdates(
         context: Context,
-        minTimeMs: Long = 3_000L,
-        minDistanceM: Float = 3f,
+        minTimeMs: Long = 2_500L,
+        minDistanceM: Float = 2f,
         onLocation: (lat: Double, lng: Double, accuracyM: Float) -> Unit
     ) {
         if (!hasPermission(context)) return
@@ -94,17 +111,14 @@ object AlistoLocationTracker {
         val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
         activeManager = lm
 
-        // Push best cached fix right away so the blue dot appears immediately
         getBestLastKnown(context)?.let {
-            onLocation(it.latitude, it.longitude, it.accuracy.coerceAtLeast(8f))
+            onLocation(lastLat ?: it.latitude, lastLng ?: it.longitude, lastAccuracyM)
         }
 
         val listener = object : LocationListener {
             override fun onLocationChanged(location: Location) {
-                lastLat = location.latitude
-                lastLng = location.longitude
-                lastAccuracyM = location.accuracy.coerceAtLeast(8f)
-                onLocation(location.latitude, location.longitude, lastAccuracyM)
+                val filtered = filterAndSmooth(location) ?: return
+                onLocation(filtered.first, filtered.second, filtered.third)
             }
 
             @Deprecated("Deprecated in Java")
@@ -124,6 +138,81 @@ object AlistoLocationTracker {
         }
     }
 
+    /**
+     * 5-stage anti-drift filter:
+     * 1) GPS-over-Network priority, 2) Accuracy ceiling, 3) Spike guard,
+     * 4) Stationary dead-zone, 5) Accuracy-weighted smoothing.
+     */
+    private fun filterAndSmooth(loc: Location): Triple<Double, Double, Float>? {
+        val now = System.currentTimeMillis()
+        val acc = loc.accuracy
+        if (acc <= 0f) return null
+
+        val isGps = loc.provider == LocationManager.GPS_PROVIDER
+        if (isGps) {
+            lastGpsFixMs = now
+            lastGpsAccuracyM = acc
+        } else {
+            // Suppress cell-tower / Wi-Fi jumps whenever fresh satellite GPS is locked
+            if ((now - lastGpsFixMs) < 15_000L && lastGpsAccuracyM <= 30f) return null
+        }
+
+        // Reject noisy indoor fixes once we already have a reasonable lock
+        val curLat = smoothedLat
+        val curLng = smoothedLng
+        if (curLat != null && curLng != null && lastAccuracyM <= 35f && acc > 55f) {
+            return null
+        }
+
+        if (curLat == null || curLng == null || (now - lastAcceptedMs) > 120_000L) {
+            if (acc > 150f) return null
+            smoothedLat = loc.latitude
+            smoothedLng = loc.longitude
+            lastLat = loc.latitude
+            lastLng = loc.longitude
+            lastAccuracyM = acc.coerceAtLeast(6f)
+            lastProviderName = loc.provider ?: "gps"
+            lastAcceptedMs = now
+            return Triple(loc.latitude, loc.longitude, lastAccuracyM)
+        }
+
+        val distArr = FloatArray(1)
+        Location.distanceBetween(curLat, curLng, loc.latitude, loc.longitude, distArr)
+        val distM = distArr[0].toDouble()
+        val dtSec = ((now - lastAcceptedMs) / 1000.0).coerceAtLeast(1.0)
+
+        // Reject impossible teleport spikes from weak non-GPS sources
+        if (!isGps && distM > max(85.0, dtSec * 45.0) && acc > 25f) return null
+
+        // Stationary dead-zone prevents the blue dot from jittering while standing still
+        val deadZoneM = (acc * 0.45f).coerceIn(7f, 18f)
+        if (distM < deadZoneM) {
+            if (acc < lastAccuracyM) {
+                lastAccuracyM = acc.coerceAtLeast(6f)
+            }
+            return null
+        }
+
+        // Accuracy-weighted smoothing factor
+        val alpha = when {
+            distM > 35.0 && isGps -> 0.85
+            acc <= 12f -> 0.65
+            acc <= 25f -> 0.45
+            else -> 0.28
+        }
+
+        val nextLat = curLat + alpha * (loc.latitude - curLat)
+        val nextLng = curLng + alpha * (loc.longitude - curLng)
+        smoothedLat = nextLat
+        smoothedLng = nextLng
+        lastLat = nextLat
+        lastLng = nextLng
+        lastAccuracyM = acc.coerceAtLeast(6f)
+        lastProviderName = loc.provider ?: "gps"
+        lastAcceptedMs = now
+        return Triple(nextLat, nextLng, lastAccuracyM)
+    }
+
     fun stopLiveUpdates() {
         try {
             activeListener?.let { activeManager?.removeUpdates(it) }
@@ -133,10 +222,6 @@ object AlistoLocationTracker {
         activeManager = null
     }
 
-    /**
-     * Searches Philippine landmarks and street addresses using OpenStreetMap Nominatim
-     * (biased around biasLat/biasLng) with native Android Geocoder as a fallback.
-     */
     suspend fun searchLandmarks(
         context: Context,
         rawQuery: String,

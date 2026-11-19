@@ -133,7 +133,13 @@ data class BookingRecord(
     val contractorRatingCount: Int = 1,
     val contractorVipBadge: Boolean = false,
     val pickupLat: Double = 15.1450,
-    val pickupLng: Double = 120.5887
+    val pickupLng: Double = 120.5887,
+    val dropoffLat: Double = 15.1450,
+    val dropoffLng: Double = 120.5887,
+    val pickupNote: String = "",
+    val dropoffNote: String = "",
+    val bookingNotes: String = "",
+    val allowAutoAssign: Boolean = true
 )
 
 data class ReleaseManifestInfo(
@@ -431,7 +437,17 @@ object AlistoKernelClient {
                         contractorRatingCount = o.optInt("contractor_rating_count", 1),
                         contractorVipBadge = o.optBoolean("contractor_vip_badge", false),
                         pickupLat = o.optDouble("pickup_lat", 15.1450),
-                        pickupLng = o.optDouble("pickup_lng", 120.5887)
+                        pickupLng = o.optDouble("pickup_lng", 120.5887),
+                        dropoffLat = o.optDouble("dropoff_lat", o.optDouble("pickup_lat", 15.1450)),
+                        dropoffLng = o.optDouble("dropoff_lng", o.optDouble("pickup_lng", 120.5887)),
+                        pickupNote = extractNoteTag(o, "pickup_note", "PICKUP_NOTE"),
+                        dropoffNote = extractNoteTag(o, "dropoff_note", "DROPOFF_NOTE"),
+                        bookingNotes = extractNoteTag(o, "booking_notes", "BOOKING_NOTE"),
+                        allowAutoAssign = if (o.has("allow_auto_assign")) {
+                            o.optBoolean("allow_auto_assign", true)
+                        } else {
+                            extractNoteTag(o, "booking_notes", "BOOKING_NOTE").isBlank()
+                        }
                     )
                 )
             }
@@ -1212,6 +1228,19 @@ object AlistoKernelClient {
         } catch (e: Exception) {
             return@withContext Result.failure(e)
         }
+    }
+
+
+    private fun extractNoteTag(o: JSONObject, colKey: String, tagKey: String): String {
+        val direct = o.optString(colKey, "").trim()
+        if (direct.isNotEmpty() && direct != "null") return direct
+        val raw = o.optString("service_notes", "")
+        val prefix = "[$tagKey:"
+        val start = raw.indexOf(prefix)
+        if (start == -1) return ""
+        val after = start + prefix.length
+        val end = raw.indexOf("]", after)
+        return if (end == -1) "" else raw.substring(after, end).trim()
     }
 
 }

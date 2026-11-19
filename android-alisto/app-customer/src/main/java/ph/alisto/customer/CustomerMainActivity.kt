@@ -3,7 +3,9 @@ package ph.alisto.customer
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.widget.*
@@ -27,24 +29,40 @@ class CustomerMainActivity : AppCompatActivity() {
 
     private var selectedVerticalKey = "skills_marketplace"
     private var selectedJobSubtype = "ON_SITE_SKILL"
-    private var selectedServiceLabel = "Skills & Trades"
+    private var selectedServiceLabel = "Request Skills & Trades"
     private var selectedSkillCategory = "General Service"
 
     private var compressedProfilePhotoDataUrl: String? = null
     private val sequentialWaypoints = mutableListOf<JSONObject>()
     private var realtimePollJob: Job? = null
+    private var pickupSearchJob: Job? = null
+    private var dropoffSearchJob: Job? = null
+    private var reverseGeoJob: Job? = null
+
     private var customerMapView: AlistoInteractiveMapView? = null
     private var activePickupField: EditText? = null
-    private var mapTapMode: String = "ORIGIN"
+    private var suppressAutocomplete = false
 
     private var activeOriginLat: Double = 15.1450
     private var activeOriginLng: Double = 120.5887
+    private var activeDropoffLat: Double? = null
+    private var activeDropoffLng: Double? = null
     private var originPinnedManually = false
     private var promptedLocationPerm = false
     private var hasAutoCenteredGps = false
 
+    // Active crosshair drop-pin state (null, "PICKUP", "DROPOFF", or "STOP")
+    private var dropPinTarget: String? = null
+    private var pendingPinLat: Double = 15.1450
+    private var pendingPinLng: Double = 120.5887
+    private var pendingPinAddress: String = ""
+
     private var draftTitle: String = ""
     private var draftPickupAddress: String = ""
+    private var draftPickupNote: String = ""
+    private var draftDropoffAddress: String = ""
+    private var draftDropoffNote: String = ""
+    private var draftBookingNotes: String = ""
     private var draftOfferFee: String = "500"
     private var draftTip: String = "50"
     private var draftErrandGoods: String = "0"
@@ -74,7 +92,7 @@ class CustomerMainActivity : AppCompatActivity() {
             } else {
                 Toast.makeText(
                     this,
-                    "Location permission not granted. You can still search landmarks or drop a pin.",
+                    "Location permission not granted. You can still search or drop a pin.",
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -309,11 +327,8 @@ class CustomerMainActivity : AppCompatActivity() {
             "ACTIVITY" -> contentHost.addView(buildCustomerActivityTab(user))
             "ACCOUNT" -> contentHost.addView(buildCustomerAccountTab(user))
             else -> {
-                if (bookingStep == "LAUNCHER") {
-                    contentHost.addView(buildServiceLauncherScreen(user))
-                } else {
-                    contentHost.addView(buildCustomerPickupMapScreen(user))
-                }
+                if (bookingStep == "LAUNCHER") contentHost.addView(buildServiceLauncherScreen(user))
+                else contentHost.addView(buildCustomerPickupMapScreen(user))
             }
         }
 
@@ -340,16 +355,12 @@ class CustomerMainActivity : AppCompatActivity() {
         setContentView(shell)
     }
 
-    /**
-     * Step 1: Guided Service Launcher shown upon opening the app.
-     */
     private fun buildServiceLauncherScreen(user: AuthenticatedUser): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
         }
 
-        // Live GPS mini-map preview at the top showing where the user currently is
         val mapStage = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 0.36f)
         }
@@ -369,7 +380,6 @@ class CustomerMainActivity : AppCompatActivity() {
             }
         }
 
-        // Floating greeting pill + GPS recenter pill
         val topHud = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -392,23 +402,16 @@ class CustomerMainActivity : AppCompatActivity() {
             })
             addView(TextView(this@CustomerMainActivity).apply {
                 text = "Hi ${user.nickname} • ${user.municipality}"
-                textSize = 13f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
-                maxLines = 1
+                textSize = 13f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); maxLines = 1
             })
         })
         topHud.addView(AlistoUiKit.chipButton(this, "My GPS", true, "#E60D1424", AlistoUiKit.CYAN) {
-            if (!AlistoLocationTracker.hasPermission(this)) {
-                AlistoLocationTracker.requestPermission(this)
-            } else {
-                startLiveGpsOnMap(forceCenter = true, snapOriginToGps = false)
-            }
+            if (!AlistoLocationTracker.hasPermission(this)) AlistoLocationTracker.requestPermission(this)
+            else startLiveGpsOnMap(forceCenter = true, snapOriginToGps = false)
         }.apply { elevation = dp(4).toFloat() })
         mapStage.addView(topHud)
         root.addView(mapStage)
 
-        // Rounded Bottom Sheet asking what service the customer needs
         val sheet = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = AlistoUiKit.topSheetBg(this@CustomerMainActivity, AlistoUiKit.BG_SURFACE, 24, AlistoUiKit.BORDER)
@@ -425,7 +428,6 @@ class CustomerMainActivity : AppCompatActivity() {
             setPadding(dp(18), dp(4), dp(18), dp(20))
         }
 
-        // Active booking jump banner if one is already running
         val activeBookings = AlistoKernelClient.bookings.filter {
             (user.role == "super_admin" || it.clientId == user.id) &&
                 it.status !in listOf("COMPLETED", "CANCELLED", "EXPIRED")
@@ -434,15 +436,11 @@ class CustomerMainActivity : AppCompatActivity() {
             val topB = activeBookings.first()
             val bidCount = AlistoKernelClient.bookingBids.count { it.bookingId == topB.id && it.status == "ACTIVE" }
             body.addView(LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#0C2942", 14, AlistoUiKit.CYAN)
                 setPadding(dp(14), dp(10), dp(14), dp(10))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = dp(14) }
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(14) }
                 setOnClickListener { activeTab = "ACTIVITY"; showAuthenticatedCustomerPortal() }
-
                 addView(TextView(this@CustomerMainActivity).apply {
                     text = "${topB.bookingRef} • ${topB.status}" + if (bidCount > 0) " • $bidCount offer(s)" else ""
                     textSize = 12.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.CYAN))
@@ -456,52 +454,22 @@ class CustomerMainActivity : AppCompatActivity() {
 
         body.addView(TextView(this).apply {
             text = "What do you need today?"
-            textSize = 21f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+            textSize = 21f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
         })
         body.addView(TextView(this).apply {
-            text = "Choose a service to set your pickup or job site location."
-            textSize = 13f
-            setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED))
-            setPadding(0, dp(3), 0, dp(14))
+            text = "Choose a service to set your pickup, destination, and notes."
+            textSize = 13f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(3), 0, dp(14))
         })
 
         data class LauncherOption(
-            val title: String,
-            val subtitle: String,
-            val badge: String,
-            val accent: String,
-            val vKey: String,
-            val sub: String,
-            val cat: String
+            val title: String, val subtitle: String, val badge: String, val accent: String,
+            val vKey: String, val sub: String, val cat: String
         )
-
         val options = listOf(
-            LauncherOption(
-                "Request Delivery",
-                "Send packages, food, or documents point-to-point",
-                "DELIVERY", AlistoUiKit.AMBER,
-                "delivery_logistics", "POINT_TO_POINT", "Parcel & Delivery"
-            ),
-            LauncherOption(
-                "Request Errands (Pabili)",
-                "Multi-stop store pickups, groceries & personal errands",
-                "ERRANDS", AlistoUiKit.CYAN,
-                "delivery_logistics", "ERRAND_PURCHASING", "Errands & Pabili"
-            ),
-            LauncherOption(
-                "Request Skills & Trades",
-                "Book verified electricians, plumbers, aircon techs & shops",
-                "SKILLS", AlistoUiKit.EMERALD,
-                "skills_marketplace", "ON_SITE_SKILL", "General Service"
-            ),
-            LauncherOption(
-                "Request a Local Ride",
-                "Point-to-point sub-400cc local road mobility",
-                "MOBILITY", "#38BDF8",
-                "ride_hailing", "POINT_TO_POINT", "Local Ride"
-            )
+            LauncherOption("Request Delivery", "Send packages, food, or documents point-to-point", "DELIVERY", AlistoUiKit.AMBER, "delivery_logistics", "POINT_TO_POINT", "Parcel & Delivery"),
+            LauncherOption("Request Errands (Pabili)", "Multi-stop store pickups, groceries & personal errands", "ERRANDS", AlistoUiKit.CYAN, "delivery_logistics", "ERRAND_PURCHASING", "Errands & Pabili"),
+            LauncherOption("Request Skills & Trades", "Book verified electricians, plumbers, aircon techs & shops", "SKILLS", AlistoUiKit.EMERALD, "skills_marketplace", "ON_SITE_SKILL", "General Service"),
+            LauncherOption("Request a Local Ride", "Point-to-point sub-400cc local road mobility", "MOBILITY", "#38BDF8", "ride_hailing", "POINT_TO_POINT", "Local Ride")
         )
 
         options.forEach { opt ->
@@ -511,43 +479,30 @@ class CustomerMainActivity : AppCompatActivity() {
                 selectedJobSubtype = opt.sub
                 selectedServiceLabel = opt.title
                 selectedSkillCategory = opt.cat
-                mapTapMode = "ORIGIN"
+                dropPinTarget = null
                 bookingStep = "PICKUP_MAP"
                 sheetExpanded = false
                 showAuthenticatedCustomerPortal()
             }
-
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            val textCol = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(10) }
-                addView(AlistoUiKit.badgePill(this@CustomerMainActivity, opt.badge, AlistoUiKit.BG_INPUT, opt.accent).apply {
-                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
+            card.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                addView(LinearLayout(this@CustomerMainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(10) }
+                    addView(AlistoUiKit.badgePill(this@CustomerMainActivity, opt.badge, AlistoUiKit.BG_INPUT, opt.accent).apply {
+                        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
+                    })
+                    addView(TextView(this@CustomerMainActivity).apply {
+                        text = opt.title; textSize = 15.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                    })
+                    addView(TextView(this@CustomerMainActivity).apply {
+                        text = opt.subtitle; textSize = 12.5f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(2), 0, 0)
+                    })
                 })
                 addView(TextView(this@CustomerMainActivity).apply {
-                    text = opt.title
-                    textSize = 15.5f
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                    text = "→"; textSize = 20f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(opt.accent))
                 })
-                addView(TextView(this@CustomerMainActivity).apply {
-                    text = opt.subtitle
-                    textSize = 12.5f
-                    setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED))
-                    setPadding(0, dp(2), 0, 0)
-                })
-            }
-            row.addView(textCol)
-            row.addView(TextView(this).apply {
-                text = "→"
-                textSize = 20f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor(opt.accent))
             })
-            card.addView(row)
             body.addView(card)
         }
 
@@ -557,10 +512,8 @@ class CustomerMainActivity : AppCompatActivity() {
         return root
     }
 
-    /**
-     * Step 2: Pickup / Job Site selection via Search Landmark, Current GPS, or Drop Pin on Map.
-     */
     private fun buildCustomerPickupMapScreen(user: AuthenticatedUser): View {
+        val needsDropoff = selectedVerticalKey != "skills_marketplace"
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
@@ -568,7 +521,7 @@ class CustomerMainActivity : AppCompatActivity() {
 
         val mapStage = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, if (sheetExpanded) 0.34f else 0.48f
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, if (sheetExpanded) 0.34f else 0.44f
             )
         }
         val mapContainer = AlistoInteractiveMapView(this)
@@ -578,103 +531,74 @@ class CustomerMainActivity : AppCompatActivity() {
             FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         )
 
-        // Floating Top Bar: Back to Launcher + Selected Service Badge + My GPS button
+        // Floating Top Bar: Back + Service Badge + Current GPS
         val topHud = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(12), dp(12), 0)
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP
-            )
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP)
         }
         topHud.addView(AlistoUiKit.chipButton(this, "← Services", true, "#E60D1424", AlistoUiKit.TEXT_PRIMARY) {
+            dropPinTarget = null
             bookingStep = "LAUNCHER"
             showAuthenticatedCustomerPortal()
         }.apply {
             elevation = dp(4).toFloat()
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) }
         })
-
         topHud.addView(TextView(this).apply {
-            text = selectedServiceLabel
-            textSize = 12.5f
-            gravity = Gravity.CENTER
-            setTypeface(null, Typeface.BOLD)
+            text = selectedServiceLabel; textSize = 12.5f; gravity = Gravity.CENTER; setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor(AlistoUiKit.CYAN))
             background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#E60D1424", 20, AlistoUiKit.CYAN)
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            elevation = dp(4).toFloat()
-            maxLines = 1
+            setPadding(dp(12), dp(8), dp(12), dp(8)); elevation = dp(4).toFloat(); maxLines = 1
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) }
         })
-
         topHud.addView(AlistoUiKit.chipButton(this, "My GPS", true, "#E60D1424", AlistoUiKit.EMERALD) {
             snapPickupToCurrentGps()
         }.apply { elevation = dp(4).toFloat() })
         mapStage.addView(topHud)
 
-        // Floating Bottom Map Pin Controls (Drop Pickup Pin vs Drop Stop Pin)
-        val mapControlsRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), 0, dp(12), dp(10))
+        // Floating Crosshair Drop-Pin Confirmation Bar (visible only while dragging pin)
+        val dropPinPreviewText = TextView(this).apply {
+            text = "Drag map to position pin..."
+            textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+            maxLines = 2
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) }
+        }
+        lateinit var confirmPinBtn: Button
+        val dropPinBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#F20D1424", 16, AlistoUiKit.CYAN)
+            setPadding(dp(12), dp(10), dp(10), dp(10))
+            elevation = dp(8).toFloat()
+            visibility = View.GONE
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM
-            )
-        }
-        val btnOriginPin = TextView(this)
-        val btnStopPin = TextView(this)
-        fun styleMapTapPills() {
-            btnOriginPin.apply {
-                text = "Tap Map: Pickup Pin"
-                textSize = 11.5f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor(if (mapTapMode == "ORIGIN") AlistoUiKit.BG_DEEP else AlistoUiKit.TEXT_PRIMARY))
-                background = AlistoUiKit.roundedBg(
-                    this@CustomerMainActivity,
-                    if (mapTapMode == "ORIGIN") AlistoUiKit.EMERALD else "#E60D1424", 20,
-                    if (mapTapMode == "ORIGIN") AlistoUiKit.EMERALD else AlistoUiKit.BORDER_LIGHT
-                )
-                setPadding(dp(11), dp(7), dp(11), dp(7))
-                elevation = dp(4).toFloat()
+            ).apply {
+                leftMargin = dp(12); rightMargin = dp(12); bottomMargin = dp(10)
             }
-            btnStopPin.apply {
-                text = "Tap Map: +Stop"
-                textSize = 11.5f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor(if (mapTapMode == "WAYPOINT") AlistoUiKit.BG_DEEP else AlistoUiKit.TEXT_PRIMARY))
-                background = AlistoUiKit.roundedBg(
-                    this@CustomerMainActivity,
-                    if (mapTapMode == "WAYPOINT") AlistoUiKit.AMBER else "#E60D1424", 20,
-                    if (mapTapMode == "WAYPOINT") AlistoUiKit.AMBER else AlistoUiKit.BORDER_LIGHT
-                )
-                setPadding(dp(11), dp(7), dp(11), dp(7))
-                elevation = dp(4).toFloat()
-            }
+            addView(dropPinPreviewText)
+            confirmPinBtn = AlistoUiKit.pillButton(this@CustomerMainActivity, "Confirm Pin", AlistoUiKit.EMERALD, AlistoUiKit.BG_DEEP, heightDp = 38, textSizeSp = 12f) {}
+            addView(confirmPinBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(6) })
+            addView(AlistoUiKit.chipButton(this@CustomerMainActivity, "X", true, AlistoUiKit.BG_CARD, AlistoUiKit.ROSE) {
+                dropPinTarget = null
+                customerMapView?.setDropPinMode(false)
+                visibility = View.GONE
+            })
         }
-        styleMapTapPills()
-        btnOriginPin.setOnClickListener { mapTapMode = "ORIGIN"; styleMapTapPills() }
-        btnStopPin.setOnClickListener { mapTapMode = "WAYPOINT"; styleMapTapPills() }
-
-        mapControlsRow.addView(btnOriginPin, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
-        if (selectedVerticalKey != "skills_marketplace") {
-            mapControlsRow.addView(btnStopPin, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
-        }
-        mapStage.addView(mapControlsRow)
+        mapStage.addView(dropPinBar)
         root.addView(mapStage)
 
-        // Rounded Bottom Sheet for Pickup Selection & Booking Submission
+        // Rounded Bottom Sheet
         val sheetWrap = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = AlistoUiKit.topSheetBg(this@CustomerMainActivity, AlistoUiKit.BG_SURFACE, 24, AlistoUiKit.BORDER)
             elevation = dp(10).toFloat()
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, if (sheetExpanded) 0.66f else 0.52f
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, if (sheetExpanded) 0.66f else 0.56f
             )
         }
         sheetWrap.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
+            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
             setOnClickListener { sheetExpanded = !sheetExpanded; showAuthenticatedCustomerPortal() }
             addView(AlistoUiKit.dragHandle(this@CustomerMainActivity))
         })
@@ -684,90 +608,216 @@ class CustomerMainActivity : AppCompatActivity() {
         }
         val sheetBody = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(2), dp(18), dp(20))
+            setPadding(dp(18), dp(2), dp(18), dp(22))
         }
 
-        // Pickup / Job Site Card with 3 direct methods: Search Landmark, Use Current Location, or Drop Pin
+        // 1. PICKUP / JOB SITE CARD (Live Autocomplete + Drop Pin + GPS + Pickup Note)
         val pickupCard = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 14)
-        val pickupLabel = if (selectedVerticalKey == "skills_marketplace") "Job Site Location" else "Pickup Location"
-        val pickupInput = AlistoUiKit.inputField(this, "Enter address or search landmark...", InputType.TYPE_CLASS_TEXT, draftPickupAddress)
+        val pickupTitle = if (needsDropoff) "● Pickup Location" else "● Job Site Location"
+        val pickupInput = AlistoUiKit.inputField(this, "Type landmark, subdivision, or street...", InputType.TYPE_CLASS_TEXT, draftPickupAddress)
         activePickupField = pickupInput
-        pickupCard.addView(AlistoUiKit.labeledField(this, "● $pickupLabel", pickupInput, 8))
+        val pickupSuggestionsBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            setPadding(0, dp(4), 0, dp(6))
+        }
 
-        val quickLocRow = LinearLayout(this).apply {
+        val pickupNoteInput = AlistoUiKit.inputField(
+            this, "Pickup note (gate color, bldg/unit, landmark)...", InputType.TYPE_CLASS_TEXT, draftPickupNote
+        )
+
+        // Drop-Off references (declared ahead so Drop-Pin confirm can write to either)
+        var dropoffInput: EditText? = null
+        var dropoffNoteInput: EditText? = null
+        var waypointsStatusRef: TextView? = null
+
+        fun enterDropPinMode(target: String, label: String, colorHex: String, startLat: Double, startLng: Double) {
+            dropPinTarget = target
+            pendingPinLat = startLat
+            pendingPinLng = startLng
+            dropPinPreviewText.text = "$label — move map, then tap Confirm"
+            dropPinBar.visibility = View.VISIBLE
+            customerMapView?.recenter(startLat, startLng, 16)
+            customerMapView?.setDropPinMode(true, label, colorHex) { lat, lng ->
+                pendingPinLat = lat
+                pendingPinLng = lng
+                dropPinPreviewText.text = "Locating pin..."
+                reverseGeoJob?.cancel()
+                reverseGeoJob = uiScope.launch {
+                    delay(250L)
+                    val addr = withContext(Dispatchers.IO) {
+                        AlistoSpatialEngine.reverseGeocodePin(this@CustomerMainActivity, lat, lng)
+                    }
+                    pendingPinAddress = addr
+                    dropPinPreviewText.text = addr
+                }
+            }
+        }
+
+        confirmPinBtn.setOnClickListener {
+            val target = dropPinTarget ?: return@setOnClickListener
+            val lat = pendingPinLat
+            val lng = pendingPinLng
+            val addr = pendingPinAddress.ifBlank {
+                AlistoSpatialEngine.reverseGeocodePin(this, lat, lng)
+            }
+            suppressAutocomplete = true
+            when (target) {
+                "PICKUP" -> {
+                    activeOriginLat = lat
+                    activeOriginLng = lng
+                    originPinnedManually = true
+                    draftPickupAddress = addr
+                    pickupInput.setText(addr)
+                    pickupSuggestionsBox.visibility = View.GONE
+                    Toast.makeText(this, "Pickup pinned: $addr", Toast.LENGTH_SHORT).show()
+                }
+                "DROPOFF" -> {
+                    activeDropoffLat = lat
+                    activeDropoffLng = lng
+                    draftDropoffAddress = addr
+                    dropoffInput?.setText(addr)
+                    Toast.makeText(this, "Drop-off pinned: $addr", Toast.LENGTH_SHORT).show()
+                }
+                "STOP" -> {
+                    val stopNum = sequentialWaypoints.size + 1
+                    sequentialWaypoints.add(JSONObject().apply {
+                        put("stop_number", stopNum); put("lat", lat); put("lng", lng); put("address", addr)
+                    })
+                    waypointsStatusRef?.text = "Extra Stops (${sequentialWaypoints.size}): " + sequentialWaypoints.joinToString(" → ") {
+                        "#${it.getInt("stop_number")} ${it.getString("address")}"
+                    }
+                    waypointsStatusRef?.setTextColor(Color.parseColor(AlistoUiKit.AMBER))
+                    Toast.makeText(this, "Stop #$stopNum pinned", Toast.LENGTH_SHORT).show()
+                }
+            }
+            suppressAutocomplete = false
+            dropPinTarget = null
+            customerMapView?.setDropPinMode(false)
+            dropPinBar.visibility = View.GONE
+            refreshCustomerMapLayers(user)
+        }
+
+        attachInlineAutocomplete(
+            input = pickupInput,
+            suggestionsBox = pickupSuggestionsBox,
+            isPickup = true
+        ) { picked ->
+            suppressAutocomplete = true
+            activeOriginLat = picked.lat
+            activeOriginLng = picked.lng
+            originPinnedManually = true
+            draftPickupAddress = "${picked.title} — ${picked.subtitle}"
+            pickupInput.setText(draftPickupAddress)
+            pickupInput.setSelection(pickupInput.text.length)
+            suppressAutocomplete = false
+            pickupSuggestionsBox.visibility = View.GONE
+            customerMapView?.recenter(picked.lat, picked.lng, 16)
+            refreshCustomerMapLayers(user)
+        }
+
+        pickupCard.addView(AlistoUiKit.labeledField(this, pickupTitle, pickupInput, 4))
+        pickupCard.addView(pickupSuggestionsBox)
+        pickupCard.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
-            addView(AlistoUiKit.chipButton(this@CustomerMainActivity, "Search Landmark", true, AlistoUiKit.BG_INPUT, AlistoUiKit.CYAN) {
-                openLandmarkSearchDialog(forWaypoint = false) { picked ->
-                    activeOriginLat = picked.lat
-                    activeOriginLng = picked.lng
-                    originPinnedManually = true
-                    draftPickupAddress = "${picked.title} — ${picked.subtitle}"
-                    pickupInput.setText(draftPickupAddress)
-                    customerMapView?.recenter(picked.lat, picked.lng, 16)
-                    refreshCustomerMapLayers(user)
-                }
-            }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) } })
-
-            addView(AlistoUiKit.chipButton(this@CustomerMainActivity, "Current Location", true, AlistoUiKit.BG_INPUT, AlistoUiKit.EMERALD) {
+            addView(AlistoUiKit.chipButton(this@CustomerMainActivity, "Use Current GPS", true, AlistoUiKit.BG_INPUT, AlistoUiKit.EMERALD) {
                 snapPickupToCurrentGps()
+            }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) } })
+            addView(AlistoUiKit.chipButton(this@CustomerMainActivity, "Drop Pin on Map", true, AlistoUiKit.BG_INPUT, AlistoUiKit.CYAN) {
+                enterDropPinMode("PICKUP", "Set Pickup Pin", AlistoUiKit.EMERALD, activeOriginLat, activeOriginLng)
             }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
-        }
-        pickupCard.addView(quickLocRow)
+        })
+        pickupCard.addView(AlistoUiKit.labeledField(this, "Pickup / Job Site Note (Optional)", pickupNoteInput, 2))
+        sheetBody.addView(pickupCard)
 
+        // 2. DROP-OFF / DESTINATION CARD (Delivery, Errands, Ride)
+        if (needsDropoff) {
+            val dropCard = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 14)
+            val dInput = AlistoUiKit.inputField(this, "Type drop-off landmark or address...", InputType.TYPE_CLASS_TEXT, draftDropoffAddress)
+            dropoffInput = dInput
+            val dropSuggestionsBox = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+                setPadding(0, dp(4), 0, dp(6))
+            }
+            val dNoteInput = AlistoUiKit.inputField(
+                this, "Drop-off note (recipient name, gate, instructions)...", InputType.TYPE_CLASS_TEXT, draftDropoffNote
+            )
+            dropoffNoteInput = dNoteInput
+
+            attachInlineAutocomplete(
+                input = dInput,
+                suggestionsBox = dropSuggestionsBox,
+                isPickup = false
+            ) { picked ->
+                suppressAutocomplete = true
+                activeDropoffLat = picked.lat
+                activeDropoffLng = picked.lng
+                draftDropoffAddress = "${picked.title} — ${picked.subtitle}"
+                dInput.setText(draftDropoffAddress)
+                dInput.setSelection(dInput.text.length)
+                suppressAutocomplete = false
+                dropSuggestionsBox.visibility = View.GONE
+                customerMapView?.recenter(picked.lat, picked.lng, 16)
+                refreshCustomerMapLayers(user)
+            }
+
+            dropCard.addView(AlistoUiKit.labeledField(this, "◆ Drop-Off / Destination", dInput, 4))
+            dropCard.addView(dropSuggestionsBox)
+            dropCard.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+                addView(AlistoUiKit.chipButton(this@CustomerMainActivity, "Drop Pin on Map", true, AlistoUiKit.BG_INPUT, AlistoUiKit.ROSE) {
+                    enterDropPinMode(
+                        "DROPOFF", "Set Drop-Off Pin", "#F43F5E",
+                        activeDropoffLat ?: activeOriginLat, activeDropoffLng ?: activeOriginLng
+                    )
+                }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) } })
+                addView(AlistoUiKit.chipButton(this@CustomerMainActivity, "+ Pin Extra Stop", true, AlistoUiKit.BG_INPUT, AlistoUiKit.AMBER) {
+                    enterDropPinMode("STOP", "Add Stop #${sequentialWaypoints.size + 1}", AlistoUiKit.AMBER, activeOriginLat, activeOriginLng)
+                }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
+            })
+
+            val wpStatus = TextView(this).apply {
+                text = if (sequentialWaypoints.isEmpty()) "No extra intermediate stops added"
+                else "Extra Stops (${sequentialWaypoints.size}): " + sequentialWaypoints.joinToString(" → ") {
+                    "#${it.getInt("stop_number")} ${it.getString("address")}"
+                }
+                textSize = 11.5f
+                setTextColor(Color.parseColor(if (sequentialWaypoints.isEmpty()) AlistoUiKit.TEXT_DIM else AlistoUiKit.AMBER))
+                setPadding(dp(2), 0, dp(2), dp(8))
+            }
+            waypointsStatusRef = wpStatus
+            dropCard.addView(wpStatus)
+            dropCard.addView(AlistoUiKit.labeledField(this, "Drop-Off Location Note (Optional)", dNoteInput, 2))
+            sheetBody.addView(dropCard)
+        }
+
+        // 3. SERVICE SUMMARY & SPECIAL BOOKING NOTE CARD
+        val detailsCard = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 14)
         val titleHint = when {
             selectedJobSubtype == "ERRAND_PURCHASING" -> "Items to buy or errands to run..."
-            selectedVerticalKey == "delivery_logistics" -> "Package details & drop-off note..."
-            selectedVerticalKey == "ride_hailing" -> "Destination / landmark note..."
+            selectedVerticalKey == "delivery_logistics" -> "Package summary (e.g., documents, food box)..."
+            selectedVerticalKey == "ride_hailing" -> "Short trip summary (e.g., work commute)..."
             else -> "Describe work needed (e.g., Aircon cleaning, Plumbing)"
         }
         val titleInput = AlistoUiKit.inputField(this, titleHint, InputType.TYPE_CLASS_TEXT, draftTitle)
-        pickupCard.addView(AlistoUiKit.labeledField(this, "◆ Request Details", titleInput, 8))
+        detailsCard.addView(AlistoUiKit.labeledField(this, "Request Summary", titleInput, 10))
 
-        val waypointsStatus = TextView(this).apply {
-            text = if (sequentialWaypoints.isEmpty()) {
-                if (selectedVerticalKey == "skills_marketplace") "Drop pin on map anytime to fine-tune job site."
-                else "Search or tap map (+Stop) to add destination / pabili stops."
-            } else {
-                "Stops (${sequentialWaypoints.size}): " + sequentialWaypoints.joinToString(" → ") {
-                    "#${it.getInt("stop_number")} ${it.getString("address")}"
-                }
-            }
-            textSize = 12f
-            setTextColor(Color.parseColor(if (sequentialWaypoints.isEmpty()) AlistoUiKit.TEXT_MUTED else AlistoUiKit.AMBER))
-            setPadding(dp(2), dp(2), dp(2), dp(6))
-        }
-        pickupCard.addView(waypointsStatus)
+        val bookingNoteInput = AlistoUiKit.inputField(
+            this, "e.g., Prefer NMAX/PCX motorcycle, bring helmet/tools...", InputType.TYPE_CLASS_TEXT, draftBookingNotes
+        )
+        detailsCard.addView(AlistoUiKit.labeledField(this, "Special Booking Note (Optional)", bookingNoteInput, 4))
+        detailsCard.addView(TextView(this).apply {
+            text = "Note: Bookings with special notes skip auto-assign and post directly to Open Bookings so matching contractors can review and accept."
+            textSize = 11f
+            setTextColor(Color.parseColor(AlistoUiKit.AMBER))
+            setPadding(dp(2), 0, dp(2), 0)
+        })
+        sheetBody.addView(detailsCard)
 
-        if (selectedVerticalKey != "skills_marketplace") {
-            val wpRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            wpRow.addView(AlistoUiKit.chipButton(this, "+ Search Stop / Drop-Off", true, AlistoUiKit.BG_INPUT, AlistoUiKit.AMBER) {
-                draftTitle = titleInput.text.toString()
-                draftPickupAddress = pickupInput.text.toString()
-                openLandmarkSearchDialog(forWaypoint = true) { picked ->
-                    val stopNum = sequentialWaypoints.size + 1
-                    sequentialWaypoints.add(JSONObject().apply {
-                        put("stop_number", stopNum); put("lat", picked.lat); put("lng", picked.lng)
-                        put("address", "${picked.title}, ${picked.subtitle}")
-                    })
-                    customerMapView?.recenter(picked.lat, picked.lng, 15)
-                    showAuthenticatedCustomerPortal()
-                }
-            }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) } })
-
-            if (sequentialWaypoints.isNotEmpty()) {
-                wpRow.addView(AlistoUiKit.chipButton(this, "Clear", false, AlistoUiKit.BG_INPUT, AlistoUiKit.ROSE) {
-                    sequentialWaypoints.clear()
-                    draftTitle = titleInput.text.toString()
-                    draftPickupAddress = pickupInput.text.toString()
-                    showAuthenticatedCustomerPortal()
-                })
-            }
-            pickupCard.addView(wpRow)
-        }
-        sheetBody.addView(pickupCard)
-
-        // Offer & Tip Row
+        // 4. FARE, TIP & ADVANCED OPTIONS
         val feeInput = AlistoUiKit.inputField(this, "500", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, draftOfferFee)
         val tipInput = AlistoUiKit.inputField(this, "50", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, draftTip)
         sheetBody.addView(LinearLayout(this).apply {
@@ -790,6 +840,10 @@ class CustomerMainActivity : AppCompatActivity() {
             setOnClickListener {
                 draftTitle = titleInput.text.toString()
                 draftPickupAddress = pickupInput.text.toString()
+                draftPickupNote = pickupNoteInput.text.toString()
+                draftDropoffAddress = dropoffInput?.text?.toString().orEmpty()
+                draftDropoffNote = dropoffNoteInput?.text?.toString().orEmpty()
+                draftBookingNotes = bookingNoteInput.text.toString()
                 draftOfferFee = feeInput.text.toString()
                 draftTip = tipInput.text.toString()
                 draftErrandGoods = errandCostInput.text.toString()
@@ -813,16 +867,22 @@ class CustomerMainActivity : AppCompatActivity() {
             })
         }
 
+        // 5. PRIMARY SUBMIT CTA
         sheetBody.addView(
             AlistoUiKit.pillButton(this, "Confirm & Broadcast Request", AlistoUiKit.CYAN, AlistoUiKit.BG_DEEP, heightDp = 50, textSizeSp = 15f) {
                 val title = titleInput.text.toString().ifBlank { selectedServiceLabel }
-                val addr = pickupInput.text.toString().ifBlank { user.addressText }
+                val pAddr = pickupInput.text.toString().ifBlank { user.addressText }
+                val pNote = pickupNoteInput.text.toString().trim()
+                val dAddr = dropoffInput?.text?.toString()?.trim().takeUnless { it.isNullOrBlank() }
+                    ?: if (sequentialWaypoints.isNotEmpty()) sequentialWaypoints.last().optString("address", pAddr) else pAddr
+                val dNote = dropoffNoteInput?.text?.toString()?.trim().orEmpty()
+                val bNotes = bookingNoteInput.text.toString().trim()
+
                 val fee = feeInput.text.toString().toDoubleOrNull() ?: 500.0
                 val errandCost = errandCostInput.text.toString().toDoubleOrNull() ?: 0.0
                 val deadheadKm = deadheadKmInput.text.toString().toDoubleOrNull() ?: 0.0
                 val tip = tipInput.text.toString().toDoubleOrNull() ?: 0.0
                 val wpArr = JSONArray().apply { sequentialWaypoints.forEach { put(it) } }
-                val dropoff = if (sequentialWaypoints.isNotEmpty()) sequentialWaypoints.last().optString("address", addr) else addr
 
                 uiScope.launch {
                     val res = AlistoKernelClient.createBookingV2Rpc(
@@ -832,24 +892,27 @@ class CustomerMainActivity : AppCompatActivity() {
                         barangayZone = user.barangayZone,
                         skillCategory = selectedSkillCategory,
                         serviceTitle = title,
-                        pickupAddress = addr,
-                        dropoffAddress = dropoff,
+                        pickupAddress = pAddr,
+                        dropoffAddress = dAddr,
                         waypointsJson = wpArr,
                         quotedFee = fee,
                         tipAmount = tip,
                         errandItemCostPhp = errandCost,
                         deadheadReturnKm = deadheadKm,
                         pickupLat = activeOriginLat,
-                        pickupLng = activeOriginLng
+                        pickupLng = activeOriginLng,
+                        dropoffLat = activeDropoffLat ?: activeOriginLat,
+                        dropoffLng = activeDropoffLng ?: activeOriginLng,
+                        pickupNote = pNote,
+                        dropoffNote = dNote,
+                        bookingNotes = bNotes
                     )
-                    res.onSuccess { json ->
-                        val buf = json.optDouble("gcash_cashout_buffer_php", 0.0)
-                        val dh = json.optDouble("deadhead_surcharge_php", 0.0)
+                    res.onSuccess {
                         sequentialWaypoints.clear()
-                        draftTitle = ""
-                        draftErrandGoods = "0"
-                        draftDeadheadKm = "0"
-                        Toast.makeText(this@CustomerMainActivity, "Request live! Buffer: PHP $buf | Deadhead: PHP $dh", Toast.LENGTH_LONG).show()
+                        draftTitle = ""; draftPickupNote = ""; draftDropoffAddress = ""; draftDropoffNote = ""; draftBookingNotes = ""
+                        activeDropoffLat = null; activeDropoffLng = null
+                        val routeMsg = if (bNotes.isNotBlank()) "Posted to Open Bookings (notes attached — auto-assign bypassed)." else "Request broadcast live!"
+                        Toast.makeText(this@CustomerMainActivity, routeMsg, Toast.LENGTH_LONG).show()
                         activeTab = "ACTIVITY"
                         bookingStep = "LAUNCHER"
                         showAuthenticatedCustomerPortal()
@@ -865,31 +928,28 @@ class CustomerMainActivity : AppCompatActivity() {
         sheetWrap.addView(sheetScroll)
         root.addView(sheetWrap)
 
-        // Load map centered on live GPS if available, otherwise current origin pin
+        // Load map centered on current GPS or chosen origin
         val mapLat = if (originPinnedManually) activeOriginLat else (AlistoLocationTracker.lastLat ?: activeOriginLat)
         val mapLng = if (originPinnedManually) activeOriginLng else (AlistoLocationTracker.lastLng ?: activeOriginLng)
 
         customerMapView?.loadInteractiveMap(mapLat, mapLng, enableTapToPin = true) { lat, lng ->
-            val rev = AlistoSpatialEngine.reverseGeocodePin(this@CustomerMainActivity, lat, lng)
-            if (mapTapMode == "ORIGIN") {
-                activeOriginLat = lat
-                activeOriginLng = lng
-                originPinnedManually = true
-                draftPickupAddress = rev
-                pickupInput.setText(rev)
-                Toast.makeText(this@CustomerMainActivity, "Pickup pinned: $rev", Toast.LENGTH_SHORT).show()
-            } else {
-                val stopNum = sequentialWaypoints.size + 1
-                sequentialWaypoints.add(JSONObject().apply {
-                    put("stop_number", stopNum); put("lat", lat); put("lng", lng); put("address", rev)
-                })
-                waypointsStatus.text = "Stops (${sequentialWaypoints.size}): " + sequentialWaypoints.joinToString(" → ") {
-                    "#${it.getInt("stop_number")} ${it.getString("address")}"
+            // Direct tap pins Pickup when not in explicit crosshair mode
+            if (dropPinTarget == null) {
+                uiScope.launch {
+                    val rev = withContext(Dispatchers.IO) {
+                        AlistoSpatialEngine.reverseGeocodePin(this@CustomerMainActivity, lat, lng)
+                    }
+                    suppressAutocomplete = true
+                    activeOriginLat = lat
+                    activeOriginLng = lng
+                    originPinnedManually = true
+                    draftPickupAddress = rev
+                    pickupInput.setText(rev)
+                    suppressAutocomplete = false
+                    refreshCustomerMapLayers(user)
+                    Toast.makeText(this@CustomerMainActivity, "Pickup pinned: $rev", Toast.LENGTH_SHORT).show()
                 }
-                waypointsStatus.setTextColor(Color.parseColor(AlistoUiKit.AMBER))
-                Toast.makeText(this@CustomerMainActivity, "Stop #$stopNum pinned: $rev", Toast.LENGTH_SHORT).show()
             }
-            refreshCustomerMapLayers(user)
         }
         refreshCustomerMapLayers(user)
         AlistoLocationTracker.lastLat?.let { lat ->
@@ -897,8 +957,66 @@ class CustomerMainActivity : AppCompatActivity() {
                 customerMapView?.updateUserLocation(lat, lng, AlistoLocationTracker.lastAccuracyM, flyTo = false)
             }
         }
-
         return root
+    }
+
+    private fun attachInlineAutocomplete(
+        input: EditText,
+        suggestionsBox: LinearLayout,
+        isPickup: Boolean,
+        onSelect: (LandmarkResult) -> Unit
+    ) {
+        input.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                if (suppressAutocomplete) return
+                val q = s?.toString()?.trim().orEmpty()
+                if (isPickup) draftPickupAddress = q else draftDropoffAddress = q
+
+                if (isPickup) pickupSearchJob?.cancel() else dropoffSearchJob?.cancel()
+                if (q.length < 3) {
+                    suggestionsBox.removeAllViews()
+                    suggestionsBox.visibility = View.GONE
+                    return
+                }
+
+                val job = uiScope.launch {
+                    delay(450L)
+                    val biasLat = AlistoLocationTracker.lastLat ?: activeOriginLat
+                    val biasLng = AlistoLocationTracker.lastLng ?: activeOriginLng
+                    val hits = AlistoLocationTracker.searchLandmarks(this@CustomerMainActivity, q, biasLat, biasLng)
+                    suggestionsBox.removeAllViews()
+                    if (hits.isEmpty()) {
+                        suggestionsBox.visibility = View.GONE
+                        return@launch
+                    }
+                    suggestionsBox.visibility = View.VISIBLE
+                    hits.take(5).forEach { hit ->
+                        val row = LinearLayout(this@CustomerMainActivity).apply {
+                            orientation = LinearLayout.VERTICAL
+                            background = AlistoUiKit.roundedBg(this@CustomerMainActivity, AlistoUiKit.BG_INPUT, 10, AlistoUiKit.BORDER_LIGHT)
+                            setPadding(dp(12), dp(9), dp(12), dp(9))
+                            layoutParams = LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                            ).apply { bottomMargin = dp(5) }
+                            setOnClickListener { onSelect(hit) }
+
+                            addView(TextView(this@CustomerMainActivity).apply {
+                                text = hit.title; textSize = 13f; setTypeface(null, Typeface.BOLD)
+                                setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); maxLines = 1
+                            })
+                            addView(TextView(this@CustomerMainActivity).apply {
+                                text = hit.subtitle; textSize = 11f
+                                setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); maxLines = 1
+                            })
+                        }
+                        suggestionsBox.addView(row)
+                    }
+                }
+                if (isPickup) pickupSearchJob = job else dropoffSearchJob = job
+            }
+        })
     }
 
     private fun refreshCustomerMapLayers(user: AuthenticatedUser) {
@@ -906,6 +1024,9 @@ class CustomerMainActivity : AppCompatActivity() {
             originLat = activeOriginLat,
             originLng = activeOriginLng,
             originAddress = draftPickupAddress.ifBlank { user.addressText },
+            dropoffLat = activeDropoffLat,
+            dropoffLng = activeDropoffLng,
+            dropoffAddress = draftDropoffAddress,
             waypoints = sequentialWaypoints,
             bookings = AlistoKernelClient.bookings.filter { user.role == "super_admin" || it.clientId == user.id },
             telemetryPins = AlistoKernelClient.liveTelemetryPins
@@ -923,11 +1044,19 @@ class CustomerMainActivity : AppCompatActivity() {
                 activeOriginLat = lat
                 activeOriginLng = lng
                 if (snapOriginToGps) {
-                    val rev = AlistoSpatialEngine.reverseGeocodePin(this, lat, lng)
-                    draftPickupAddress = rev
-                    activePickupField?.setText(rev)
+                    uiScope.launch {
+                        val rev = withContext(Dispatchers.IO) {
+                            AlistoSpatialEngine.reverseGeocodePin(this@CustomerMainActivity, lat, lng)
+                        }
+                        suppressAutocomplete = true
+                        draftPickupAddress = rev
+                        activePickupField?.setText(rev)
+                        suppressAutocomplete = false
+                        AlistoKernelClient.currentSessionUser?.let { refreshCustomerMapLayers(it) }
+                    }
+                } else {
+                    AlistoKernelClient.currentSessionUser?.let { refreshCustomerMapLayers(it) }
                 }
-                AlistoKernelClient.currentSessionUser?.let { refreshCustomerMapLayers(it) }
             }
         }
     }
@@ -938,115 +1067,35 @@ class CustomerMainActivity : AppCompatActivity() {
             return
         }
         val fix = AlistoLocationTracker.getBestLastKnown(this)
-        val lat = fix?.latitude ?: AlistoLocationTracker.lastLat
-        val lng = fix?.longitude ?: AlistoLocationTracker.lastLng
+        val lat = AlistoLocationTracker.lastLat ?: fix?.latitude
+        val lng = AlistoLocationTracker.lastLng ?: fix?.longitude
         if (lat != null && lng != null) {
-            val acc = fix?.accuracy ?: AlistoLocationTracker.lastAccuracyM
+            val acc = AlistoLocationTracker.lastAccuracyM
             activeOriginLat = lat
             activeOriginLng = lng
             originPinnedManually = true
-            val rev = AlistoSpatialEngine.reverseGeocodePin(this, lat, lng)
-            draftPickupAddress = rev
-            activePickupField?.setText(rev)
-            customerMapView?.updateUserLocation(lat, lng, acc, flyTo = true)
-            AlistoKernelClient.currentSessionUser?.let { refreshCustomerMapLayers(it) }
-            Toast.makeText(this, "Pickup set to your GPS: $rev", Toast.LENGTH_SHORT).show()
+            uiScope.launch {
+                val rev = withContext(Dispatchers.IO) {
+                    AlistoSpatialEngine.reverseGeocodePin(this@CustomerMainActivity, lat, lng)
+                }
+                suppressAutocomplete = true
+                draftPickupAddress = rev
+                activePickupField?.setText(rev)
+                suppressAutocomplete = false
+                customerMapView?.updateUserLocation(lat, lng, acc, flyTo = true)
+                AlistoKernelClient.currentSessionUser?.let { refreshCustomerMapLayers(it) }
+                Toast.makeText(this@CustomerMainActivity, "Pickup set to GPS (±${acc.toInt()}m)", Toast.LENGTH_SHORT).show()
+            }
         } else {
             Toast.makeText(this, "Acquiring live GPS fix...", Toast.LENGTH_SHORT).show()
             startLiveGpsOnMap(forceCenter = true, snapOriginToGps = true)
         }
     }
 
-    private fun openLandmarkSearchDialog(
-        forWaypoint: Boolean,
-        onPicked: (LandmarkResult) -> Unit
-    ) {
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(14), dp(18), dp(12))
-            setBackgroundColor(Color.parseColor(AlistoUiKit.BG_SURFACE))
-        }
-
-        val searchRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
-        }
-        val queryInput = AlistoUiKit.inputField(this, "e.g., SM City Clark, MarQuee Mall, Balibago...")
-        searchRow.addView(queryInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) })
-
-        val resultsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val statusLabel = TextView(this).apply {
-            text = "Type a landmark, street, or subdivision and tap Search."
-            textSize = 12f
-            setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED))
-            setPadding(dp(2), dp(2), dp(2), dp(8))
-        }
-
-        lateinit var dialog: AlertDialog
-
-        searchRow.addView(AlistoUiKit.pillButton(this, "Search", AlistoUiKit.CYAN, AlistoUiKit.BG_DEEP, heightDp = 44, textSizeSp = 13f) {
-            val q = queryInput.text.toString().trim()
-            if (q.length < 2) {
-                Toast.makeText(this, "Enter at least 2 characters", Toast.LENGTH_SHORT).show()
-                return@pillButton
-            }
-            statusLabel.text = "Searching Philippine landmarks..."
-            resultsBox.removeAllViews()
-            uiScope.launch {
-                val biasLat = AlistoLocationTracker.lastLat ?: activeOriginLat
-                val biasLng = AlistoLocationTracker.lastLng ?: activeOriginLng
-                val hits = AlistoLocationTracker.searchLandmarks(this@CustomerMainActivity, q, biasLat, biasLng)
-                if (hits.isEmpty()) {
-                    statusLabel.text = "No matches found for \"$q\". Try a nearby mall, road, or barangay."
-                } else {
-                    statusLabel.text = "Tap a result to drop the pin:"
-                    hits.forEach { hit ->
-                        val itemCard = AlistoUiKit.surfaceCard(this@CustomerMainActivity, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER_LIGHT, padDp = 12)
-                        itemCard.addView(TextView(this@CustomerMainActivity).apply {
-                            text = hit.title
-                            textSize = 14f
-                            setTypeface(null, Typeface.BOLD)
-                            setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
-                        })
-                        itemCard.addView(TextView(this@CustomerMainActivity).apply {
-                            text = hit.subtitle
-                            textSize = 11.5f
-                            setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED))
-                            maxLines = 2
-                            setPadding(0, dp(2), 0, 0)
-                        })
-                        itemCard.setOnClickListener {
-                            dialog.dismiss()
-                            onPicked(hit)
-                        }
-                        resultsBox.addView(itemCard)
-                    }
-                }
-            }
-        })
-
-        layout.addView(searchRow)
-        layout.addView(statusLabel)
-        val scrollResults = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(240))
-            addView(resultsBox)
-        }
-        layout.addView(scrollResults)
-
-        dialog = AlertDialog.Builder(this)
-            .setTitle(if (forWaypoint) "Search Stop / Drop-Off Landmark" else "Search Pickup / Job Site Landmark")
-            .setView(layout)
-            .setNegativeButton("Close", null)
-            .create()
-        dialog.show()
-    }
-
     private fun buildCustomerActivityTab(user: AuthenticatedUser): View {
         val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP)) }
         val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(22), dp(18), dp(24))
+            orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(22), dp(18), dp(24))
         }
 
         container.addView(LinearLayout(this).apply {
@@ -1103,8 +1152,7 @@ class CustomerMainActivity : AppCompatActivity() {
     private fun buildCustomerAccountTab(user: AuthenticatedUser): View {
         val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP)) }
         val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(22), dp(18), dp(24))
+            orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(22), dp(18), dp(24))
         }
 
         container.addView(TextView(this).apply {
@@ -1180,7 +1228,28 @@ class CustomerMainActivity : AppCompatActivity() {
         })
 
         card.addView(TextView(this).apply { text = b.serviceTitle; textSize = 16f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)) })
-        card.addView(TextView(this).apply { text = b.pickupAddress; textSize = 12.5f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(3), 0, dp(10)) })
+
+        val addrSummary = buildString {
+            append("Pickup: ${b.pickupAddress}")
+            if (b.pickupNote.isNotBlank()) append("\n  Note: ${b.pickupNote}")
+            if (b.dropoffAddress.isNotBlank() && b.dropoffAddress != b.pickupAddress) {
+                append("\nDrop-Off: ${b.dropoffAddress}")
+                if (b.dropoffNote.isNotBlank()) append("\n  Note: ${b.dropoffNote}")
+            }
+        }
+        card.addView(TextView(this).apply {
+            text = addrSummary; textSize = 12.5f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(4), 0, dp(8))
+        })
+
+        if (b.bookingNotes.isNotBlank()) {
+            card.addView(TextView(this).apply {
+                text = "Booking Note (Open Board Only): ${b.bookingNotes}"
+                textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.AMBER))
+                background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#2A1B08", 10, "#78350F")
+                setPadding(dp(10), dp(7), dp(10), dp(7))
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+            })
+        }
 
         card.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1348,6 +1417,9 @@ class CustomerMainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         realtimePollJob?.cancel()
+        pickupSearchJob?.cancel()
+        dropoffSearchJob?.cancel()
+        reverseGeoJob?.cancel()
         AlistoLocationTracker.stopLiveUpdates()
         uiScope.cancel()
     }

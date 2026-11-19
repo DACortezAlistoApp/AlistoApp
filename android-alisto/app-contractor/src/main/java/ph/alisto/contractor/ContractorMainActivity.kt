@@ -516,9 +516,14 @@ class ContractorMainActivity : AppCompatActivity() {
                 text = "ACTIVE JOB • ${myActiveJob.bookingRef} (${myActiveJob.status})"
                 textSize = 11.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.CYAN))
             })
+            val spotLines = buildString {
+                append("${myActiveJob.serviceTitle} • ${myActiveJob.pickupAddress}")
+                if (myActiveJob.pickupNote.isNotBlank()) append("\nPickup Note: ${myActiveJob.pickupNote}")
+                if (myActiveJob.bookingNotes.isNotBlank()) append("\nSpecial Note: ${myActiveJob.bookingNotes}")
+            }
             spotCard.addView(TextView(this).apply {
-                text = "${myActiveJob.serviceTitle} • ${myActiveJob.pickupAddress}"
-                textSize = 13.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                text = spotLines
+                textSize = 13f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
                 setPadding(0, dp(4), 0, dp(10))
             })
             spotCard.addView(LinearLayout(this).apply {
@@ -793,10 +798,29 @@ class ContractorMainActivity : AppCompatActivity() {
         })
 
         card.addView(TextView(this).apply { text = b.serviceTitle; textSize = 16f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)) })
+        val routeText = buildString {
+            append("Pickup: ${b.pickupAddress} (${b.barangayZone}, ${b.municipality})")
+            if (b.pickupNote.isNotBlank()) append("\n  Note: ${b.pickupNote}")
+            if (b.dropoffAddress.isNotBlank() && b.dropoffAddress != b.pickupAddress) {
+                append("\nDrop-Off: ${b.dropoffAddress}")
+                if (b.dropoffNote.isNotBlank()) append("\n  Note: ${b.dropoffNote}")
+            }
+        }
         card.addView(TextView(this).apply {
-            text = "${b.pickupAddress} (${b.barangayZone}, ${b.municipality})"
-            textSize = 12.5f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(3), 0, dp(8))
+            text = routeText
+            textSize = 12.5f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(4), 0, dp(8))
         })
+        if (b.bookingNotes.isNotBlank() || !b.allowAutoAssign) {
+            card.addView(TextView(this).apply {
+                text = "OPEN BOARD • SPECIAL REQUEST: ${b.bookingNotes.ifBlank { "Manual contractor review required" }}"
+                textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.AMBER))
+                background = AlistoUiKit.roundedBg(this@ContractorMainActivity, "#2A1B08", 10, "#78350F")
+                setPadding(dp(10), dp(7), dp(10), dp(7))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(8) }
+            })
+        }
         card.addView(TextView(this).apply {
             text = "Customer: ${b.clientNickname} • Trust ${"%.0f".format(b.clientTrustScore)}% (UP ${b.clientThumbsUp} / DOWN ${b.clientThumbsDown})"
             textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.AMBER)); setPadding(0, 0, 0, dp(8))
@@ -900,9 +924,22 @@ class ContractorMainActivity : AppCompatActivity() {
 
         // Secondary utility row: turn-by-turn local-road nav + LTFRB safety refusal
         val utilRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        utilRow.addView(AlistoUiKit.pillButton(this, "Navigate (avoid=ht)", AlistoUiKit.BG_INPUT, AlistoUiKit.EMERALD, AlistoUiKit.BORDER_LIGHT, heightDp = 38, textSizeSp = 12f) {
+        val hasDistinctDropoff = b.dropoffAddress.isNotBlank() && b.dropoffAddress != b.pickupAddress &&
+            (b.dropoffLat != b.pickupLat || b.dropoffLng != b.pickupLng)
+        utilRow.addView(AlistoUiKit.pillButton(
+            this, if (hasDistinctDropoff) "Nav Pickup" else "Navigate (avoid=ht)",
+            AlistoUiKit.BG_INPUT, AlistoUiKit.EMERALD, AlistoUiKit.BORDER_LIGHT, heightDp = 38, textSizeSp = 12f
+        ) {
             AlistoSpatialEngine.launchLocalRoadNavigation(this@ContractorMainActivity, b.pickupLat, b.pickupLng)
         }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
+
+        if (hasDistinctDropoff) {
+            utilRow.addView(AlistoUiKit.pillButton(
+                this, "Nav Drop-Off", AlistoUiKit.BG_INPUT, AlistoUiKit.CYAN, AlistoUiKit.BORDER_LIGHT, heightDp = 38, textSizeSp = 12f
+            ) {
+                AlistoSpatialEngine.launchLocalRoadNavigation(this@ContractorMainActivity, b.dropoffLat, b.dropoffLng)
+            }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = dp(8) } })
+        }
 
         if (b.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED") && (b.contractorId == user.id || user.role == "super_admin")) {
             utilRow.addView(AlistoUiKit.pillButton(this, "Safety Refusal", "#451A03", AlistoUiKit.AMBER, "#78350F", heightDp = 38, textSizeSp = 12f) {
