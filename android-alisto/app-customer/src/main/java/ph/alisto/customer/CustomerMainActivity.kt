@@ -2065,7 +2065,8 @@ class CustomerMainActivity : AppCompatActivity() {
             if (b.tipAmount > 0) addView(AlistoUiKit.badgePill(this@CustomerMainActivity, "+PHP ${"%.0f".format(b.tipAmount)} Tip", AlistoUiKit.BG_INPUT, AlistoUiKit.AMBER))
         })
 
-        if (b.contractorFullName != null) {
+        val proName = b.contractorFullName
+        if (proName != null) {
             val proBox = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 background = AlistoUiKit.frostedGlassBg(this@CustomerMainActivity, "#B30A2E6E", 14, "#CCFACC15", alphaFraction = 0.85f)
@@ -2092,7 +2093,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 })
             } else {
                 headerRow.addView(TextView(this).apply {
-                    text = b.contractorFullName.take(1).uppercase()
+                    text = proName.take(1).uppercase()
                     gravity = Gravity.CENTER
                     textSize = 18f
                     setTypeface(null, Typeface.BOLD)
@@ -2108,7 +2109,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
             infoCol.addView(TextView(this).apply {
-                text = "${b.contractorFullName}$vipTag"
+                text = "$proName$vipTag"
                 textSize = 14f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
             })
             infoCol.addView(TextView(this).apply {
