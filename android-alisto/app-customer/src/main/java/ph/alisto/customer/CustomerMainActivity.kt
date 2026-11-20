@@ -1627,8 +1627,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 c.addView(LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                     addView(TextView(this@CustomerMainActivity).apply {
-                        text = "${tx.txRef}
-${tx.purpose} • PHP ${"%.2f".format(tx.amountPhp)}"
+                        text = "${tx.txRef}\n${tx.purpose} • PHP ${"%.2f".format(tx.amountPhp)}"
                         textSize = 13f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
                         layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                     })
@@ -1676,9 +1675,7 @@ ${tx.purpose} • PHP ${"%.2f".format(tx.amountPhp)}"
                 setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
             }
             layout.addView(TextView(this).apply {
-                text = "Amount Due: PHP ${"%.2f".format(amountPhp)}
-
-${payInfo.manualInstructions}"
+                text = "Amount Due: PHP ${"%.2f".format(amountPhp)}\n\n${payInfo.manualInstructions}"
                 setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); textSize = 13f; setPadding(0, 0, 0, dp(12))
             })
             val refInput = AlistoUiKit.inputField(this, "GCash / QR Ph / Bank Reference No.")
