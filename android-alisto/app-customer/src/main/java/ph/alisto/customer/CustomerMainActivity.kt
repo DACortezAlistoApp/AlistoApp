@@ -374,7 +374,6 @@ class CustomerMainActivity : AppCompatActivity() {
         val mapStage = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 0.36f)
         }
-        var applySheetRatio: ((Float) -> Unit)? = null
         val mapContainer = AlistoInteractiveMapView(this)
         customerMapView = mapContainer
         mapStage.addView(
@@ -579,6 +578,7 @@ class CustomerMainActivity : AppCompatActivity() {
         mapStage.addView(topHud)
 
         // Floating Crosshair Drop-Pin Confirmation Bar (visible only while dragging pin)
+        var applySheetRatio: ((Float) -> Unit)? = null
         val dropPinPreviewText = TextView(this).apply {
             text = "Drag map to position pin..."
             textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
@@ -626,7 +626,7 @@ class CustomerMainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, dp(6))
         }
-        applySheetRatio = { rawRatio ->
+        applySheetRatio = { rawRatio: Float ->
             val clamped = rawRatio.coerceIn(0.14f, 0.76f)
             sheetWeightRatio = clamped
             sheetExpanded = clamped > 0.58f
