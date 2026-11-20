@@ -189,7 +189,7 @@ class CustomerMainActivity : AppCompatActivity() {
             formCard.addView(AlistoUiKit.labeledField(this, "Password", pwInput, bottomMarginDp = 18))
 
             formCard.addView(
-                AlistoUiKit.pillButton(this, "Sign In", AlistoUiKit.CYAN, AlistoUiKit.BG_DEEP) {
+                AlistoUiKit.pillButton(this, "Sign In", AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP, "#FEF08A") {
                     uiScope.launch {
                         val res = AlistoKernelClient.authenticateUserRpc(
                             idInput.text.toString(), pwInput.text.toString(), "customer"
@@ -265,7 +265,7 @@ class CustomerMainActivity : AppCompatActivity() {
             )
 
             formCard.addView(
-                AlistoUiKit.pillButton(this, "Create Account", AlistoUiKit.CYAN, AlistoUiKit.BG_DEEP) {
+                AlistoUiKit.pillButton(this, "Create Account", AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP, "#FEF08A") {
                     uiScope.launch {
                         val res = AlistoKernelClient.registerCustomerPortalRpc(
                             fullName = fullNameInput.text.toString().trim(),
@@ -401,7 +401,7 @@ class CustomerMainActivity : AppCompatActivity() {
         topHud.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = AlistoUiKit.frostedGlassBg(this@CustomerMainActivity, "#B80B1325", 24, "#80E2E8F0", alphaFraction = 0.74f)
+            background = AlistoUiKit.frostedGlassBg(this@CustomerMainActivity, "#C40D3B8A", 24, "#997DD3FC", alphaFraction = 0.78f)
             setPadding(dp(14), dp(8), dp(14), dp(8))
             elevation = dp(4).toFloat()
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) }
@@ -415,7 +415,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 textSize = 13f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); maxLines = 1
             })
         })
-        topHud.addView(AlistoUiKit.chipButton(this, "My GPS", true, "#B80B1325", AlistoUiKit.CYAN) {
+        topHud.addView(AlistoUiKit.chipButton(this, "My GPS", true, "#C40D3B8A", AlistoUiKit.GOLD_SOFT) {
             if (!AlistoLocationTracker.hasPermission(this)) AlistoLocationTracker.requestPermission(this)
             else startLiveGpsOnMap(forceCenter = true, snapOriginToGps = false)
         }.apply { elevation = dp(4).toFloat() })
@@ -568,7 +568,7 @@ class CustomerMainActivity : AppCompatActivity() {
             setPadding(dp(12), dp(12), dp(12), 0)
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP)
         }
-        topHud.addView(AlistoUiKit.chipButton(this, "← Services", true, "#B80B1325", AlistoUiKit.TEXT_PRIMARY) {
+        topHud.addView(AlistoUiKit.chipButton(this, "← Services", true, "#C40D3B8A", AlistoUiKit.TEXT_PRIMARY) {
             dropPinTarget = null
             bookingStep = "LAUNCHER"
             showAuthenticatedCustomerPortal()
@@ -578,12 +578,12 @@ class CustomerMainActivity : AppCompatActivity() {
         })
         topHud.addView(TextView(this).apply {
             text = selectedServiceLabel; textSize = 12.5f; gravity = Gravity.CENTER; setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor(AlistoUiKit.CYAN))
-            background = AlistoUiKit.frostedGlassBg(this@CustomerMainActivity, "#B80B1325", 20, AlistoUiKit.CYAN, alphaFraction = 0.74f)
+            setTextColor(Color.parseColor(AlistoUiKit.GOLD_SOFT))
+            background = AlistoUiKit.frostedGlassBg(this@CustomerMainActivity, "#C40D3B8A", 20, "#CCFACC15", alphaFraction = 0.78f)
             setPadding(dp(12), dp(8), dp(12), dp(8)); elevation = dp(4).toFloat(); maxLines = 1
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) }
         })
-        topHud.addView(AlistoUiKit.chipButton(this, "My GPS", true, "#B80B1325", AlistoUiKit.EMERALD) {
+        topHud.addView(AlistoUiKit.chipButton(this, "My GPS", true, "#C40D3B8A", AlistoUiKit.GOLD_SOFT) {
             snapPickupToCurrentGps()
         }.apply { elevation = dp(4).toFloat() })
         mapStage.addView(topHud)
@@ -599,7 +599,7 @@ class CustomerMainActivity : AppCompatActivity() {
         lateinit var confirmPinBtn: Button
         val dropPinBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            background = AlistoUiKit.frostedGlassBg(this@CustomerMainActivity, "#CC0B1325", 16, AlistoUiKit.CYAN, alphaFraction = 0.80f)
+            background = AlistoUiKit.frostedGlassBg(this@CustomerMainActivity, "#D40C357D", 16, "#CCFACC15", alphaFraction = 0.84f)
             setPadding(dp(12), dp(10), dp(10), dp(10))
             elevation = dp(8).toFloat()
             visibility = View.GONE
@@ -726,10 +726,10 @@ class CustomerMainActivity : AppCompatActivity() {
                     btn.setTextColor(Color.parseColor(if (active) AlistoUiKit.BG_DEEP else AlistoUiKit.TEXT_PRIMARY))
                     btn.background = AlistoUiKit.frostedGlassBg(
                         this@CustomerMainActivity,
-                        fillHex = if (active) AlistoUiKit.CYAN else "#990F172A",
+                        fillHex = if (active) AlistoUiKit.GOLD_ACCENT else "#A6164CA8",
                         radiusDp = 18,
-                        strokeHex = if (active) "#D9F0F9FF" else AlistoUiKit.BORDER,
-                        alphaFraction = if (active) 0.86f else 0.72f
+                        strokeHex = if (active) "#E6FEF08A" else AlistoUiKit.BORDER,
+                        alphaFraction = if (active) 0.90f else 0.72f
                     )
                 }
             }
@@ -971,8 +971,8 @@ class CustomerMainActivity : AppCompatActivity() {
             text = if (needsDropoff) "Set Pickup & Drop-Off to calculate road route & fare (PHP 0.00 pending)" else "Loading Super Admin call-out rate..."
             textSize = 12f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor(AlistoUiKit.CYAN))
-            background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#0C2942", 12, AlistoUiKit.CYAN)
+            setTextColor(Color.parseColor(AlistoUiKit.GOLD_SOFT))
+            background = AlistoUiKit.frostedGlassBg(this@CustomerMainActivity, "#CC092D6B", 12, "#CCFACC15", alphaFraction = 0.84f)
             setPadding(dp(12), dp(9), dp(12), dp(9))
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
         }
@@ -1055,7 +1055,7 @@ class CustomerMainActivity : AppCompatActivity() {
 
         // 5. PRIMARY SUBMIT CTA
         sheetBody.addView(
-            AlistoUiKit.pillButton(this, "Confirm & Broadcast Request", AlistoUiKit.CYAN, AlistoUiKit.BG_DEEP, heightDp = 50, textSizeSp = 15f) {
+            AlistoUiKit.pillButton(this, "Confirm & Broadcast Request", AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP, "#FEF08A", heightDp = 50, textSizeSp = 15f) {
                 val title = titleInput.text.toString().ifBlank { selectedServiceLabel }
                 val pAddr = pickupInput.text.toString().ifBlank { user.addressText }
                 val pNote = pickupNoteInput.text.toString().trim()

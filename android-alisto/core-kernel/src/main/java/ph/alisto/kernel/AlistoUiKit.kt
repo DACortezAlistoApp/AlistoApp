@@ -14,20 +14,22 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 object AlistoUiKit {
-    const val BG_DEEP = "#070A12"
-    const val BG_SURFACE = "#C40B1325"
-    const val BG_CARD = "#AD0F172A"
-    const val BG_INPUT = "#BD0B1120"
-    const val BORDER = "#5CE2E8F0"
-    const val BORDER_LIGHT = "#334155"
+    const val BG_DEEP = "#071A3E"
+    const val BG_SURFACE = "#C90D3B8A"
+    const val BG_CARD = "#B3154FB0"
+    const val BG_INPUT = "#C7092B68"
+    const val BORDER = "#807DD3FC"
+    const val BORDER_LIGHT = "#A6BAE6FD"
+    const val GOLD_ACCENT = "#FACC15"
+    const val GOLD_SOFT = "#FDE047"
 
     const val CYAN = "#00F2FE"
     const val AMBER = "#FBBF24"
     const val EMERALD = "#10B981"
     const val ROSE = "#F87171"
     const val TEXT_PRIMARY = "#F8FAFC"
-    const val TEXT_MUTED = "#94A3B8"
-    const val TEXT_DIM = "#64748B"
+    const val TEXT_MUTED = "#DBEAFE"
+    const val TEXT_DIM = "#93C5FD"
 
     fun Context.dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
@@ -75,7 +77,7 @@ object AlistoUiKit {
         }
         val sheen = GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(Color.parseColor("#38FFFFFF"), Color.parseColor("#0DFFFFFF"), Color.TRANSPARENT)
+            intArrayOf(Color.parseColor("#4CE0F2FE"), Color.parseColor("#1A60A5FA"), Color.TRANSPARENT)
         ).apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadii = radii
@@ -102,7 +104,7 @@ object AlistoUiKit {
     )
 
     fun dragHandle(context: Context): View = View(context).apply {
-        background = roundedBg(context, "#80CBD5E1", radiusDp = 4)
+        background = roundedBg(context, "#E6FACC15", radiusDp = 4)
         layoutParams = LinearLayout.LayoutParams(context.dp(36), context.dp(4)).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             topMargin = context.dp(10)
@@ -125,7 +127,7 @@ object AlistoUiKit {
         textSize = textSizeSp
         setTypeface(null, Typeface.BOLD)
         setTextColor(Color.parseColor(textHex))
-        background = frostedGlassBg(context, fillHex, radiusDp = 24, strokeHex = strokeHex ?: "#99F8FAFC", alphaFraction = 0.84f)
+        background = frostedGlassBg(context, fillHex, radiusDp = 24, strokeHex = strokeHex ?: "#CCFEF08A", alphaFraction = 0.88f)
         minHeight = context.dp(heightDp)
         minimumHeight = context.dp(heightDp)
         setPadding(context.dp(18), context.dp(10), context.dp(18), context.dp(10))
@@ -150,7 +152,7 @@ object AlistoUiKit {
             context = context,
             fillHex = if (active) activeFillHex else BG_CARD,
             radiusDp = 20,
-            strokeHex = if (active) "#B3F8FAFC" else BORDER,
+            strokeHex = if (active) "#D9FEF08A" else BORDER,
             alphaFraction = if (active) 0.82f else 0.70f
         )
         setPadding(context.dp(14), context.dp(9), context.dp(14), context.dp(9))
@@ -267,7 +269,7 @@ object AlistoUiKit {
         onSelect: (String) -> Unit
     ): LinearLayout = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
-        background = frostedGlassBg(context, "#D40B1325", radiusDp = 0, strokeHex = "#4DE2E8F0", alphaFraction = 0.84f)
+        background = frostedGlassBg(context, "#D60B3275", radiusDp = 0, strokeHex = "#807DD3FC", alphaFraction = 0.85f)
         elevation = context.dp(8).toFloat()
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dp(62))
 
