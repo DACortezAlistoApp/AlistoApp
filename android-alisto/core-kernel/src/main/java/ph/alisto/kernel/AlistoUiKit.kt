@@ -186,15 +186,27 @@ object AlistoUiKit {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(0, context.dp(12), 0, context.dp(20))
 
-            addView(TextView(context).apply {
-                text = "A"
-                gravity = Gravity.CENTER
-                textSize = 26f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor(BG_DEEP))
-                background = roundedBg(context, accentHex, radiusDp = 18)
-                layoutParams = LinearLayout.LayoutParams(context.dp(56), context.dp(56)).apply { bottomMargin = context.dp(12) }
-            })
+            val appIconRes = context.applicationInfo.icon
+            if (appIconRes != 0) {
+                addView(android.widget.ImageView(context).apply {
+                    setImageResource(appIconRes)
+                    scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                    background = roundedBg(context, BG_CARD, radiusDp = 20, strokeHex = accentHex, strokeDp = 1)
+                    clipToOutline = true
+                    setPadding(context.dp(4), context.dp(4), context.dp(4), context.dp(4))
+                    layoutParams = LinearLayout.LayoutParams(context.dp(74), context.dp(74)).apply { bottomMargin = context.dp(12) }
+                })
+            } else {
+                addView(TextView(context).apply {
+                    text = "A"
+                    gravity = Gravity.CENTER
+                    textSize = 26f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.parseColor(BG_DEEP))
+                    background = roundedBg(context, accentHex, radiusDp = 18)
+                    layoutParams = LinearLayout.LayoutParams(context.dp(56), context.dp(56)).apply { bottomMargin = context.dp(12) }
+                })
+            }
             addView(TextView(context).apply {
                 text = title
                 textSize = 22f
