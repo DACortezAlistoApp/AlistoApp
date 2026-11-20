@@ -1,6 +1,12 @@
 package ph.alisto.customer
 
+import android.animation.ObjectAnimator
+import android.animation.PropertyValuesHolder
+import android.animation.ValueAnimator
+import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.util.Base64
+import java.util.Calendar
 import android.graphics.Typeface
 import android.os.Bundle
 import android.text.Editable
@@ -36,6 +42,8 @@ class CustomerMainActivity : AppCompatActivity() {
     private var activeClarkNoticeView: TextView? = null
     private var refreshVehicleUiCallback: (() -> Unit)? = null
     private var lastRemoteNoticeKey: String = ""
+    private val lastBookingStatuses = mutableMapOf<String, String>()
+    private var lastCustomerLocSyncMs: Long = 0L
     private var selectedJobSubtype = "ON_SITE_SKILL"
     private var selectedServiceLabel = "Request Skills & Trades"
     private var selectedSkillCategory = "General Service"
@@ -88,13 +96,84 @@ class CustomerMainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AlistoUiKit.applyDarkSystemBars(this)
-        if (AlistoKernelClient.currentSessionUser != null) {
-            showAuthenticatedCustomerPortal()
-        } else if (AlistoBiometricVault.hasSavedSession(this, "customer")) {
-            triggerFrictionlessBiometricEntry()
-        } else {
-            showEntryPortalGate()
+        showAnimatedLaunchSplash()
+    }
+
+    private fun showAnimatedLaunchSplash() {
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
         }
+        val centerCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+            )
+        }
+        val logoView = ImageView(this).apply {
+            setImageResource(R.drawable.ic_alisto_app_logo)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            layoutParams = LinearLayout.LayoutParams(dp(124), dp(124)).apply { bottomMargin = dp(18) }
+        }
+        centerCol.addView(logoView)
+        centerCol.addView(TextView(this).apply {
+            text = "ALISTO"
+            textSize = 26f
+            setTypeface(null, Typeface.BOLD)
+            letterSpacing = 0.14f
+            setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+            gravity = Gravity.CENTER
+        })
+        centerCol.addView(TextView(this).apply {
+            text = "Local Pros • Delivery • Rides"
+            textSize = 13f
+            setTextColor(Color.parseColor(AlistoUiKit.GOLD_SOFT))
+            gravity = Gravity.CENTER
+            setPadding(0, dp(6), 0, dp(18))
+        })
+        centerCol.addView(ProgressBar(this).apply {
+            isIndeterminate = true
+            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26))
+        })
+        root.addView(centerCol)
+        setContentView(root)
+
+        val pulse = ObjectAnimator.ofPropertyValuesHolder(
+            logoView,
+            PropertyValuesHolder.ofFloat(View.SCALE_X, 0.90f, 1.08f),
+            PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.90f, 1.08f),
+            PropertyValuesHolder.ofFloat(View.ALPHA, 0.80f, 1.0f)
+        ).apply {
+            duration = 850L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            start()
+        }
+
+        uiScope.launch {
+            delay(4000L)
+            pulse.cancel()
+            if (isFinishing || isDestroyed) return@launch
+            if (AlistoKernelClient.currentSessionUser != null) {
+                showAuthenticatedCustomerPortal()
+            } else if (AlistoBiometricVault.hasSavedSession(this@CustomerMainActivity, "customer")) {
+                triggerFrictionlessBiometricEntry()
+            } else {
+                showEntryPortalGate()
+            }
+        }
+    }
+
+    private fun timeOfDayGreeting(nickname: String): String {
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val prefix = when {
+            hour < 12 -> "Good morning"
+            hour < 18 -> "Good afternoon"
+            else -> "Good evening"
+        }
+        return "$prefix, ${nickname.ifBlank { "Friend" }}"
     }
 
     override fun onRequestPermissionsResult(
@@ -397,6 +476,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 mapContainer.updateUserLocation(lat, lng, AlistoLocationTracker.lastAccuracyM, flyTo = false)
             }
         }
+        refreshCustomerMapLayers(user)
 
         val topHud = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -419,7 +499,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(8) }
             })
             addView(TextView(this@CustomerMainActivity).apply {
-                text = "Hi ${user.nickname} • ${user.municipality}"
+                text = "${timeOfDayGreeting(user.nickname)} • ${user.municipality}"
                 textSize = 13f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); maxLines = 1
             })
         })
@@ -1231,12 +1311,18 @@ class CustomerMainActivity : AppCompatActivity() {
                         vehicleType = if (needsDropoff) selectedVehicleType else "",
                         paymentMethod = if (user.isDelinquent) "WALLET_CREDITS" else selectedPaymentMethod
                     )
-                    res.onSuccess {
+                    res.onSuccess { respJson ->
                         sequentialWaypoints.clear()
                         draftTitle = ""; draftPickupNote = ""; draftDropoffAddress = ""; draftDropoffNote = ""; draftBookingNotes = ""; draftTip = ""; draftDeadheadKm = ""; lastRemoteNoticeKey = ""
                         activeDropoffLat = null; activeDropoffLng = null
-                        val routeMsg = if (bNotes.isNotBlank()) "Posted to Open Bookings (notes attached — auto-assign bypassed)." else "Request broadcast live!"
+                        val autoMatched = respJson.optBoolean("auto_assigned", false)
+                        val routeMsg = when {
+                            autoMatched -> "Yey! We found a pro for you! Your pro is preparing to head over."
+                            bNotes.isNotBlank() -> "Posted to Open Bookings — matching pros are reviewing your special note."
+                            else -> "We are finding the nearest pro for you..."
+                        }
                         Toast.makeText(this@CustomerMainActivity, routeMsg, Toast.LENGTH_LONG).show()
+                        AlistoKernelClient.bookings.forEach { bk -> lastBookingStatuses[bk.id] = bk.status }
                         activeTab = "ACTIVITY"
                         bookingStep = "LAUNCHER"
                         showAuthenticatedCustomerPortal()
@@ -1562,6 +1648,11 @@ class CustomerMainActivity : AppCompatActivity() {
             if (shouldFly) {
                 hasAutoCenteredGps = true
                 pendingForceCenter = false
+            }
+            val nowMs = System.currentTimeMillis()
+            if (nowMs - lastCustomerLocSyncMs >= 10_000L) {
+                lastCustomerLocSyncMs = nowMs
+                uiScope.launch { AlistoKernelClient.updateLiveLocationRpc(lat, lng) }
             }
 
             val doSnap = !inPinMode && pendingSnapOrigin
@@ -1975,10 +2066,95 @@ class CustomerMainActivity : AppCompatActivity() {
         })
 
         if (b.contractorFullName != null) {
+            val proBox = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = AlistoUiKit.frostedGlassBg(this@CustomerMainActivity, "#B30A2E6E", 14, "#CCFACC15", alphaFraction = 0.85f)
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+            }
+            val headerRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val decodedBmp = try {
+                val rawUrl = b.contractorProfilePhotoUrl.orEmpty()
+                if (rawUrl.startsWith("data:image") && rawUrl.contains(",")) {
+                    val bytes = Base64.decode(rawUrl.substringAfter(","), Base64.DEFAULT)
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                } else null
+            } catch (_: Exception) { null }
+
+            if (decodedBmp != null) {
+                headerRow.addView(ImageView(this).apply {
+                    setImageBitmap(decodedBmp)
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(10) }
+                })
+            } else {
+                headerRow.addView(TextView(this).apply {
+                    text = b.contractorFullName.take(1).uppercase()
+                    gravity = Gravity.CENTER
+                    textSize = 18f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.parseColor(AlistoUiKit.BG_DEEP))
+                    background = AlistoUiKit.roundedBg(this@CustomerMainActivity, AlistoUiKit.GOLD_ACCENT, 22)
+                    layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(10) }
+                })
+            }
+
             val vipTag = if (b.contractorVipBadge) " • VIP" else ""
+            val infoCol = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            infoCol.addView(TextView(this).apply {
+                text = "${b.contractorFullName}$vipTag"
+                textSize = 14f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+            })
+            infoCol.addView(TextView(this).apply {
+                val phoneStr = b.contractorPhone?.let { " • $it" }.orEmpty()
+                text = "★ ${"%.2f".format(b.contractorRatingAvg)} (${b.contractorRatingCount} reviews)$phoneStr"
+                textSize = 11.5f; setTextColor(Color.parseColor(AlistoUiKit.GOLD_SOFT))
+            })
+            headerRow.addView(infoCol)
+            proBox.addView(headerRow)
+
+            val vehDesc = listOfNotNull(b.contractorVehicleColor, b.contractorVehicleMake, b.contractorVehicleModel)
+                .filter { it.isNotBlank() }.joinToString(" ")
+            val vehTypeLabel = b.contractorVehicleType?.replace("_", " ")?.replaceFirstChar { it.uppercase() } ?: ""
+            val plateLabel = b.contractorPlateNo?.takeIf { it.isNotBlank() }
+            if (vehDesc.isNotBlank() || plateLabel != null || (b.verticalKey != "skills_marketplace" && vehTypeLabel.isNotBlank())) {
+                val vehLine = buildString {
+                    append("Vehicle: ")
+                    append(vehDesc.ifBlank { vehTypeLabel.ifBlank { "Registered Vehicle" } })
+                    if (plateLabel != null) append("  •  Plate: $plateLabel")
+                }
+                proBox.addView(TextView(this).apply {
+                    text = vehLine
+                    textSize = 12f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                    setPadding(0, dp(7), 0, 0)
+                })
+            }
+
+            if (b.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS")) {
+                proBox.addView(AlistoUiKit.pillButton(
+                    this, "Track Pro & My Location on Live Map →", AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP, "#FEF08A", heightDp = 38, textSizeSp = 12f
+                ) {
+                    activeTab = "BOOK"
+                    bookingStep = "LAUNCHER"
+                    showAuthenticatedCustomerPortal()
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
+                })
+            }
+            card.addView(proBox)
+        } else if (b.status in listOf("CREATED", "PENDING", "SEARCHING")) {
             card.addView(TextView(this).apply {
-                text = "Assigned: ${b.contractorFullName}$vipTag (★ ${"%.2f".format(b.contractorRatingAvg)} • ${b.contractorRatingCount})"
-                textSize = 12.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.CYAN)); setPadding(0, 0, 0, dp(10))
+                text = "We are finding the nearest pro for you..."
+                textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.GOLD_SOFT))
+                setPadding(0, 0, 0, dp(8))
             })
         }
 
@@ -2116,14 +2292,46 @@ class CustomerMainActivity : AppCompatActivity() {
 
     private fun startCustomerRealtimeLoop() {
         realtimePollJob?.cancel()
+        AlistoKernelClient.bookings.forEach { b ->
+            if (!lastBookingStatuses.containsKey(b.id)) lastBookingStatuses[b.id] = b.status
+        }
         realtimePollJob = uiScope.launch {
             while (isActive) {
-                delay(15_000L)
+                delay(6_000L)
                 if (AlistoKernelClient.currentSessionToken.isNullOrBlank()) break
                 AlistoKernelClient.syncBookingsAndWallet()
                 val fired = AlistoPushCenter.dispatchUnreadNotifications(this@CustomerMainActivity, uiScope)
-                AlistoKernelClient.currentSessionUser?.let { refreshCustomerMapLayers(it) }
-                if (fired > 0) Toast.makeText(this@CustomerMainActivity, "$fired new live update(s)", Toast.LENGTH_SHORT).show()
+                val user = AlistoKernelClient.currentSessionUser
+
+                var statusChanged = false
+                if (user != null) {
+                    AlistoKernelClient.bookings.filter { it.clientId == user.id }.forEach { b ->
+                        val prev = lastBookingStatuses[b.id]
+                        if (prev != null && prev != b.status) {
+                            statusChanged = true
+                            val promptMsg = when (b.status) {
+                                "ACCEPTED", "ON_THE_WAY" -> "Yey! We found a pro for you! ${b.contractorFullName ?: "Your pro"} is on the way."
+                                "ARRIVED" -> "${b.contractorFullName ?: "Your pro"} has arrived at your pickup location!"
+                                "ONGOING", "IN_PROGRESS" -> "Your booking ${b.bookingRef} is now underway."
+                                "COMPLETED" -> "Booking ${b.bookingRef} completed! Thank you for riding with Alisto."
+                                "EXPIRED" -> "No pro accepted ${b.bookingRef} in time. Please try again."
+                                else -> null
+                            }
+                            if (promptMsg != null) {
+                                Toast.makeText(this@CustomerMainActivity, promptMsg, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                        lastBookingStatuses[b.id] = b.status
+                    }
+                    refreshCustomerMapLayers(user)
+                    if (statusChanged && activeTab == "ACTIVITY") {
+                        showAuthenticatedCustomerPortal()
+                        break
+                    }
+                }
+                if (fired > 0 && !statusChanged) {
+                    Toast.makeText(this@CustomerMainActivity, "$fired new live update(s)", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }

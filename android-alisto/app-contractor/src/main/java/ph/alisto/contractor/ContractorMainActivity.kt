@@ -24,6 +24,7 @@ class ContractorMainActivity : AppCompatActivity() {
     private var autoAcceptEnabled = false
     private var promptedEarnModeThisSession = false
     private var lastBookingsDigest: String = ""
+    private var lastContractorLocSyncMs: Long = 0L
     private var realtimePollJob: Job? = null
     private var contractorMapView: AlistoInteractiveMapView? = null
     private var promptedLocationPerm = false
@@ -62,6 +63,15 @@ class ContractorMainActivity : AppCompatActivity() {
             val shouldFly = forceCenter || !hasAutoCenteredGps
             contractorMapView?.updateUserLocation(lat, lng, acc, flyTo = shouldFly)
             if (shouldFly) hasAutoCenteredGps = true
+            val nowMs = System.currentTimeMillis()
+            if (nowMs - lastContractorLocSyncMs >= 10_000L) {
+                lastContractorLocSyncMs = nowMs
+                val uid = AlistoKernelClient.currentSessionUser?.id
+                val activeJobId = AlistoKernelClient.bookings.firstOrNull {
+                    it.contractorId == uid && it.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS")
+                }?.id
+                uiScope.launch { AlistoKernelClient.updateLiveLocationRpc(lat, lng, activeJobId) }
+            }
         }
     }
 

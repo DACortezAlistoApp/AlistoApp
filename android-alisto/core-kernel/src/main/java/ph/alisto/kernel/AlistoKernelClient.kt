@@ -163,6 +163,17 @@ data class BookingRecord(
     val clientThumbsUp: Int = 5,
     val clientThumbsDown: Int = 0,
     val clientTrustScore: Double = 100.0,
+    val contractorProfilePhotoUrl: String? = null,
+    val contractorPhone: String? = null,
+    val contractorVehicleType: String? = null,
+    val contractorVehicleMake: String? = null,
+    val contractorVehicleModel: String? = null,
+    val contractorVehicleColor: String? = null,
+    val contractorPlateNo: String? = null,
+    val contractorLiveLat: Double? = null,
+    val contractorLiveLng: Double? = null,
+    val clientLiveLat: Double? = null,
+    val clientLiveLng: Double? = null,
     val contractorFullName: String? = null,
     val contractorRatingAvg: Double = 5.0,
     val contractorRatingCount: Int = 1,
@@ -477,6 +488,17 @@ object AlistoKernelClient {
                         contractorRatingAvg = o.optDouble("contractor_rating_avg", 5.0),
                         contractorRatingCount = o.optInt("contractor_rating_count", 1),
                         contractorVipBadge = o.optBoolean("contractor_vip_badge", false),
+                        contractorProfilePhotoUrl = if (o.isNull("contractor_profile_photo_url")) null else o.optString("contractor_profile_photo_url").ifBlank { null },
+                        contractorPhone = if (o.isNull("contractor_phone")) null else o.optString("contractor_phone").ifBlank { null },
+                        contractorVehicleType = if (o.isNull("contractor_vehicle_type")) null else o.optString("contractor_vehicle_type").ifBlank { null },
+                        contractorVehicleMake = if (o.isNull("contractor_vehicle_make")) null else o.optString("contractor_vehicle_make").ifBlank { null },
+                        contractorVehicleModel = if (o.isNull("contractor_vehicle_model")) null else o.optString("contractor_vehicle_model").ifBlank { null },
+                        contractorVehicleColor = if (o.isNull("contractor_vehicle_color")) null else o.optString("contractor_vehicle_color").ifBlank { null },
+                        contractorPlateNo = if (o.isNull("contractor_plate_no")) null else o.optString("contractor_plate_no").ifBlank { null },
+                        contractorLiveLat = if (o.isNull("contractor_live_lat") || !o.has("contractor_live_lat")) null else o.optDouble("contractor_live_lat"),
+                        contractorLiveLng = if (o.isNull("contractor_live_lng") || !o.has("contractor_live_lng")) null else o.optDouble("contractor_live_lng"),
+                        clientLiveLat = if (o.isNull("client_live_lat") || !o.has("client_live_lat")) null else o.optDouble("client_live_lat"),
+                        clientLiveLng = if (o.isNull("client_live_lng") || !o.has("client_live_lng")) null else o.optDouble("client_live_lng"),
                         pickupLat = o.optDouble("pickup_lat", 15.1450),
                         pickupLng = o.optDouble("pickup_lng", 120.5887),
                         dropoffLat = o.optDouble("dropoff_lat", o.optDouble("pickup_lat", 15.1450)),
@@ -986,6 +1008,22 @@ object AlistoKernelClient {
         } catch (e: Exception) {
             return@withContext Result.failure(e)
         }
+    }
+
+    suspend fun updateLiveLocationRpc(
+        lat: Double,
+        lng: Double,
+        activeBookingId: String? = null
+    ) = withContext(Dispatchers.IO) {
+        val token = currentSessionToken ?: return@withContext
+        try {
+            postRpc("secure_update_live_location_rpc", JSONObject().apply {
+                put("p_session_token", token)
+                put("p_lat", lat)
+                put("p_lng", lng)
+                if (!activeBookingId.isNullOrBlank()) put("p_booking_id", activeBookingId)
+            })
+        } catch (_: Exception) {}
     }
 
     suspend fun submitContractorBidRpc(

@@ -260,6 +260,12 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
         L.circleMarker([t.lat, t.lng], { radius: 10, color: '#ffffff', weight: 3, fillColor: '#00f2fe', fillOpacity: 1.0 })
           .bindPopup('<b>LIVE GPS &bull; ' + t.ref + '</b><br/>' + t.status + ' &bull; ' + t.speed + ' km/h').addTo(layerGroup);
       });
+
+      (data.liveParties || []).forEach(function(lp) {
+        var fill = lp.role === 'CONTRACTOR' ? '#facc15' : '#10b981';
+        L.circleMarker([lp.lat, lp.lng], { radius: 10, color: '#ffffff', weight: 3, fillColor: fill, fillOpacity: 1.0 })
+          .bindPopup('<b>' + lp.label + '</b><br/>' + lp.detail).addTo(layerGroup);
+      });
     };
   </script>
 </body>
@@ -303,7 +309,31 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
                 })
             }
         })
-        root.put("telemetry", JSONArray().apply {
+        root.put("liveParties", JSONArray().apply {
+            bookings.filter { it.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS") }.forEach { b ->
+                if (b.contractorLiveLat != null && b.contractorLiveLng != null) {
+                    val veh = listOfNotNull(b.contractorVehicleColor, b.contractorVehicleMake, b.contractorVehicleModel).joinToString(" ").ifBlank { b.contractorVehicleType ?: "Pro" }
+                    val plate = b.contractorPlateNo?.let { " • $it" }.orEmpty()
+                    put(JSONObject().apply {
+                        put("role", "CONTRACTOR")
+                        put("label", "Pro Live: ${b.contractorFullName ?: "Assigned Pro"}")
+                        put("detail", "$veh$plate (${b.status})")
+                        put("lat", b.contractorLiveLat)
+                        put("lng", b.contractorLiveLng)
+                    })
+                }
+                if (b.clientLiveLat != null && b.clientLiveLng != null) {
+                    put(JSONObject().apply {
+                        put("role", "CUSTOMER")
+                        put("label", "Customer Live: ${b.clientNickname}")
+                        put("detail", "${b.bookingRef} (${b.status})")
+                        put("lat", b.clientLiveLat)
+                        put("lng", b.clientLiveLng)
+                    })
+                }
+            }
+        })
+                root.put("telemetry", JSONArray().apply {
             telemetryPins.forEach { t ->
                 put(JSONObject().apply {
                     put("ref", t.bookingRef); put("status", t.bookingStatus)
