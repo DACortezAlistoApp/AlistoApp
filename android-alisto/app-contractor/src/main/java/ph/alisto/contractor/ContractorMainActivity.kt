@@ -22,6 +22,8 @@ class ContractorMainActivity : AppCompatActivity() {
     private var activeTab = "DRIVE"
     private var jobsFilter = "OPEN"
     private var autoAcceptEnabled = false
+    private var promptedEarnModeThisSession = false
+    private var lastBookingsDigest: String = ""
     private var realtimePollJob: Job? = null
     private var contractorMapView: AlistoInteractiveMapView? = null
     private var promptedLocationPerm = false
@@ -267,7 +269,7 @@ class ContractorMainActivity : AppCompatActivity() {
                 )
                 card.addView(
                     AlistoUiKit.pillButton(this, "Sign Out", AlistoUiKit.BG_INPUT, AlistoUiKit.TEXT_MUTED, AlistoUiKit.BORDER_LIGHT, heightDp = 42) {
-                        AlistoKernelClient.signOut()
+                        promptedEarnModeThisSession = false; AlistoKernelClient.signOut()
                         showContractorEntryGate()
                     }.apply {
                         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
@@ -281,12 +283,75 @@ class ContractorMainActivity : AppCompatActivity() {
         }
     }
 
+    private fun getApprovedVerticals(prof: ContractorProfileState?): List<String> {
+        if (prof == null) return emptyList()
+        val list = mutableListOf<String>()
+        if (prof.offersSkills) list.add("skills_marketplace")
+        if (prof.offersDelivery) list.add("delivery_logistics")
+        if (prof.offersRideHailing) list.add("ride_hailing")
+        return list
+    }
+
+    private fun getEffectiveShiftVerticals(prof: ContractorProfileState?): List<String> {
+        val approved = getApprovedVerticals(prof)
+        if (approved.isEmpty()) return emptyList()
+        val active = prof?.activeShiftVerticals.orEmpty().filter { it in approved }
+        return if (active.isNotEmpty()) active else approved
+    }
+
+    private fun maybePromptEarnModeToday(user: AuthenticatedUser) {
+        if (promptedEarnModeThisSession) return
+        val prof = AlistoKernelClient.currentContractorProfile ?: return
+        val hasRide = prof.offersDelivery || prof.offersRideHailing
+        val hasSkills = prof.offersSkills
+        if (!hasRide || !hasSkills) {
+            promptedEarnModeThisSession = true
+            return
+        }
+        promptedEarnModeThisSession = true
+        val rideVerticals = buildList {
+            if (prof.offersDelivery) add("delivery_logistics")
+            if (prof.offersRideHailing) add("ride_hailing")
+        }
+        val skillsVerticals = listOf("skills_marketplace")
+
+        AlertDialog.Builder(this)
+            .setTitle("How would you like to earn today?")
+            .setMessage("Choose your active earning mode for this shift. You can switch anytime on the Drive tab.")
+            .setCancelable(false)
+            .setPositiveButton("Ride (Delivery & Local Ride)") { _, _ ->
+                uiScope.launch {
+                    AlistoKernelClient.toggleContractorDispatchModeRpc(
+                        isOnline = true,
+                        autoAccept = autoAcceptEnabled,
+                        activeShiftVerticals = rideVerticals
+                    )
+                    Toast.makeText(this@ContractorMainActivity, "Shift set: Ride (Delivery & Local Ride)", Toast.LENGTH_SHORT).show()
+                    routeContractorByAccountState()
+                }
+            }
+            .setNegativeButton("Skills Marketplace (Skills & Errands)") { _, _ ->
+                autoAcceptEnabled = false
+                uiScope.launch {
+                    AlistoKernelClient.toggleContractorDispatchModeRpc(
+                        isOnline = true,
+                        autoAccept = false,
+                        activeShiftVerticals = skillsVerticals
+                    )
+                    Toast.makeText(this@ContractorMainActivity, "Shift set: Skills Marketplace", Toast.LENGTH_SHORT).show()
+                    routeContractorByAccountState()
+                }
+            }
+            .show()
+    }
+
     private fun showActiveContractorPortal(user: AuthenticatedUser) {
         AlistoPushCenter.ensureNotificationPermission(this)
         AlistoPushCenter.dispatchUnreadNotifications(this, uiScope)
         startContractorRealtimeLoop()
         AlistoComplianceGate.checkOtaUpdate(this, "contractor", BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
         AlistoComplianceGate.enforceRa10173ConsentIfRequired(this, uiScope, "contractor")
+        maybePromptEarnModeToday(user)
         if (!AlistoLocationTracker.hasPermission(this) && !promptedLocationPerm) {
             promptedLocationPerm = true
             AlistoLocationTracker.requestPermission(this)
@@ -310,7 +375,7 @@ class ContractorMainActivity : AppCompatActivity() {
         }
 
         val prof = AlistoKernelClient.currentContractorProfile
-        val currentShifts = prof?.activeShiftVerticals ?: listOf("skills_marketplace")
+        val currentShifts = getEffectiveShiftVerticals(prof)
         val openCount = AlistoKernelClient.bookings.count {
             (it.verticalKey in currentShifts || it.contractorId == user.id) &&
                 it.status !in listOf("COMPLETED", "CANCELLED", "EXPIRED")
@@ -338,7 +403,8 @@ class ContractorMainActivity : AppCompatActivity() {
 
     private fun buildContractorDriveMapTab(user: AuthenticatedUser): View {
         val prof = AlistoKernelClient.currentContractorProfile
-        val currentShifts = prof?.activeShiftVerticals ?: listOf("skills_marketplace")
+        val approvedVerticals = getApprovedVerticals(prof)
+        val currentShifts = getEffectiveShiftVerticals(prof)
         val isOnline = prof?.isOnline == true
 
         val root = LinearLayout(this).apply {
@@ -553,26 +619,35 @@ class ContractorMainActivity : AppCompatActivity() {
             "skills_marketplace" to "Skills",
             "delivery_logistics" to "Delivery",
             "ride_hailing" to "Ride-Hailing"
-        )
-        verticalsSpec.forEachIndexed { idx, (vKey, label) ->
-            shiftRow.addView(
-                AlistoUiKit.chipButton(this, label, vKey in currentShifts, AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP) {
-                    val updated = currentShifts.toMutableList()
-                    if (vKey in updated) updated.remove(vKey) else updated.add(vKey)
-                    if (updated.isEmpty()) updated.add("skills_marketplace")
-                    uiScope.launch {
-                        AlistoKernelClient.toggleContractorDispatchModeRpc(
-                            isOnline = isOnline, autoAccept = autoAcceptEnabled, activeShiftVerticals = updated
-                        )
-                        Toast.makeText(this@ContractorMainActivity, "Shift updated: ${updated.joinToString(", ")}", Toast.LENGTH_SHORT).show()
-                        routeContractorByAccountState()
+        ).filter { (vKey, _) -> vKey in approvedVerticals }
+        if (verticalsSpec.isEmpty()) {
+            shiftRow.addView(TextView(this).apply {
+                text = "No approved service verticals yet. Contact Admin to activate your vertical."
+                textSize = 12f
+                setTextColor(Color.parseColor("#FCA5A5"))
+            })
+        } else {
+            verticalsSpec.forEachIndexed { idx, (vKey, label) ->
+                shiftRow.addView(
+                    AlistoUiKit.chipButton(this, label, vKey in currentShifts, AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP) {
+                        val updated = currentShifts.toMutableList()
+                        if (vKey in updated) updated.remove(vKey) else updated.add(vKey)
+                        if (updated.isEmpty()) updated.add(vKey)
+                        val allowAuto = autoAcceptEnabled && updated.any { it != "skills_marketplace" }
+                        uiScope.launch {
+                            AlistoKernelClient.toggleContractorDispatchModeRpc(
+                                isOnline = isOnline, autoAccept = allowAuto, activeShiftVerticals = updated
+                            )
+                            Toast.makeText(this@ContractorMainActivity, "Shift updated: ${updated.joinToString(", ")}", Toast.LENGTH_SHORT).show()
+                            routeContractorByAccountState()
+                        }
+                    }.apply {
+                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                            if (idx < verticalsSpec.lastIndex) rightMargin = dp(8)
+                        }
                     }
-                }.apply {
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                        if (idx < verticalsSpec.lastIndex) rightMargin = dp(8)
-                    }
-                }
-            )
+                )
+            }
         }
         sheetBody.addView(shiftRow)
 
@@ -589,7 +664,7 @@ class ContractorMainActivity : AppCompatActivity() {
 
     private fun buildContractorJobsTab(user: AuthenticatedUser): View {
         val prof = AlistoKernelClient.currentContractorProfile
-        val currentShifts = prof?.activeShiftVerticals ?: listOf("skills_marketplace")
+        val currentShifts = getEffectiveShiftVerticals(prof)
 
         val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP)) }
         val container = LinearLayout(this).apply {
@@ -773,7 +848,7 @@ class ContractorMainActivity : AppCompatActivity() {
         }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) } })
 
         container.addView(AlistoUiKit.pillButton(this, "Sign Out & Lock", "#450A0A", "#FCA5A5", "#7F1D1D", heightDp = 46) {
-            realtimePollJob?.cancel(); AlistoLocationTracker.stopLiveUpdates(); AlistoSpatialEngine.stopHeartbeat(); AlistoKernelClient.signOut(); showContractorEntryGate()
+            realtimePollJob?.cancel(); AlistoLocationTracker.stopLiveUpdates(); AlistoSpatialEngine.stopHeartbeat(); promptedEarnModeThisSession = false; AlistoKernelClient.signOut(); showContractorEntryGate()
         }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT) })
 
         scroll.addView(container)
@@ -1081,7 +1156,7 @@ class ContractorMainActivity : AppCompatActivity() {
         realtimePollJob?.cancel()
         realtimePollJob = uiScope.launch {
             while (isActive) {
-                delay(15_000L)
+                delay(8_000L)
                 if (AlistoKernelClient.currentSessionToken.isNullOrBlank()) break
                 AlistoKernelClient.syncBookingsAndWallet()
                 val fired = AlistoPushCenter.dispatchUnreadNotifications(this@ContractorMainActivity, uiScope)
@@ -1090,6 +1165,15 @@ class ContractorMainActivity : AppCompatActivity() {
                     telemetryPins = AlistoKernelClient.liveTelemetryPins,
                     heatClusters = AlistoKernelClient.heatmapClusters
                 )
+                val user = AlistoKernelClient.currentSessionUser
+                val digest = AlistoKernelClient.bookings.joinToString("|") { "${it.id}:${it.status}:${it.contractorId}" }
+                if (user != null && digest != lastBookingsDigest) {
+                    lastBookingsDigest = digest
+                    if (activeTab == "JOBS" || activeTab == "DRIVE") {
+                        showActiveContractorPortal(user)
+                        break
+                    }
+                }
                 if (fired > 0) Toast.makeText(this@ContractorMainActivity, "$fired new dispatch alert(s)", Toast.LENGTH_SHORT).show()
             }
         }

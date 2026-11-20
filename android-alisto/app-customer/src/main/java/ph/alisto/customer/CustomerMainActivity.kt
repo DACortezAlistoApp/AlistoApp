@@ -31,6 +31,11 @@ class CustomerMainActivity : AppCompatActivity() {
     private var selectedVerticalKey = "skills_marketplace"
     private var selectedVehicleType = "Motorcycle"
     private var selectedPaymentMethod = "CASH"
+    private var activeDeadheadInput: EditText? = null
+    private var activeDeadheadNoticeView: TextView? = null
+    private var activeClarkNoticeView: TextView? = null
+    private var refreshVehicleUiCallback: (() -> Unit)? = null
+    private var lastRemoteNoticeKey: String = ""
     private var selectedJobSubtype = "ON_SITE_SKILL"
     private var selectedServiceLabel = "Request Skills & Trades"
     private var selectedSkillCategory = "General Service"
@@ -76,7 +81,7 @@ class CustomerMainActivity : AppCompatActivity() {
     private var draftDropoffNote: String = ""
     private var draftBookingNotes: String = ""
     private var draftOfferFee: String = ""
-    private var draftTip: String = "50"
+    private var draftTip: String = ""
     private var draftErrandGoods: String = "0"
     private var draftDeadheadKm: String = "0"
 
@@ -706,7 +711,9 @@ class CustomerMainActivity : AppCompatActivity() {
             setPadding(dp(18), dp(2), dp(18), dp(22))
         }
 
-        // 0. VEHICLE CLASS SELECTOR (Motorcycle / Tricycle / E-Bike) for Delivery, Errands & Local Ride
+        // 0. VEHICLE CLASS SELECTOR (Motorcycle / Tricycle / E-Bike) with Clark Freeport Zone Lock
+        activeClarkNoticeView = null
+        refreshVehicleUiCallback = null
         if (needsDropoff) {
             val vehicleCard = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 12)
             vehicleCard.addView(TextView(this).apply {
@@ -720,11 +727,29 @@ class CustomerMainActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             }
+            val clarkNotice = TextView(this).apply {
+                text = "Clark Freeport Zone Regulation: Tricycles and E-Bikes are not allowed inside Clark. Motorcycle has been selected automatically."
+                textSize = 11.5f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor(AlistoUiKit.GOLD_SOFT))
+                setPadding(dp(2), dp(8), dp(2), 0)
+                visibility = View.GONE
+            }
+            activeClarkNoticeView = clarkNotice
+
             val vehicleOptions = listOf("Motorcycle", "Tricycle", "E-Bike")
             val vehicleBtns = mutableListOf<Pair<String, TextView>>()
             fun refreshVehicleButtons() {
+                val clarkLocked = isClarkRestrictedTrip()
+                if (clarkLocked && selectedVehicleType != "Motorcycle") {
+                    selectedVehicleType = "Motorcycle"
+                    userEditedFeeManually = false
+                }
+                clarkNotice.visibility = if (clarkLocked) View.VISIBLE else View.GONE
                 vehicleBtns.forEach { (vName, btn) ->
+                    val restricted = clarkLocked && vName != "Motorcycle"
                     val active = selectedVehicleType == vName
+                    btn.alpha = if (restricted) 0.36f else 1.0f
                     btn.setTypeface(null, if (active) Typeface.BOLD else Typeface.NORMAL)
                     btn.setTextColor(Color.parseColor(if (active) AlistoUiKit.BG_DEEP else AlistoUiKit.TEXT_PRIMARY))
                     btn.background = AlistoUiKit.frostedGlassBg(
@@ -736,6 +761,8 @@ class CustomerMainActivity : AppCompatActivity() {
                     )
                 }
             }
+            refreshVehicleUiCallback = { refreshVehicleButtons() }
+
             vehicleOptions.forEachIndexed { idx, vName ->
                 val btn = TextView(this).apply {
                     text = vName
@@ -746,6 +773,14 @@ class CustomerMainActivity : AppCompatActivity() {
                         if (idx < vehicleOptions.lastIndex) rightMargin = dp(8)
                     }
                     setOnClickListener {
+                        if (isClarkRestrictedTrip() && vName != "Motorcycle") {
+                            Toast.makeText(
+                                this@CustomerMainActivity,
+                                "Tricycles and E-Bikes are not permitted inside Clark Freeport Zone. Please use Motorcycle.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            return@setOnClickListener
+                        }
                         selectedVehicleType = vName
                         userEditedFeeManually = false
                         refreshVehicleButtons()
@@ -757,6 +792,7 @@ class CustomerMainActivity : AppCompatActivity() {
             }
             refreshVehicleButtons()
             vehicleCard.addView(vehicleRow)
+            vehicleCard.addView(clarkNotice)
             sheetBody.addView(vehicleCard)
         }
 
@@ -981,6 +1017,16 @@ class CustomerMainActivity : AppCompatActivity() {
         }
         activeQuoteBanner = quoteBanner
         sheetBody.addView(quoteBanner)
+        val deadheadNotice = TextView(this).apply {
+            textSize = 11.5f
+            setTextColor(Color.parseColor("#FEF08A"))
+            background = AlistoUiKit.frostedGlassBg(this@CustomerMainActivity, "#CC1E3A8A", 10, "#CCFACC15", alphaFraction = 0.85f)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+        }
+        activeDeadheadNoticeView = deadheadNotice
+        sheetBody.addView(deadheadNotice)
         val feeInput = AlistoUiKit.inputField(this, "0.00", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, draftOfferFee)
         activeFeeInput = feeInput
         feeInput.addTextChangedListener(object : TextWatcher {
@@ -992,7 +1038,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 userEditedFeeManually = draftOfferFee.isNotBlank()
             }
         })
-        val tipInput = AlistoUiKit.inputField(this, "50", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, draftTip)
+        val tipInput = AlistoUiKit.inputField(this, "0", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, draftTip)
         sheetBody.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
@@ -1014,6 +1060,7 @@ class CustomerMainActivity : AppCompatActivity() {
             }
         })
         val deadheadKmInput = AlistoUiKit.inputField(this, "0", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, draftDeadheadKm)
+        activeDeadheadInput = deadheadKmInput
         deadheadKmInput.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
@@ -1186,7 +1233,7 @@ class CustomerMainActivity : AppCompatActivity() {
                     )
                     res.onSuccess {
                         sequentialWaypoints.clear()
-                        draftTitle = ""; draftPickupNote = ""; draftDropoffAddress = ""; draftDropoffNote = ""; draftBookingNotes = ""
+                        draftTitle = ""; draftPickupNote = ""; draftDropoffAddress = ""; draftDropoffNote = ""; draftBookingNotes = ""; draftTip = ""; draftDeadheadKm = ""; lastRemoteNoticeKey = ""
                         activeDropoffLat = null; activeDropoffLng = null
                         val routeMsg = if (bNotes.isNotBlank()) "Posted to Open Bookings (notes attached — auto-assign bypassed)." else "Request broadcast live!"
                         Toast.makeText(this@CustomerMainActivity, routeMsg, Toast.LENGTH_LONG).show()
@@ -1319,9 +1366,60 @@ class CustomerMainActivity : AppCompatActivity() {
         )
     }
 
+    private fun isPointInClark(lat: Double?, lng: Double?): Boolean {
+        if (lat == null || lng == null) return false
+        return lat in 15.1695..15.2250 && lng in 120.5100..120.5775
+    }
+
+    private fun isClarkAddressText(addr: String): Boolean {
+        val hay = addr.lowercase()
+        if (hay.contains("clarkview")) return false
+        val tokens = listOf(
+            "clark freeport", "clarkfield", "clark global", "clark international",
+            "clark, pampanga", "clark pampanga", "m.a. roxas", "manuel a. roxas",
+            "parade grounds", "air force city"
+        )
+        return tokens.any { hay.contains(it) }
+    }
+
+    private fun isClarkRestrictedTrip(): Boolean {
+        if (selectedVerticalKey == "skills_marketplace") return false
+        return isPointInClark(activeOriginLat, activeOriginLng) ||
+            isPointInClark(activeDropoffLat, activeDropoffLng) ||
+            isClarkAddressText(draftPickupAddress) ||
+            isClarkAddressText(draftDropoffAddress)
+    }
+
+    private fun haversineKm(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
+        val r = 6371.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLng = Math.toRadians(lng2 - lng1)
+        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+            Math.sin(dLng / 2) * Math.sin(dLng / 2)
+        return r * 2.0 * Math.atan2(Math.sqrt(a), Math.sqrt(1.0 - a))
+    }
+
+    // Returns return-trip distance (km) from a remote drop-off back to the edge of the nearest High-Demand Zone
+    private fun computeRemoteDeadheadKm(destLat: Double, destLng: Double): Double {
+        // Core High-Demand Zones: Angeles City, Clark/Dau-Mabalacat, Clark Freeport, San Fernando
+        val hubs = listOf(
+            Triple(15.1450, 120.5887, 5.0),
+            Triple(15.1780, 120.5850, 4.5),
+            Triple(15.1860, 120.5480, 4.0),
+            Triple(15.0430, 120.6840, 4.5)
+        )
+        val excessKm = hubs.minOf { (hLat, hLng, radiusKm) ->
+            (haversineKm(destLat, destLng, hLat, hLng) - radiusKm).coerceAtLeast(0.0)
+        }
+        return if (excessKm >= 1.5) Math.round(excessKm * 10.0) / 10.0 else 0.0
+    }
+
     private fun applyFareFromSuperAdminRules() {
+        refreshVehicleUiCallback?.invoke()
         val pc = AlistoKernelClient.findPricingClass(selectedVerticalKey, if (selectedVerticalKey == "skills_marketplace") "" else selectedVehicleType)
         if (selectedVerticalKey == "skills_marketplace") {
+            activeDeadheadNoticeView?.visibility = View.GONE
             val fare = pc?.computeEffectiveFare(0.0, 0.0)
             activeCalculatedFare = fare
             if (fare != null && fare > 0.0) {
@@ -1339,6 +1437,7 @@ class CustomerMainActivity : AppCompatActivity() {
         }
         if (activeDropoffLat == null || activeDropoffLng == null || activeRouteDistanceKm <= 0.0) {
             activeCalculatedFare = null
+            activeDeadheadNoticeView?.visibility = View.GONE
             activeQuoteBanner?.text = "Set Pickup & Drop-Off to calculate road route & fare (PHP 0.00 pending)"
             if (!userEditedFeeManually) {
                 suppressFeeWatcher = true
@@ -1349,13 +1448,24 @@ class CustomerMainActivity : AppCompatActivity() {
             return
         }
         val dhKm = draftDeadheadKm.toDoubleOrNull() ?: 0.0
+        val dhRate = pc?.deadheadPerKmRate ?: 2.0
+        val dhFee = Math.round((dhKm * dhRate) * 100.0) / 100.0
         val pabiliPhp = draftErrandGoods.toDoubleOrNull() ?: 0.0
         val fare = pc?.computeEffectiveFare(activeRouteDistanceKm, dhKm, sequentialWaypoints.size, pabiliPhp)
         activeCalculatedFare = fare
         val stopsTag = if (sequentialWaypoints.isNotEmpty()) " • +${sequentialWaypoints.size} stop(s)" else ""
         val cashoutTag = if (pabiliPhp > 0.0 && pabiliPhp < 500.0) " • +cash-out" else ""
+        val dhTag = if (dhFee > 0.0) " • +PHP ${"%.2f".format(dhFee)} return fuel" else ""
+
+        if (dhFee > 0.0) {
+            activeDeadheadNoticeView?.text = "Remote Return Surcharge (+PHP ${"%.2f".format(dhFee)} • ${"%.1f".format(dhKm)} km): Drop-off is outside our high-demand areas, so PHP ${"%.2f".format(dhRate)}/km is included to help cover your rider's fuel back to the nearest active zone."
+            activeDeadheadNoticeView?.visibility = View.VISIBLE
+        } else {
+            activeDeadheadNoticeView?.visibility = View.GONE
+        }
+
         if (fare != null && fare > 0.0) {
-            activeQuoteBanner?.text = "$selectedVehicleType • ${"%.2f".format(activeRouteDistanceKm)} km (~${activeRouteDurationMin.toInt()} min)$stopsTag$cashoutTag • Fare: PHP ${"%.2f".format(fare)}"
+            activeQuoteBanner?.text = "$selectedVehicleType • ${"%.2f".format(activeRouteDistanceKm)} km (~${activeRouteDurationMin.toInt()} min)$stopsTag$cashoutTag$dhTag • Fare: PHP ${"%.2f".format(fare)}"
             if (!userEditedFeeManually) {
                 suppressFeeWatcher = true
                 draftOfferFee = "%.2f".format(fare)
@@ -1369,10 +1479,13 @@ class CustomerMainActivity : AppCompatActivity() {
 
     private fun recalculateRouteAndFare(user: AuthenticatedUser) {
         routeCalcJob?.cancel()
+        refreshVehicleUiCallback?.invoke()
         if (selectedVerticalKey == "skills_marketplace") {
             activeRoutePoints = emptyList()
             activeRouteDistanceKm = 0.0
             activeRouteDurationMin = 0.0
+            draftDeadheadKm = ""
+            activeDeadheadInput?.setText("")
             applyFareFromSuperAdminRules()
             refreshCustomerMapLayers(user)
             return
@@ -1383,10 +1496,43 @@ class CustomerMainActivity : AppCompatActivity() {
             activeRoutePoints = emptyList()
             activeRouteDistanceKm = 0.0
             activeRouteDurationMin = 0.0
+            draftDeadheadKm = ""
+            activeDeadheadInput?.setText("")
+            lastRemoteNoticeKey = ""
             applyFareFromSuperAdminRules()
             refreshCustomerMapLayers(user)
             return
         }
+
+        // Auto-detect out-of-high-demand destination and apply PHP 2/km return surcharge
+        val autoDhKm = computeRemoteDeadheadKm(dLat, dLng)
+        if (autoDhKm > 0.0) {
+            val formattedDh = "%.1f".format(autoDhKm)
+            draftDeadheadKm = formattedDh
+            if (activeDeadheadInput?.text?.toString() != formattedDh) {
+                activeDeadheadInput?.setText(formattedDh)
+            }
+            val destKey = "${"%.3f".format(dLat)},${"%.3f".format(dLng)}"
+            if (lastRemoteNoticeKey != destKey && !isFinishing && !isDestroyed) {
+                lastRemoteNoticeKey = destKey
+                val dhFee = Math.round((autoDhKm * 2.0) * 100.0) / 100.0
+                AlertDialog.Builder(this)
+                    .setTitle("Remote Area Return Surcharge")
+                    .setMessage(
+                        "Your drop-off is outside our high-demand service zones, where riders have a lower chance of finding a return booking.\n\n" +
+                        "A return surcharge of PHP 2.00/km (${"%.1f".format(autoDhKm)} km = +PHP ${"%.2f".format(dhFee)}) has been added to help offset your rider's fuel back to the nearest active zone."
+                    )
+                    .setPositiveButton("Got It", null)
+                    .show()
+            }
+        } else {
+            if (draftDeadheadKm.isNotBlank()) {
+                draftDeadheadKm = ""
+                activeDeadheadInput?.setText("")
+            }
+            lastRemoteNoticeKey = ""
+        }
+
         activeQuoteBanner?.text = "Calculating local-road route & fare..."
         val wpsSnapshot = sequentialWaypoints.toList()
         routeCalcJob = uiScope.launch {
