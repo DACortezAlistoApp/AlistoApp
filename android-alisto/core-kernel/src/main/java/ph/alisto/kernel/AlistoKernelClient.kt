@@ -73,12 +73,29 @@ data class ServicePricingClass(
     val baseIncludedKm: Double,
     val perKmRate: Double,
     val economyMultiplier: Double,
-    val arrivalCancellationFee: Double
+    val arrivalCancellationFee: Double,
+    val ratePer500m: Double = 0.0,
+    val deadheadPerKmRate: Double = 2.0
 ) {
-    fun computeEffectiveFare(distanceKm: Double = 3.0): Double {
-        val extraKm = if (verticalKey == "skills_marketplace") 0.0 else (distanceKm - baseIncludedKm).coerceAtLeast(0.0)
-        val raw = baseOrCalloutFee + (extraKm * perKmRate)
-        return Math.round(raw * economyMultiplier * 100.0) / 100.0
+    fun computeEffectiveFare(distanceKm: Double = 0.0, deadheadKm: Double = 0.0): Double {
+        val mult = economyMultiplier.coerceAtLeast(0.1)
+        if (verticalKey == "skills_marketplace") {
+            return Math.round(baseOrCalloutFee * mult * 100.0) / 100.0
+        }
+        val dist = distanceKm.coerceAtLeast(0.0)
+        val dh = deadheadKm.coerceAtLeast(0.0)
+        val tripCharge = if (ratePer500m > 0.0 || perKmRate > 0.0) {
+            when {
+                dist <= 0.5 -> if (ratePer500m > 0.0) ratePer500m else baseOrCalloutFee
+                dist >= 1.0 -> perKmRate * dist
+                else -> maxOf(ratePer500m, perKmRate * dist)
+            }
+        } else {
+            val extraKm = (dist - baseIncludedKm).coerceAtLeast(0.0)
+            baseOrCalloutFee + (extraKm * perKmRate)
+        }
+        val dhCharge = if (dh > 0.0) deadheadPerKmRate * dh else 0.0
+        return Math.round((tripCharge + dhCharge) * mult * 100.0) / 100.0
     }
 }
 
@@ -400,7 +417,9 @@ object AlistoKernelClient {
                         baseIncludedKm = o.optDouble("base_included_km", 0.0),
                         perKmRate = o.optDouble("per_km_rate", 0.0),
                         economyMultiplier = o.optDouble("economy_multiplier", 1.0),
-                        arrivalCancellationFee = o.optDouble("arrival_cancellation_fee", 100.0)
+                        arrivalCancellationFee = o.optDouble("arrival_cancellation_fee", 100.0),
+                        ratePer500m = o.optDouble("rate_per_500m", 0.0),
+                        deadheadPerKmRate = if (o.isNull("deadhead_per_km_rate") || !o.has("deadhead_per_km_rate")) 2.0 else o.optDouble("deadhead_per_km_rate", 2.0)
                     )
                 )
             }
@@ -1255,6 +1274,11 @@ object AlistoKernelClient {
         val after = start + prefix.length
         val end = raw.indexOf("]", after)
         return if (end == -1) "" else raw.substring(after, end).trim()
+    }
+
+
+    fun findPricingClass(verticalKey: String): ServicePricingClass? {
+        return pricingClasses.firstOrNull { it.verticalKey == verticalKey }
     }
 
 }

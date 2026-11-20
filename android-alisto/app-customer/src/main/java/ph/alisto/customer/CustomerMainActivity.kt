@@ -38,6 +38,15 @@ class CustomerMainActivity : AppCompatActivity() {
     private var pickupSearchJob: Job? = null
     private var dropoffSearchJob: Job? = null
     private var reverseGeoJob: Job? = null
+    private var routeCalcJob: Job? = null
+    private var activeRoutePoints: List<Pair<Double, Double>> = emptyList()
+    private var activeRouteDistanceKm: Double = 0.0
+    private var activeRouteDurationMin: Double = 0.0
+    private var activeCalculatedFare: Double? = null
+    private var userEditedFeeManually = false
+    private var suppressFeeWatcher = false
+    private var activeFeeInput: EditText? = null
+    private var activeQuoteBanner: TextView? = null
 
     private var customerMapView: AlistoInteractiveMapView? = null
     private var activePickupField: EditText? = null
@@ -63,7 +72,7 @@ class CustomerMainActivity : AppCompatActivity() {
     private var draftDropoffAddress: String = ""
     private var draftDropoffNote: String = ""
     private var draftBookingNotes: String = ""
-    private var draftOfferFee: String = "500"
+    private var draftOfferFee: String = ""
     private var draftTip: String = "50"
     private var draftErrandGoods: String = "0"
     private var draftDeadheadKm: String = "0"
@@ -480,6 +489,16 @@ class CustomerMainActivity : AppCompatActivity() {
                 selectedServiceLabel = opt.title
                 selectedSkillCategory = opt.cat
                 dropPinTarget = null
+                activeDropoffLat = null
+                activeDropoffLng = null
+                draftDropoffAddress = ""
+                sequentialWaypoints.clear()
+                activeRoutePoints = emptyList()
+                activeRouteDistanceKm = 0.0
+                activeRouteDurationMin = 0.0
+                activeCalculatedFare = null
+                userEditedFeeManually = false
+                draftOfferFee = ""
                 bookingStep = "PICKUP_MAP"
                 sheetExpanded = false
                 showAuthenticatedCustomerPortal()
@@ -643,6 +662,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 pendingPinLng = lng
                 dropPinPreviewText.text = "Locating pin..."
                 reverseGeoJob?.cancel()
+        routeCalcJob?.cancel()
                 reverseGeoJob = uiScope.launch {
                     delay(250L)
                     val addr = withContext(Dispatchers.IO) {
@@ -695,7 +715,7 @@ class CustomerMainActivity : AppCompatActivity() {
             dropPinTarget = null
             customerMapView?.setDropPinMode(false)
             dropPinBar.visibility = View.GONE
-            refreshCustomerMapLayers(user)
+            recalculateRouteAndFare(user)
         }
 
         attachInlineAutocomplete(
@@ -713,7 +733,7 @@ class CustomerMainActivity : AppCompatActivity() {
             suppressAutocomplete = false
             pickupSuggestionsBox.visibility = View.GONE
             customerMapView?.recenter(picked.lat, picked.lng, 16)
-            refreshCustomerMapLayers(user)
+            recalculateRouteAndFare(user)
         }
 
         pickupCard.addView(AlistoUiKit.labeledField(this, pickupTitle, pickupInput, 4))
@@ -818,7 +838,28 @@ class CustomerMainActivity : AppCompatActivity() {
         sheetBody.addView(detailsCard)
 
         // 4. FARE, TIP & ADVANCED OPTIONS
-        val feeInput = AlistoUiKit.inputField(this, "500", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, draftOfferFee)
+        val quoteBanner = TextView(this).apply {
+            text = if (needsDropoff) "Set Pickup & Drop-Off to calculate road route & fare (PHP 0.00 pending)" else "Loading Super Admin call-out rate..."
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(AlistoUiKit.CYAN))
+            background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#0C2942", 12, AlistoUiKit.CYAN)
+            setPadding(dp(12), dp(9), dp(12), dp(9))
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+        }
+        activeQuoteBanner = quoteBanner
+        sheetBody.addView(quoteBanner)
+        val feeInput = AlistoUiKit.inputField(this, "0.00", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, draftOfferFee)
+        activeFeeInput = feeInput
+        feeInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                if (suppressFeeWatcher) return
+                draftOfferFee = s?.toString().orEmpty()
+                userEditedFeeManually = draftOfferFee.isNotBlank()
+            }
+        })
         val tipInput = AlistoUiKit.inputField(this, "50", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, draftTip)
         sheetBody.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -833,6 +874,14 @@ class CustomerMainActivity : AppCompatActivity() {
 
         val errandCostInput = AlistoUiKit.inputField(this, "0", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, draftErrandGoods)
         val deadheadKmInput = AlistoUiKit.inputField(this, "0", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, draftDeadheadKm)
+        deadheadKmInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                draftDeadheadKm = s?.toString().orEmpty()
+                applyFareFromSuperAdminRules()
+            }
+        })
         sheetBody.addView(TextView(this).apply {
             text = if (showAdvancedOptions) "▾ Hide Pabili & Deadhead options" else "▸ Add Pabili goods budget or deadhead return km"
             textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED))
@@ -878,7 +927,15 @@ class CustomerMainActivity : AppCompatActivity() {
                 val dNote = dropoffNoteInput?.text?.toString()?.trim().orEmpty()
                 val bNotes = bookingNoteInput.text.toString().trim()
 
-                val fee = feeInput.text.toString().toDoubleOrNull() ?: 500.0
+                if (needsDropoff && (activeDropoffLat == null || activeDropoffLng == null)) {
+                    Toast.makeText(this@CustomerMainActivity, "Please select or pin a Drop-Off location first.", Toast.LENGTH_LONG).show()
+                    return@pillButton
+                }
+                val fee = feeInput.text.toString().toDoubleOrNull() ?: activeCalculatedFare ?: 0.0
+                if (fee <= 0.0) {
+                    Toast.makeText(this@CustomerMainActivity, "Waiting for valid route & Super Admin fare calculation.", Toast.LENGTH_LONG).show()
+                    return@pillButton
+                }
                 val errandCost = errandCostInput.text.toString().toDoubleOrNull() ?: 0.0
                 val deadheadKm = deadheadKmInput.text.toString().toDoubleOrNull() ?: 0.0
                 val tip = tipInput.text.toString().toDoubleOrNull() ?: 0.0
@@ -946,12 +1003,12 @@ class CustomerMainActivity : AppCompatActivity() {
                     draftPickupAddress = rev
                     pickupInput.setText(rev)
                     suppressAutocomplete = false
-                    refreshCustomerMapLayers(user)
+                    recalculateRouteAndFare(user)
                     Toast.makeText(this@CustomerMainActivity, "Pickup pinned: $rev", Toast.LENGTH_SHORT).show()
                 }
             }
         }
-        refreshCustomerMapLayers(user)
+        recalculateRouteAndFare(user)
         AlistoLocationTracker.lastLat?.let { lat ->
             AlistoLocationTracker.lastLng?.let { lng ->
                 customerMapView?.updateUserLocation(lat, lng, AlistoLocationTracker.lastAccuracyM, flyTo = false)
@@ -972,7 +1029,15 @@ class CustomerMainActivity : AppCompatActivity() {
             override fun afterTextChanged(s: Editable?) {
                 if (suppressAutocomplete) return
                 val q = s?.toString()?.trim().orEmpty()
-                if (isPickup) draftPickupAddress = q else draftDropoffAddress = q
+                if (isPickup) draftPickupAddress = q else {
+                    draftDropoffAddress = q
+                    if (q.isEmpty()) {
+                        activeDropoffLat = null
+                        activeDropoffLng = null
+                        userEditedFeeManually = false
+                        AlistoKernelClient.currentSessionUser?.let { recalculateRouteAndFare(it) }
+                    }
+                }
 
                 if (isPickup) pickupSearchJob?.cancel() else dropoffSearchJob?.cancel()
                 if (q.length < 3) {
@@ -1028,9 +1093,94 @@ class CustomerMainActivity : AppCompatActivity() {
             dropoffLng = activeDropoffLng,
             dropoffAddress = draftDropoffAddress,
             waypoints = sequentialWaypoints,
+            routePoints = activeRoutePoints,
             bookings = AlistoKernelClient.bookings.filter { user.role == "super_admin" || it.clientId == user.id },
             telemetryPins = AlistoKernelClient.liveTelemetryPins
         )
+    }
+
+    private fun applyFareFromSuperAdminRules() {
+        val pc = AlistoKernelClient.findPricingClass(selectedVerticalKey)
+        if (selectedVerticalKey == "skills_marketplace") {
+            val fare = pc?.computeEffectiveFare(0.0, 0.0)
+            activeCalculatedFare = fare
+            if (fare != null && fare > 0.0) {
+                activeQuoteBanner?.text = "${pc.className} • Call-Out Rate: PHP ${"%.2f".format(fare)}"
+                if (!userEditedFeeManually) {
+                    suppressFeeWatcher = true
+                    draftOfferFee = "%.2f".format(fare)
+                    activeFeeInput?.setText(draftOfferFee)
+                    suppressFeeWatcher = false
+                }
+            } else {
+                activeQuoteBanner?.text = "Enter your preferred service offer (Super Admin rate pending)"
+            }
+            return
+        }
+        if (activeDropoffLat == null || activeDropoffLng == null || activeRouteDistanceKm <= 0.0) {
+            activeCalculatedFare = null
+            activeQuoteBanner?.text = "Set Pickup & Drop-Off to calculate road route & fare (PHP 0.00 pending)"
+            if (!userEditedFeeManually) {
+                suppressFeeWatcher = true
+                draftOfferFee = ""
+                activeFeeInput?.setText("")
+                suppressFeeWatcher = false
+            }
+            return
+        }
+        val dhKm = draftDeadheadKm.toDoubleOrNull() ?: 0.0
+        val fare = pc?.computeEffectiveFare(activeRouteDistanceKm, dhKm)
+        activeCalculatedFare = fare
+        val stopsTag = if (sequentialWaypoints.isNotEmpty()) " • ${sequentialWaypoints.size} stop(s)" else ""
+        if (fare != null && fare > 0.0) {
+            activeQuoteBanner?.text = "Local Road: ${"%.2f".format(activeRouteDistanceKm)} km (~${activeRouteDurationMin.toInt()} min)$stopsTag • Fare: PHP ${"%.2f".format(fare)}"
+            if (!userEditedFeeManually) {
+                suppressFeeWatcher = true
+                draftOfferFee = "%.2f".format(fare)
+                activeFeeInput?.setText(draftOfferFee)
+                suppressFeeWatcher = false
+            }
+        } else {
+            activeQuoteBanner?.text = "Local Road: ${"%.2f".format(activeRouteDistanceKm)} km (~${activeRouteDurationMin.toInt()} min) • Pricing class unavailable"
+        }
+    }
+
+    private fun recalculateRouteAndFare(user: AuthenticatedUser) {
+        routeCalcJob?.cancel()
+        if (selectedVerticalKey == "skills_marketplace") {
+            activeRoutePoints = emptyList()
+            activeRouteDistanceKm = 0.0
+            activeRouteDurationMin = 0.0
+            applyFareFromSuperAdminRules()
+            refreshCustomerMapLayers(user)
+            return
+        }
+        val dLat = activeDropoffLat
+        val dLng = activeDropoffLng
+        if (dLat == null || dLng == null) {
+            activeRoutePoints = emptyList()
+            activeRouteDistanceKm = 0.0
+            activeRouteDurationMin = 0.0
+            applyFareFromSuperAdminRules()
+            refreshCustomerMapLayers(user)
+            return
+        }
+        activeQuoteBanner?.text = "Calculating local-road route & fare..."
+        val wpsSnapshot = sequentialWaypoints.toList()
+        routeCalcJob = uiScope.launch {
+            val res = AlistoRoutingEngine.computeLocalRoute(
+                originLat = activeOriginLat,
+                originLng = activeOriginLng,
+                waypoints = wpsSnapshot,
+                destLat = dLat,
+                destLng = dLng
+            )
+            activeRoutePoints = res.points
+            activeRouteDistanceKm = res.distanceKm
+            activeRouteDurationMin = res.durationMin
+            applyFareFromSuperAdminRules()
+            refreshCustomerMapLayers(user)
+        }
     }
 
     private fun startLiveGpsOnMap(forceCenter: Boolean, snapOriginToGps: Boolean) {
@@ -1083,7 +1233,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 activePickupField?.setText(rev)
                 suppressAutocomplete = false
                 customerMapView?.updateUserLocation(lat, lng, acc, flyTo = true)
-                AlistoKernelClient.currentSessionUser?.let { refreshCustomerMapLayers(it) }
+                AlistoKernelClient.currentSessionUser?.let { recalculateRouteAndFare(it) }
                 Toast.makeText(this@CustomerMainActivity, "Pickup set to GPS (±${acc.toInt()}m)", Toast.LENGTH_SHORT).show()
             }
         } else {

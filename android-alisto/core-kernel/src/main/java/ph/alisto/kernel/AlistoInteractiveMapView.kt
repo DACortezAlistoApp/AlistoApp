@@ -248,7 +248,7 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
           .bindPopup('<b>Drop-Off / Destination</b><br/>' + (data.dropoff.address || '')).addTo(layerGroup);
       }
 
-      if (routePts.length >= 2) L.polyline(routePts, { color: '#00f2fe', weight: 4, opacity: 0.9 }).addTo(layerGroup);
+      const snapped = (data.routePoints || []).filter(function(pt){ return Array.isArray(pt) && pt.length >= 2; }); if (snapped.length >= 2) L.polyline(snapped, { color: '#00f2fe', weight: 4.5, opacity: 0.95 }).addTo(layerGroup);
 
       (data.bookings || []).forEach(function(b) {
         L.circleMarker([b.lat, b.lng], { radius: 7, color: '#fbbf24', weight: 2, fillColor: '#f59e0b', fillOpacity: 0.9 })
@@ -277,6 +277,7 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
         dropoffAddress: String = "",
         waypoints: List<JSONObject> = emptyList(),
         bookings: List<BookingRecord> = emptyList(),
+        routePoints: List<Pair<Double, Double>> = emptyList(),
         telemetryPins: List<LiveTelemetryPin> = emptyList(),
         heatClusters: List<HeatmapCluster> = emptyList()
     ) {
@@ -292,6 +293,7 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
             })
         }
         root.put("waypoints", JSONArray().apply { waypoints.forEach { put(it) } })
+        root.put("routePoints", JSONArray().apply { routePoints.forEach { pt -> put(JSONArray().apply { put(pt.first); put(pt.second) }) } })
         root.put("bookings", JSONArray().apply {
             bookings.filter { it.status !in listOf("COMPLETED", "CANCELLED", "EXPIRED") }.forEach { b ->
                 put(JSONObject().apply {
