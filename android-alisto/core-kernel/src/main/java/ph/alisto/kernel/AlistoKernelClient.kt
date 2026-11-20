@@ -933,7 +933,8 @@ object AlistoKernelClient {
         dropoffLng: Double? = null,
         pickupNote: String = "",
         dropoffNote: String = "",
-        bookingNotes: String = ""
+        bookingNotes: String = "",
+        vehicleType: String = ""
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
