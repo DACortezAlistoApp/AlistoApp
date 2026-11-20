@@ -29,6 +29,7 @@ class CustomerMainActivity : AppCompatActivity() {
     private var showAdvancedOptions = false
 
     private var selectedVerticalKey = "skills_marketplace"
+    private var selectedVehicleType = "Motorcycle"
     private var selectedJobSubtype = "ON_SITE_SKILL"
     private var selectedServiceLabel = "Request Skills & Trades"
     private var selectedSkillCategory = "General Service"
@@ -366,13 +367,12 @@ class CustomerMainActivity : AppCompatActivity() {
     }
 
     private fun buildServiceLauncherScreen(user: AuthenticatedUser): View {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        val root = FrameLayout(this).apply {
             setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
         }
 
         val mapStage = FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 0.36f)
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         }
         val mapContainer = AlistoInteractiveMapView(this)
         customerMapView = mapContainer
@@ -401,7 +401,7 @@ class CustomerMainActivity : AppCompatActivity() {
         topHud.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#E60D1424", 24, AlistoUiKit.BORDER_LIGHT)
+            background = AlistoUiKit.frostedGlassBg(this@CustomerMainActivity, "#B80B1325", 24, "#80E2E8F0", alphaFraction = 0.74f)
             setPadding(dp(14), dp(8), dp(14), dp(8))
             elevation = dp(4).toFloat()
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) }
@@ -415,7 +415,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 textSize = 13f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); maxLines = 1
             })
         })
-        topHud.addView(AlistoUiKit.chipButton(this, "My GPS", true, "#E60D1424", AlistoUiKit.CYAN) {
+        topHud.addView(AlistoUiKit.chipButton(this, "My GPS", true, "#B80B1325", AlistoUiKit.CYAN) {
             if (!AlistoLocationTracker.hasPermission(this)) AlistoLocationTracker.requestPermission(this)
             else startLiveGpsOnMap(forceCenter = true, snapOriginToGps = false)
         }.apply { elevation = dp(4).toFloat() })
@@ -424,9 +424,21 @@ class CustomerMainActivity : AppCompatActivity() {
 
         val sheet = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            isClickable = true
+            isFocusable = true
             background = AlistoUiKit.topSheetBg(this@CustomerMainActivity, AlistoUiKit.BG_SURFACE, 24, AlistoUiKit.BORDER)
-            elevation = dp(10).toFloat()
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 0.64f)
+            elevation = dp(12).toFloat()
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                (resources.displayMetrics.heightPixels * 0.58f).toInt(),
+                Gravity.BOTTOM
+            )
+        }
+        root.post {
+            if (root.height > 0) {
+                (sheet.layoutParams as? FrameLayout.LayoutParams)?.height = (root.height * 0.58f).toInt()
+                sheet.requestLayout()
+            }
         }
         sheet.addView(AlistoUiKit.dragHandle(this))
 
@@ -534,14 +546,13 @@ class CustomerMainActivity : AppCompatActivity() {
 
     private fun buildCustomerPickupMapScreen(user: AuthenticatedUser): View {
         val needsDropoff = selectedVerticalKey != "skills_marketplace"
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        val root = FrameLayout(this).apply {
             setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
         }
 
         val mapStage = FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, (1f - sheetWeightRatio).coerceIn(0.24f, 0.86f)
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
             )
         }
         val mapContainer = AlistoInteractiveMapView(this)
@@ -557,7 +568,7 @@ class CustomerMainActivity : AppCompatActivity() {
             setPadding(dp(12), dp(12), dp(12), 0)
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP)
         }
-        topHud.addView(AlistoUiKit.chipButton(this, "← Services", true, "#E60D1424", AlistoUiKit.TEXT_PRIMARY) {
+        topHud.addView(AlistoUiKit.chipButton(this, "← Services", true, "#B80B1325", AlistoUiKit.TEXT_PRIMARY) {
             dropPinTarget = null
             bookingStep = "LAUNCHER"
             showAuthenticatedCustomerPortal()
@@ -568,11 +579,11 @@ class CustomerMainActivity : AppCompatActivity() {
         topHud.addView(TextView(this).apply {
             text = selectedServiceLabel; textSize = 12.5f; gravity = Gravity.CENTER; setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor(AlistoUiKit.CYAN))
-            background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#E60D1424", 20, AlistoUiKit.CYAN)
+            background = AlistoUiKit.frostedGlassBg(this@CustomerMainActivity, "#B80B1325", 20, AlistoUiKit.CYAN, alphaFraction = 0.74f)
             setPadding(dp(12), dp(8), dp(12), dp(8)); elevation = dp(4).toFloat(); maxLines = 1
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) }
         })
-        topHud.addView(AlistoUiKit.chipButton(this, "My GPS", true, "#E60D1424", AlistoUiKit.EMERALD) {
+        topHud.addView(AlistoUiKit.chipButton(this, "My GPS", true, "#B80B1325", AlistoUiKit.EMERALD) {
             snapPickupToCurrentGps()
         }.apply { elevation = dp(4).toFloat() })
         mapStage.addView(topHud)
@@ -588,7 +599,7 @@ class CustomerMainActivity : AppCompatActivity() {
         lateinit var confirmPinBtn: Button
         val dropPinBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#F20D1424", 16, AlistoUiKit.CYAN)
+            background = AlistoUiKit.frostedGlassBg(this@CustomerMainActivity, "#CC0B1325", 16, AlistoUiKit.CYAN, alphaFraction = 0.80f)
             setPadding(dp(12), dp(10), dp(10), dp(10))
             elevation = dp(8).toFloat()
             visibility = View.GONE
@@ -610,13 +621,17 @@ class CustomerMainActivity : AppCompatActivity() {
         mapStage.addView(dropPinBar)
         root.addView(mapStage)
 
-        // Rounded Frosted Bottom Sheet (Draggable & Collapsible without map reload)
+        // Rounded Frosted Bottom Sheet floating over full-bleed map (Draggable & Collapsible)
         val sheetWrap = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            isClickable = true
+            isFocusable = true
             background = AlistoUiKit.topSheetBg(this@CustomerMainActivity, AlistoUiKit.BG_SURFACE, 24, AlistoUiKit.BORDER)
-            elevation = dp(10).toFloat()
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, sheetWeightRatio.coerceIn(0.14f, 0.76f)
+            elevation = dp(12).toFloat()
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                (resources.displayMetrics.heightPixels * sheetWeightRatio.coerceIn(0.14f, 0.76f)).toInt(),
+                Gravity.BOTTOM
             )
         }
         val sheetDragHint = TextView(this).apply {
@@ -630,12 +645,15 @@ class CustomerMainActivity : AppCompatActivity() {
             val clamped = rawRatio.coerceIn(0.14f, 0.76f)
             sheetWeightRatio = clamped
             sheetExpanded = clamped > 0.58f
-            (mapStage.layoutParams as? LinearLayout.LayoutParams)?.weight = 1f - clamped
-            (sheetWrap.layoutParams as? LinearLayout.LayoutParams)?.weight = clamped
+            val totalH = (root.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels)
+            val sheetH = (totalH * clamped).toInt().coerceAtLeast(dp(64))
+            (sheetWrap.layoutParams as? FrameLayout.LayoutParams)?.height = sheetH
+            (dropPinBar.layoutParams as? FrameLayout.LayoutParams)?.bottomMargin = sheetH + dp(10)
             sheetDragHint.text = if (clamped <= 0.22f) "▲ Drag or tap to expand booking details" else "Drag handle to resize map"
-            mapStage.requestLayout()
             sheetWrap.requestLayout()
+            dropPinBar.requestLayout()
         }
+        root.post { applySheetRatio?.invoke(sheetWeightRatio) }
         val handleBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -683,6 +701,60 @@ class CustomerMainActivity : AppCompatActivity() {
         val sheetBody = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(2), dp(18), dp(22))
+        }
+
+        // 0. VEHICLE CLASS SELECTOR (Motorcycle / Tricycle / E-Bike) for Delivery, Errands & Local Ride
+        if (needsDropoff) {
+            val vehicleCard = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 12)
+            vehicleCard.addView(TextView(this).apply {
+                text = if (selectedVerticalKey == "ride_hailing") "Select Vehicle (Local Ride • Sub-400cc)" else "Select Vehicle (Delivery / Errands)"
+                textSize = 12f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor(AlistoUiKit.CYAN))
+                setPadding(0, 0, 0, dp(8))
+            })
+            val vehicleRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            }
+            val vehicleOptions = listOf("Motorcycle", "Tricycle", "E-Bike")
+            val vehicleBtns = mutableListOf<Pair<String, TextView>>()
+            fun refreshVehicleButtons() {
+                vehicleBtns.forEach { (vName, btn) ->
+                    val active = selectedVehicleType == vName
+                    btn.setTypeface(null, if (active) Typeface.BOLD else Typeface.NORMAL)
+                    btn.setTextColor(Color.parseColor(if (active) AlistoUiKit.BG_DEEP else AlistoUiKit.TEXT_PRIMARY))
+                    btn.background = AlistoUiKit.frostedGlassBg(
+                        this@CustomerMainActivity,
+                        fillHex = if (active) AlistoUiKit.CYAN else "#990F172A",
+                        radiusDp = 18,
+                        strokeHex = if (active) "#D9F0F9FF" else AlistoUiKit.BORDER,
+                        alphaFraction = if (active) 0.86f else 0.72f
+                    )
+                }
+            }
+            vehicleOptions.forEachIndexed { idx, vName ->
+                val btn = TextView(this).apply {
+                    text = vName
+                    gravity = Gravity.CENTER
+                    textSize = 12.5f
+                    setPadding(dp(10), dp(10), dp(10), dp(10))
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        if (idx < vehicleOptions.lastIndex) rightMargin = dp(8)
+                    }
+                    setOnClickListener {
+                        selectedVehicleType = vName
+                        userEditedFeeManually = false
+                        refreshVehicleButtons()
+                        applyFareFromSuperAdminRules()
+                    }
+                }
+                vehicleBtns.add(vName to btn)
+                vehicleRow.addView(btn)
+            }
+            refreshVehicleButtons()
+            vehicleCard.addView(vehicleRow)
+            sheetBody.addView(vehicleCard)
         }
 
         // 1. PICKUP / JOB SITE CARD (Live Autocomplete + Drop Pin + GPS + Pickup Note)
@@ -1027,7 +1099,8 @@ class CustomerMainActivity : AppCompatActivity() {
                         dropoffLng = activeDropoffLng ?: activeOriginLng,
                         pickupNote = pNote,
                         dropoffNote = dNote,
-                        bookingNotes = bNotes
+                        bookingNotes = bNotes,
+                        vehicleType = if (needsDropoff) selectedVehicleType else ""
                     )
                     res.onSuccess {
                         sequentialWaypoints.clear()
@@ -1165,7 +1238,7 @@ class CustomerMainActivity : AppCompatActivity() {
     }
 
     private fun applyFareFromSuperAdminRules() {
-        val pc = AlistoKernelClient.findPricingClass(selectedVerticalKey)
+        val pc = AlistoKernelClient.findPricingClass(selectedVerticalKey, if (selectedVerticalKey == "skills_marketplace") "" else selectedVehicleType)
         if (selectedVerticalKey == "skills_marketplace") {
             val fare = pc?.computeEffectiveFare(0.0, 0.0)
             activeCalculatedFare = fare
@@ -1200,7 +1273,7 @@ class CustomerMainActivity : AppCompatActivity() {
         val stopsTag = if (sequentialWaypoints.isNotEmpty()) " • +${sequentialWaypoints.size} stop(s)" else ""
         val cashoutTag = if (pabiliPhp > 0.0 && pabiliPhp < 500.0) " • +cash-out" else ""
         if (fare != null && fare > 0.0) {
-            activeQuoteBanner?.text = "Local Road: ${"%.2f".format(activeRouteDistanceKm)} km (~${activeRouteDurationMin.toInt()} min)$stopsTag$cashoutTag • Fare: PHP ${"%.2f".format(fare)}"
+            activeQuoteBanner?.text = "$selectedVehicleType • ${"%.2f".format(activeRouteDistanceKm)} km (~${activeRouteDurationMin.toInt()} min)$stopsTag$cashoutTag • Fare: PHP ${"%.2f".format(fare)}"
             if (!userEditedFeeManually) {
                 suppressFeeWatcher = true
                 draftOfferFee = "%.2f".format(fare)

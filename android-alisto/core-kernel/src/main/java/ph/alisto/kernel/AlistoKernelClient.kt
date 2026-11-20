@@ -942,6 +942,7 @@ object AlistoKernelClient {
             if (pickupNote.isNotBlank()) noteParts.add("[PICKUP_NOTE:${cleanTag(pickupNote)}]")
             if (dropoffNote.isNotBlank()) noteParts.add("[DROPOFF_NOTE:${cleanTag(dropoffNote)}]")
             if (bookingNotes.isNotBlank()) noteParts.add("[BOOKING_NOTE:${cleanTag(bookingNotes)}]")
+            if (vehicleType.isNotBlank()) noteParts.add("[VEHICLE:${cleanTag(vehicleType)}]")
 
             val pLat = pickupLat ?: activeUser.homeLat
             val pLng = pickupLng ?: activeUser.homeLng
@@ -1290,8 +1291,22 @@ object AlistoKernelClient {
     }
 
 
-    fun findPricingClass(verticalKey: String): ServicePricingClass? {
-        return pricingClasses.firstOrNull { it.verticalKey == verticalKey }
+    fun findPricingClass(verticalKey: String, vehicleType: String = ""): ServicePricingClass? {
+        val byVertical = pricingClasses.filter { it.verticalKey == verticalKey }
+        if (byVertical.isEmpty()) return null
+        val v = vehicleType.trim().lowercase()
+        if (v.isNotEmpty()) {
+            val tokens = when {
+                v.contains("tri") -> listOf("tricycle", "trike")
+                v.contains("bike") || v.contains("ebike") -> listOf("e-bike", "ebike", "electric")
+                else -> listOf("motorcycle", "moto", "scooter", "2w")
+            }
+            byVertical.firstOrNull { pc ->
+                val hay = "${pc.vehicleOrTradeType} ${pc.className} ${pc.classCode}".lowercase()
+                tokens.any { hay.contains(it) }
+            }?.let { return it }
+        }
+        return byVertical.firstOrNull()
     }
 
 }

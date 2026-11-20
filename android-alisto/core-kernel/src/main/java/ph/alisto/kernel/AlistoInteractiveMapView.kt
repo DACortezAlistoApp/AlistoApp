@@ -140,6 +140,7 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
     #dropPinHead { width: 20px; height: 20px; border-radius: 999px; border: 3px solid #ffffff; margin: 0 auto; box-shadow: 0 3px 10px rgba(0,0,0,0.6); }
     #dropPinStem { width: 3px; height: 14px; background: #ffffff; margin: -2px auto 0; border-radius: 2px; }
     #dropPinShadow { width: 12px; height: 5px; border-radius: 999px; background: rgba(0,0,0,0.55); margin: -2px auto 0; }
+      .leaflet-top.leaflet-right { top: 64px !important; right: 10px !important; }
   </style>
 </head>
 <body>
@@ -152,19 +153,19 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
   </div>
   <script>
     const map = L.map('map', { zoomControl: false, attributionControl: true }).setView([$centerLat, $centerLng], 15);
-    const osmDark = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, className: 'alisto-dark-tiles', attribution: '&copy; OpenStreetMap' });
     const osmLight = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' });
-    const esriDark = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, className: 'alisto-dark-tiles', attribution: 'Tiles &copy; Esri' });
+    const esriLight = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Tiles &copy; Esri' });
+    const osmDark = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, className: 'alisto-dark-tiles', attribution: '&copy; OpenStreetMap' });
     const esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Tiles &copy; Esri' });
 
     let osmErr = 0;
-    osmDark.on('tileerror', function() {
+    osmLight.on('tileerror', function() {
       osmErr++;
-      if (osmErr === 3 && map.hasLayer(osmDark)) { map.removeLayer(osmDark); esriDark.addTo(map); }
+      if (osmErr === 3 && map.hasLayer(osmLight)) { map.removeLayer(osmLight); esriLight.addTo(map); }
     });
 
-    osmDark.addTo(map);
-    L.control.layers({ 'Dark Street': osmDark, 'Esri Dark': esriDark, 'Light Street': osmLight, 'Satellite': esriSat }, null, { position: 'bottomright' }).addTo(map);
+    osmLight.addTo(map);
+    L.control.layers({ 'Light Street': osmLight, 'Esri Street': esriLight, 'Dark Street': osmDark, 'Satellite': esriSat }, null, { position: 'topright' }).addTo(map);
 
     const layerGroup = L.layerGroup().addTo(map);
     const userLocGroup = L.layerGroup().addTo(map);

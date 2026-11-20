@@ -15,10 +15,10 @@ import android.widget.TextView
 
 object AlistoUiKit {
     const val BG_DEEP = "#070A12"
-    const val BG_SURFACE = "#E30D1424"
-    const val BG_CARD = "#CC111827"
-    const val BG_INPUT = "#0B1120"
-    const val BORDER = "#3D94A3B8"
+    const val BG_SURFACE = "#C40B1325"
+    const val BG_CARD = "#AD0F172A"
+    const val BG_INPUT = "#BD0B1120"
+    const val BORDER = "#5CE2E8F0"
     const val BORDER_LIGHT = "#334155"
 
     const val CYAN = "#00F2FE"
@@ -51,20 +51,55 @@ object AlistoUiKit {
         if (strokeHex != null) setStroke(context.dp(strokeWidthDp), Color.parseColor(strokeHex))
     }
 
+    private fun applyGlassAlpha(colorInt: Int, alphaFraction: Float): Int {
+        val currentA = Color.alpha(colorInt)
+        val targetA = if (currentA < 248) currentA else (255 * alphaFraction).toInt().coerceIn(40, 245)
+        return Color.argb(targetA, Color.red(colorInt), Color.green(colorInt), Color.blue(colorInt))
+    }
+
+    fun frostedGlassBg(
+        context: Context,
+        fillHex: String,
+        radiusDp: Int = 16,
+        strokeHex: String? = BORDER,
+        strokeWidthDp: Int = 1,
+        topOnly: Boolean = false,
+        alphaFraction: Float = 0.78f
+    ): android.graphics.drawable.Drawable {
+        val r = context.dp(radiusDp).toFloat()
+        val radii = if (topOnly) floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f) else floatArrayOf(r, r, r, r, r, r, r, r)
+        val base = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(applyGlassAlpha(Color.parseColor(fillHex), alphaFraction))
+            cornerRadii = radii
+        }
+        val sheen = GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(Color.parseColor("#38FFFFFF"), Color.parseColor("#0DFFFFFF"), Color.TRANSPARENT)
+        ).apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadii = radii
+            if (strokeHex != null) {
+                setStroke(context.dp(strokeWidthDp), applyGlassAlpha(Color.parseColor(strokeHex), 0.72f))
+            }
+        }
+        return android.graphics.drawable.LayerDrawable(arrayOf(base, sheen))
+    }
+
     fun topSheetBg(
         context: Context,
         fillHex: String = BG_SURFACE,
         radiusDp: Int = 24,
         strokeHex: String = BORDER
-    ): GradientDrawable {
-        val r = context.dp(radiusDp).toFloat()
-        return GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            setColor(Color.parseColor(fillHex))
-            cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f)
-            setStroke(context.dp(1), Color.parseColor(strokeHex))
-        }
-    }
+    ): android.graphics.drawable.Drawable = frostedGlassBg(
+        context = context,
+        fillHex = fillHex,
+        radiusDp = radiusDp,
+        strokeHex = strokeHex,
+        strokeWidthDp = 1,
+        topOnly = true,
+        alphaFraction = 0.76f
+    )
 
     fun dragHandle(context: Context): View = View(context).apply {
         background = roundedBg(context, "#80CBD5E1", radiusDp = 4)
@@ -90,7 +125,7 @@ object AlistoUiKit {
         textSize = textSizeSp
         setTypeface(null, Typeface.BOLD)
         setTextColor(Color.parseColor(textHex))
-        background = roundedBg(context, fillHex, radiusDp = 24, strokeHex = strokeHex)
+        background = frostedGlassBg(context, fillHex, radiusDp = 24, strokeHex = strokeHex ?: "#99F8FAFC", alphaFraction = 0.84f)
         minHeight = context.dp(heightDp)
         minimumHeight = context.dp(heightDp)
         setPadding(context.dp(18), context.dp(10), context.dp(18), context.dp(10))
@@ -111,11 +146,12 @@ object AlistoUiKit {
         textSize = 12.5f
         setTypeface(null, if (active) Typeface.BOLD else Typeface.NORMAL)
         setTextColor(Color.parseColor(if (active) activeTextHex else TEXT_MUTED))
-        background = roundedBg(
-            context,
+        background = frostedGlassBg(
+            context = context,
             fillHex = if (active) activeFillHex else BG_CARD,
             radiusDp = 20,
-            strokeHex = if (active) activeFillHex else BORDER
+            strokeHex = if (active) "#B3F8FAFC" else BORDER,
+            alphaFraction = if (active) 0.82f else 0.70f
         )
         setPadding(context.dp(14), context.dp(9), context.dp(14), context.dp(9))
         setOnClickListener { onClick() }
@@ -172,7 +208,7 @@ object AlistoUiKit {
     fun surfaceCard(context: Context, fillHex: String = BG_CARD, strokeHex: String = BORDER, padDp: Int = 16): LinearLayout =
         LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            background = roundedBg(context, fillHex, radiusDp = 16, strokeHex = strokeHex)
+            background = frostedGlassBg(context, fillHex, radiusDp = 16, strokeHex = strokeHex, alphaFraction = 0.68f)
             setPadding(context.dp(padDp), context.dp(padDp), context.dp(padDp), context.dp(padDp))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -231,7 +267,7 @@ object AlistoUiKit {
         onSelect: (String) -> Unit
     ): LinearLayout = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
-        setBackgroundColor(Color.parseColor(BG_SURFACE))
+        background = frostedGlassBg(context, "#D40B1325", radiusDp = 0, strokeHex = "#4DE2E8F0", alphaFraction = 0.84f)
         elevation = context.dp(8).toFloat()
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dp(62))
 
