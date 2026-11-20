@@ -191,7 +191,7 @@ object AlistoUiKit {
                 addView(android.widget.ImageView(context).apply {
                     setImageResource(appIconRes)
                     scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-                    background = roundedBg(context, BG_CARD, radiusDp = 20, strokeHex = accentHex, strokeDp = 1)
+                    background = roundedBg(context, BG_CARD, radiusDp = 20, strokeHex = accentHex)
                     clipToOutline = true
                     setPadding(context.dp(4), context.dp(4), context.dp(4), context.dp(4))
                     layoutParams = LinearLayout.LayoutParams(context.dp(74), context.dp(74)).apply { bottomMargin = context.dp(12) }
