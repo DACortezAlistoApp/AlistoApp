@@ -15,10 +15,10 @@ import android.widget.TextView
 
 object AlistoUiKit {
     const val BG_DEEP = "#070A12"
-    const val BG_SURFACE = "#0D1424"
-    const val BG_CARD = "#111827"
+    const val BG_SURFACE = "#E30D1424"
+    const val BG_CARD = "#CC111827"
     const val BG_INPUT = "#0B1120"
-    const val BORDER = "#1E293B"
+    const val BORDER = "#3D94A3B8"
     const val BORDER_LIGHT = "#334155"
 
     const val CYAN = "#00F2FE"
@@ -67,8 +67,8 @@ object AlistoUiKit {
     }
 
     fun dragHandle(context: Context): View = View(context).apply {
-        background = roundedBg(context, "#475569", radiusDp = 4)
-        layoutParams = LinearLayout.LayoutParams(context.dp(42), context.dp(4)).apply {
+        background = roundedBg(context, "#80CBD5E1", radiusDp = 4)
+        layoutParams = LinearLayout.LayoutParams(context.dp(36), context.dp(4)).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             topMargin = context.dp(10)
             bottomMargin = context.dp(10)

@@ -3,8 +3,10 @@ package ph.alisto.kernel
 import android.location.Location
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -14,19 +16,21 @@ data class RoadRouteResult(
     val points: List<Pair<Double, Double>>,
     val distanceKm: Double,
     val durationMin: Double,
-    val isRoadSnapped: Boolean
+    val isRoadSnapped: Boolean,
+    val engineUsed: String = "VALHALLA"
 )
 
 object AlistoRoutingEngine {
     private val http = OkHttpClient.Builder()
-        .connectTimeout(7, TimeUnit.SECONDS)
-        .readTimeout(7, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
         .build()
+    private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
     /**
-     * Computes a road-snapped polyline chaining origin -> waypoints -> destination.
-     * Filters out motorway/tollway legs when leg metadata indicates motorways so
-     * sub-400cc motorcycles, tricycles, and e-bikes stay on local streets without counterflow.
+     * Primary: Valhalla motor_scooter (use_highways=0, use_tolls=0) for legal one-way,
+     * non-expressway sub-400cc routing across origin -> waypoints -> destination.
+     * Secondary: OSRM driving fallback. Tertiary: local street grid fallback.
      */
     suspend fun computeLocalRoute(
         originLat: Double,
@@ -46,111 +50,119 @@ object AlistoRoutingEngine {
                 add(destLat to destLng)
             }
         }
-
         if (stops.size < 2) {
-            return@withContext RoadRouteResult(
-                points = stops,
-                distanceKm = 0.0,
-                durationMin = 0.0,
-                isRoadSnapped = false
-            )
+            return@withContext RoadRouteResult(stops, 0.0, 0.0, false, "NONE")
         }
 
-        try {
-            val coordPath = stops.joinToString(";") { (lat, lng) -> "$lng,$lat" }
-            val url = "https://router.project-osrm.org/route/v1/driving/$coordPath?overview=full&geometries=geojson&steps=true"
+        tryValhallaMotorScooter(stops)?.let { return@withContext it }
+        tryOsrmFallback(stops)?.let { return@withContext it }
+        buildGridFallback(stops)
+    }
+
+    private fun tryValhallaMotorScooter(stops: List<Pair<Double, Double>>): RoadRouteResult? {
+        return try {
+            val locs = JSONArray()
+            stops.forEach { (lat, lng) ->
+                locs.put(JSONObject().put("lat", lat).put("lon", lng).put("type", "break"))
+            }
+            val payload = JSONObject()
+                .put("locations", locs)
+                .put("costing", "motor_scooter")
+                .put("costing_options", JSONObject().put(
+                    "motor_scooter",
+                    JSONObject()
+                        .put("use_highways", 0.0)
+                        .put("use_tolls", 0.0)
+                        .put("use_ferry", 0.0)
+                        .put("top_speed", 60)
+                ))
+                .put("units", "kilometers")
+
             val req = Request.Builder()
-                .url(url)
-                .header("User-Agent", "AlistoNetworkPH/4.0 (LocalRoadRouting; avoid=ht)")
+                .url("https://valhalla1.openstreetmap.de/route")
+                .header("User-Agent", "AlistoNetworkPH/4.0 (Sub400ccLocalRoad)")
+                .post(payload.toString().toRequestBody(jsonMedia))
                 .build()
 
             http.newCall(req).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val root = JSONObject(resp.body?.string().orEmpty())
-                    val routes = root.optJSONArray("routes")
-                    if (routes != null && routes.length() > 0) {
-                        val r0 = routes.getJSONObject(0)
-                        val geom = r0.optJSONObject("geometry")
-                        val coords = geom?.optJSONArray("coordinates")
-                        val poly = mutableListOf<Pair<Double, Double>>()
-                        if (coords != null) {
-                            for (i in 0 until coords.length()) {
-                                val pt = coords.getJSONArray(i)
-                                if (pt.length() >= 2) {
-                                    poly.add(pt.getDouble(1) to pt.getDouble(0))
-                                }
-                            }
-                        }
-
-                        // Exclude motorway/expressway steps when OSRM flags highway/tollway classes
-                        var filteredMeters = 0.0
-                        var filteredSec = 0.0
-                        var excludedAny = false
-                        val legs = r0.optJSONArray("legs")
-                        if (legs != null) {
-                            for (lIdx in 0 until legs.length()) {
-                                val steps = legs.getJSONObject(lIdx).optJSONArray("steps")
-                                if (steps != null && steps.length() > 0) {
-                                    for (sIdx in 0 until steps.length()) {
-                                        val st = steps.getJSONObject(sIdx)
-                                        val mClass = st.optString("maneuver", "")
-                                        val name = st.optString("name", "").lowercase()
-                                        val ref = st.optString("ref", "").lowercase()
-                                        val isTollOrExpressway = name.contains("expressway") ||
-                                            name.contains("toll") ||
-                                            ref.matches(Regex("^(nlex|slex|sctex|tplex|skyway|cavitex|calax|mcx).*")) ||
-                                            mClass.contains("motorway")
-                                        if (isTollOrExpressway) {
-                                            excludedAny = true
-                                        } else {
-                                            filteredMeters += st.optDouble("distance", 0.0)
-                                            filteredSec += st.optDouble("duration", 0.0)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        val distKm = if (excludedAny && filteredMeters > 0.0) {
-                            filteredMeters / 1000.0
-                        } else {
-                            r0.optDouble("distance", 0.0) / 1000.0
-                        }
-                        val durMin = if (excludedAny && filteredSec > 0.0) {
-                            filteredSec / 60.0
-                        } else {
-                            r0.optDouble("duration", 0.0) / 60.0
-                        }
-
-                        if (poly.size >= 2) {
-                            return@withContext RoadRouteResult(
-                                points = poly,
-                                distanceKm = (distKm * 100.0).roundToInt() / 100.0,
-                                durationMin = (durMin * 10.0).roundToInt() / 10.0,
-                                isRoadSnapped = true
-                            )
-                        }
+                if (!resp.isSuccessful) return null
+                val trip = JSONObject(resp.body?.string().orEmpty()).optJSONObject("trip") ?: return null
+                val legs = trip.optJSONArray("legs") ?: return null
+                val poly = mutableListOf<Pair<Double, Double>>()
+                for (i in 0 until legs.length()) {
+                    val shape = legs.getJSONObject(i).optString("shape", "")
+                    if (shape.isNotBlank()) {
+                        val decoded = decodePolyline6(shape)
+                        if (poly.isNotEmpty() && decoded.isNotEmpty()) poly.addAll(decoded.drop(1))
+                        else poly.addAll(decoded)
                     }
                 }
+                val summary = trip.optJSONObject("summary") ?: return null
+                val km = (summary.optDouble("length", 0.0) * 100.0).roundToInt() / 100.0
+                val min = ((summary.optDouble("time", 0.0) / 60.0) * 10.0).roundToInt() / 10.0
+                if (poly.size >= 2 && km > 0.0) RoadRouteResult(poly, km, min, true, "VALHALLA") else null
             }
         } catch (_: Exception) {
+            null
         }
+    }
 
-        // Local street grid fallback if offline/throttled (1.35x street factor over straight distance)
+    private fun tryOsrmFallback(stops: List<Pair<Double, Double>>): RoadRouteResult? {
+        return try {
+            val coordPath = stops.joinToString(";") { (lat, lng) -> "$lng,$lat" }
+            val url = "https://router.project-osrm.org/route/v1/driving/$coordPath?overview=full&geometries=geojson"
+            val req = Request.Builder()
+                .url(url)
+                .header("User-Agent", "AlistoNetworkPH/4.0 (LocalRoadFallback)")
+                .build()
+            http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val routes = JSONObject(resp.body?.string().orEmpty()).optJSONArray("routes") ?: return null
+                if (routes.length() == 0) return null
+                val r0 = routes.getJSONObject(0)
+                val coords = r0.optJSONObject("geometry")?.optJSONArray("coordinates") ?: return null
+                val poly = mutableListOf<Pair<Double, Double>>()
+                for (i in 0 until coords.length()) {
+                    val pt = coords.getJSONArray(i)
+                    if (pt.length() >= 2) poly.add(pt.getDouble(1) to pt.getDouble(0))
+                }
+                val km = ((r0.optDouble("distance", 0.0) / 1000.0) * 100.0).roundToInt() / 100.0
+                val min = ((r0.optDouble("duration", 0.0) / 60.0) * 10.0).roundToInt() / 10.0
+                if (poly.size >= 2) RoadRouteResult(poly, km, min, true, "OSRM") else null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun buildGridFallback(stops: List<Pair<Double, Double>>): RoadRouteResult {
         var totalKm = 0.0
-        val gridPts = mutableListOf<Pair<Double, Double>>()
+        val pts = mutableListOf<Pair<Double, Double>>()
         for (i in 0 until stops.lastIndex) {
-            val a = stops[i]
-            val b = stops[i + 1]
+            val a = stops[i]; val b = stops[i + 1]
             val d = FloatArray(1)
             Location.distanceBetween(a.first, a.second, b.first, b.second, d)
             totalKm += (d[0] / 1000.0) * 1.35
-            gridPts.add(a)
-            gridPts.add(a.first to b.second)
+            pts.add(a); pts.add(a.first to b.second)
         }
-        gridPts.add(stops.last())
-        val roundedKm = (totalKm * 100.0).roundToInt() / 100.0
-        val estMin = ((roundedKm / 24.0) * 60.0 * 10.0).roundToInt() / 10.0
-        RoadRouteResult(points = gridPts, distanceKm = roundedKm, durationMin = estMin, isRoadSnapped = false)
+        pts.add(stops.last())
+        val km = (totalKm * 100.0).roundToInt() / 100.0
+        val min = ((km / 24.0) * 60.0 * 10.0).roundToInt() / 10.0
+        return RoadRouteResult(pts, km, min, false, "GRID")
+    }
+
+    private fun decodePolyline6(encoded: String): List<Pair<Double, Double>> {
+        val result = ArrayList<Pair<Double, Double>>()
+        var index = 0; var lat = 0; var lng = 0
+        while (index < encoded.length) {
+            var b: Int; var shift = 0; var res = 0
+            do { b = encoded[index++].code - 63; res = res or ((b and 0x1f) shl shift); shift += 5 } while (b >= 0x20 && index < encoded.length)
+            lat += if ((res and 1) != 0) (res shr 1).inv() else (res shr 1)
+            shift = 0; res = 0
+            do { b = encoded[index++].code - 63; res = res or ((b and 0x1f) shl shift); shift += 5 } while (b >= 0x20 && index < encoded.length)
+            lng += if ((res and 1) != 0) (res shr 1).inv() else (res shr 1)
+            result.add((lat / 1e6) to (lng / 1e6))
+        }
+        return result
     }
 }

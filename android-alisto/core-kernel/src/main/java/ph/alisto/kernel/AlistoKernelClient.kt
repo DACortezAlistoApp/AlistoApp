@@ -75,9 +75,15 @@ data class ServicePricingClass(
     val economyMultiplier: Double,
     val arrivalCancellationFee: Double,
     val ratePer500m: Double = 0.0,
-    val deadheadPerKmRate: Double = 2.0
+    val deadheadPerKmRate: Double = 2.0,
+    val stopFeePhp: Double = 25.0
 ) {
-    fun computeEffectiveFare(distanceKm: Double = 0.0, deadheadKm: Double = 0.0): Double {
+    fun computeEffectiveFare(
+        distanceKm: Double = 0.0,
+        deadheadKm: Double = 0.0,
+        extraStops: Int = 0,
+        pabiliGoodsPhp: Double = 0.0
+    ): Double {
         val mult = economyMultiplier.coerceAtLeast(0.1)
         if (verticalKey == "skills_marketplace") {
             return Math.round(baseOrCalloutFee * mult * 100.0) / 100.0
@@ -95,7 +101,13 @@ data class ServicePricingClass(
             baseOrCalloutFee + (extraKm * perKmRate)
         }
         val dhCharge = if (dh > 0.0) deadheadPerKmRate * dh else 0.0
-        return Math.round((tripCharge + dhCharge) * mult * 100.0) / 100.0
+        val stopCharge = extraStops.coerceAtLeast(0) * stopFeePhp
+        val cashoutAllowance = when {
+            pabiliGoodsPhp <= 0.0 || pabiliGoodsPhp >= 500.0 -> 0.0
+            pabiliGoodsPhp <= 250.0 -> 10.0
+            else -> 15.0
+        }
+        return Math.round(((tripCharge + dhCharge + stopCharge) * mult + cashoutAllowance) * 100.0) / 100.0
     }
 }
 
@@ -419,7 +431,8 @@ object AlistoKernelClient {
                         economyMultiplier = o.optDouble("economy_multiplier", 1.0),
                         arrivalCancellationFee = o.optDouble("arrival_cancellation_fee", 100.0),
                         ratePer500m = o.optDouble("rate_per_500m", 0.0),
-                        deadheadPerKmRate = if (o.isNull("deadhead_per_km_rate") || !o.has("deadhead_per_km_rate")) 2.0 else o.optDouble("deadhead_per_km_rate", 2.0)
+                        deadheadPerKmRate = if (o.isNull("deadhead_per_km_rate") || !o.has("deadhead_per_km_rate")) 2.0 else o.optDouble("deadhead_per_km_rate", 2.0),
+                        stopFeePhp = if (o.isNull("stop_fee_php") || !o.has("stop_fee_php")) 25.0 else o.optDouble("stop_fee_php", 25.0)
                     )
                 )
             }

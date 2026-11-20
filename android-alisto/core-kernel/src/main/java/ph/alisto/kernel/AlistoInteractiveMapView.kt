@@ -205,7 +205,7 @@ class AlistoInteractiveMapView(context: Context) : FrameLayout(context) {
       L.circle([loc.lat, loc.lng], { radius: acc, color: '#38bdf8', weight: 1, fillColor: '#2563eb', fillOpacity: 0.16, interactive: false }).addTo(userLocGroup);
       const gpsIcon = L.divIcon({ className: 'gps-icon', html: '<div class="gps-wrap"><div class="gps-pulse"></div><div class="gps-core"></div></div>', iconSize: [24, 24], iconAnchor: [12, 12] });
       L.marker([loc.lat, loc.lng], { icon: gpsIcon, zIndexOffset: 900 }).bindPopup('<b>Your Live GPS</b> (&plusmn;' + Math.round(acc) + 'm)').addTo(userLocGroup);
-      if (loc.flyTo) map.flyTo([loc.lat, loc.lng], 16, { duration: 0.6 });
+      if (loc.flyTo && !dropPinActive) map.flyTo([loc.lat, loc.lng], 16, { duration: 0.6 });
     };
 
     if (${if (enableTapToPin) "true" else "false"}) {

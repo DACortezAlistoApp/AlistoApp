@@ -25,6 +25,7 @@ class CustomerMainActivity : AppCompatActivity() {
     private var bookingStep = "LAUNCHER"    // LAUNCHER -> PICKUP_MAP
     private var activityFilter = "ACTIVE"   // ACTIVE, ALL
     private var sheetExpanded = false
+    private var sheetWeightRatio = 0.50f
     private var showAdvancedOptions = false
 
     private var selectedVerticalKey = "skills_marketplace"
@@ -373,6 +374,7 @@ class CustomerMainActivity : AppCompatActivity() {
         val mapStage = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 0.36f)
         }
+        var applySheetRatio: ((Float) -> Unit)? = null
         val mapContainer = AlistoInteractiveMapView(this)
         customerMapView = mapContainer
         mapStage.addView(
@@ -540,7 +542,7 @@ class CustomerMainActivity : AppCompatActivity() {
 
         val mapStage = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, if (sheetExpanded) 0.34f else 0.44f
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, (1f - sheetWeightRatio).coerceIn(0.24f, 0.86f)
             )
         }
         val mapContainer = AlistoInteractiveMapView(this)
@@ -602,25 +604,78 @@ class CustomerMainActivity : AppCompatActivity() {
                 dropPinTarget = null
                 customerMapView?.setDropPinMode(false)
                 visibility = View.GONE
+                applySheetRatio?.invoke(0.50f)
             })
         }
         mapStage.addView(dropPinBar)
         root.addView(mapStage)
 
-        // Rounded Bottom Sheet
+        // Rounded Frosted Bottom Sheet (Draggable & Collapsible without map reload)
         val sheetWrap = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = AlistoUiKit.topSheetBg(this@CustomerMainActivity, AlistoUiKit.BG_SURFACE, 24, AlistoUiKit.BORDER)
             elevation = dp(10).toFloat()
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, if (sheetExpanded) 0.66f else 0.56f
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, sheetWeightRatio.coerceIn(0.14f, 0.76f)
             )
         }
-        sheetWrap.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
-            setOnClickListener { sheetExpanded = !sheetExpanded; showAuthenticatedCustomerPortal() }
+        val sheetDragHint = TextView(this).apply {
+            text = if (sheetWeightRatio <= 0.22f) "▲ Drag or tap to expand booking details" else "Drag handle to resize map"
+            textSize = 10.5f
+            setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED))
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dp(6))
+        }
+        applySheetRatio = { rawRatio ->
+            val clamped = rawRatio.coerceIn(0.14f, 0.76f)
+            sheetWeightRatio = clamped
+            sheetExpanded = clamped > 0.58f
+            (mapStage.layoutParams as? LinearLayout.LayoutParams)?.weight = 1f - clamped
+            (sheetWrap.layoutParams as? LinearLayout.LayoutParams)?.weight = clamped
+            sheetDragHint.text = if (clamped <= 0.22f) "▲ Drag or tap to expand booking details" else "Drag handle to resize map"
+            mapStage.requestLayout()
+            sheetWrap.requestLayout()
+        }
+        val handleBar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(0, dp(2), 0, dp(2))
             addView(AlistoUiKit.dragHandle(this@CustomerMainActivity))
-        })
+            addView(sheetDragHint)
+        }
+        var dragStartRawY = 0f
+        var dragStartRatio = sheetWeightRatio
+        var movedEnough = false
+        handleBar.setOnTouchListener { _, ev ->
+            when (ev.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    dragStartRawY = ev.rawY
+                    dragStartRatio = sheetWeightRatio
+                    movedEnough = false
+                    true
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val dy = ev.rawY - dragStartRawY
+                    if (kotlin.math.abs(dy) > dp(6)) movedEnough = true
+                    val totalH = (root.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels).toFloat()
+                    applySheetRatio?.invoke(dragStartRatio - (dy / totalH))
+                    true
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                    if (!movedEnough) {
+                        val next = when {
+                            sheetWeightRatio <= 0.24f -> 0.50f
+                            sheetWeightRatio >= 0.62f -> 0.16f
+                            else -> 0.72f
+                        }
+                        applySheetRatio?.invoke(next)
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+        sheetWrap.addView(handleBar)
 
         val sheetScroll = ScrollView(this).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
@@ -656,6 +711,7 @@ class CustomerMainActivity : AppCompatActivity() {
             pendingPinLng = startLng
             dropPinPreviewText.text = "$label — move map, then tap Confirm"
             dropPinBar.visibility = View.VISIBLE
+            applySheetRatio?.invoke(0.15f)
             customerMapView?.recenter(startLat, startLng, 16)
             customerMapView?.setDropPinMode(true, label, colorHex) { lat, lng ->
                 pendingPinLat = lat
@@ -715,6 +771,7 @@ class CustomerMainActivity : AppCompatActivity() {
             dropPinTarget = null
             customerMapView?.setDropPinMode(false)
             dropPinBar.visibility = View.GONE
+            applySheetRatio?.invoke(0.50f)
             recalculateRouteAndFare(user)
         }
 
@@ -873,6 +930,14 @@ class CustomerMainActivity : AppCompatActivity() {
         })
 
         val errandCostInput = AlistoUiKit.inputField(this, "0", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, draftErrandGoods)
+        errandCostInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                draftErrandGoods = s?.toString().orEmpty()
+                applyFareFromSuperAdminRules()
+            }
+        })
         val deadheadKmInput = AlistoUiKit.inputField(this, "0", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, draftDeadheadKm)
         deadheadKmInput.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -1129,11 +1194,13 @@ class CustomerMainActivity : AppCompatActivity() {
             return
         }
         val dhKm = draftDeadheadKm.toDoubleOrNull() ?: 0.0
-        val fare = pc?.computeEffectiveFare(activeRouteDistanceKm, dhKm)
+        val pabiliPhp = draftErrandGoods.toDoubleOrNull() ?: 0.0
+        val fare = pc?.computeEffectiveFare(activeRouteDistanceKm, dhKm, sequentialWaypoints.size, pabiliPhp)
         activeCalculatedFare = fare
-        val stopsTag = if (sequentialWaypoints.isNotEmpty()) " • ${sequentialWaypoints.size} stop(s)" else ""
+        val stopsTag = if (sequentialWaypoints.isNotEmpty()) " • +${sequentialWaypoints.size} stop(s)" else ""
+        val cashoutTag = if (pabiliPhp > 0.0 && pabiliPhp < 500.0) " • +cash-out" else ""
         if (fare != null && fare > 0.0) {
-            activeQuoteBanner?.text = "Local Road: ${"%.2f".format(activeRouteDistanceKm)} km (~${activeRouteDurationMin.toInt()} min)$stopsTag • Fare: PHP ${"%.2f".format(fare)}"
+            activeQuoteBanner?.text = "Local Road: ${"%.2f".format(activeRouteDistanceKm)} km (~${activeRouteDurationMin.toInt()} min)$stopsTag$cashoutTag • Fare: PHP ${"%.2f".format(fare)}"
             if (!userEditedFeeManually) {
                 suppressFeeWatcher = true
                 draftOfferFee = "%.2f".format(fare)
@@ -1185,15 +1252,23 @@ class CustomerMainActivity : AppCompatActivity() {
 
     private fun startLiveGpsOnMap(forceCenter: Boolean, snapOriginToGps: Boolean) {
         if (!AlistoLocationTracker.hasPermission(this)) return
+        var pendingForceCenter = forceCenter
+        var pendingSnapOrigin = snapOriginToGps
         AlistoLocationTracker.startLiveUpdates(this) { lat, lng, acc ->
-            val shouldFly = forceCenter || !hasAutoCenteredGps
+            val inPinMode = dropPinTarget != null
+            val shouldFly = !inPinMode && (pendingForceCenter || !hasAutoCenteredGps)
             customerMapView?.updateUserLocation(lat, lng, acc, flyTo = shouldFly)
-            if (shouldFly) hasAutoCenteredGps = true
+            if (shouldFly) {
+                hasAutoCenteredGps = true
+                pendingForceCenter = false
+            }
 
-            if (snapOriginToGps || !originPinnedManually) {
+            val doSnap = !inPinMode && pendingSnapOrigin
+            if (!inPinMode && (doSnap || !originPinnedManually)) {
                 activeOriginLat = lat
                 activeOriginLng = lng
-                if (snapOriginToGps) {
+                if (doSnap) {
+                    pendingSnapOrigin = false
                     uiScope.launch {
                         val rev = withContext(Dispatchers.IO) {
                             AlistoSpatialEngine.reverseGeocodePin(this@CustomerMainActivity, lat, lng)
