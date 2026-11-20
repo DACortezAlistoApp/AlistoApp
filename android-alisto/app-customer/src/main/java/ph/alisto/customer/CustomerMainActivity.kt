@@ -30,6 +30,7 @@ class CustomerMainActivity : AppCompatActivity() {
 
     private var selectedVerticalKey = "skills_marketplace"
     private var selectedVehicleType = "Motorcycle"
+    private var selectedPaymentMethod = "CASH"
     private var selectedJobSubtype = "ON_SITE_SKILL"
     private var selectedServiceLabel = "Request Skills & Trades"
     private var selectedSkillCategory = "General Service"
@@ -336,6 +337,7 @@ class CustomerMainActivity : AppCompatActivity() {
 
         when (activeTab) {
             "ACTIVITY" -> contentHost.addView(buildCustomerActivityTab(user))
+            "WALLET" -> contentHost.addView(buildCustomerWalletTab(user))
             "ACCOUNT" -> contentHost.addView(buildCustomerAccountTab(user))
             else -> {
                 if (bookingStep == "LAUNCHER") contentHost.addView(buildServiceLauncherScreen(user))
@@ -352,6 +354,7 @@ class CustomerMainActivity : AppCompatActivity() {
             tabs = listOf(
                 Triple("BOOK", "◎", "Home"),
                 Triple("ACTIVITY", "☰", if (myActiveCount > 0) "Activity ($myActiveCount)" else "Activity"),
+                Triple("WALLET", "₱", "Wallet"),
                 Triple("ACCOUNT", "●", "Account")
             ),
             activeKey = activeTab,
@@ -1053,6 +1056,84 @@ class CustomerMainActivity : AppCompatActivity() {
             })
         }
 
+        // 4B. PAYMENT METHOD SELECTOR (Optional Wallet Credits for Good Standing; Mandatory for Delinquent)
+        if (user.isDelinquent) selectedPaymentMethod = "WALLET_CREDITS"
+        val payCard = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 12)
+        payCard.addView(TextView(this).apply {
+            text = if (user.isDelinquent) {
+                "Payment Method • Mandatory Prepaid Wallet Credits (Delinquent Standing)"
+            } else {
+                "Payment Method • Balance: PHP ${"%.2f".format(user.creditBalance)}"
+            }
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(if (user.isDelinquent) AlistoUiKit.GOLD_SOFT else AlistoUiKit.CYAN))
+            setPadding(0, 0, 0, dp(8))
+        })
+        val payRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        }
+        val payOptions = listOf("CASH" to "Cash to Pro", "WALLET_CREDITS" to "Wallet Credits")
+        val payBtns = mutableListOf<Pair<String, TextView>>()
+        fun refreshPayButtons() {
+            payBtns.forEach { (code, btn) ->
+                val active = selectedPaymentMethod == code
+                val lockedOut = user.isDelinquent && code == "CASH"
+                btn.alpha = if (lockedOut) 0.42f else 1.0f
+                btn.setTypeface(null, if (active) Typeface.BOLD else Typeface.NORMAL)
+                btn.setTextColor(Color.parseColor(if (active) AlistoUiKit.BG_DEEP else AlistoUiKit.TEXT_PRIMARY))
+                btn.background = AlistoUiKit.frostedGlassBg(
+                    this@CustomerMainActivity,
+                    fillHex = if (active) AlistoUiKit.GOLD_ACCENT else "#A6164CA8",
+                    radiusDp = 18,
+                    strokeHex = if (active) "#E6FEF08A" else AlistoUiKit.BORDER,
+                    alphaFraction = if (active) 0.90f else 0.72f
+                )
+            }
+        }
+        payOptions.forEachIndexed { idx, (code, label) ->
+            val btn = TextView(this).apply {
+                text = label
+                gravity = Gravity.CENTER
+                textSize = 12.5f
+                setPadding(dp(10), dp(10), dp(10), dp(10))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    if (idx == 0) rightMargin = dp(8)
+                }
+                setOnClickListener {
+                    if (user.isDelinquent && code == "CASH") {
+                        Toast.makeText(
+                            this@CustomerMainActivity,
+                            "Delinquent accounts must pay with prepaid Wallet Credits. Top up in the Wallet tab.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return@setOnClickListener
+                    }
+                    selectedPaymentMethod = code
+                    refreshPayButtons()
+                }
+            }
+            payBtns.add(code to btn)
+            payRow.addView(btn)
+        }
+        refreshPayButtons()
+        payCard.addView(payRow)
+        if (user.isDelinquent || user.creditBalance < 200.0) {
+            payCard.addView(TextView(this).apply {
+                text = "Need credits? Tap here to open Wallet & Top Up →"
+                textSize = 11.5f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor(AlistoUiKit.GOLD_SOFT))
+                setPadding(dp(2), dp(8), dp(2), 0)
+                setOnClickListener {
+                    activeTab = "WALLET"
+                    showAuthenticatedCustomerPortal()
+                }
+            })
+        }
+        sheetBody.addView(payCard)
+
         // 5. PRIMARY SUBMIT CTA
         sheetBody.addView(
             AlistoUiKit.pillButton(this, "Confirm & Broadcast Request", AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP, "#FEF08A", heightDp = 50, textSizeSp = 15f) {
@@ -1100,7 +1181,8 @@ class CustomerMainActivity : AppCompatActivity() {
                         pickupNote = pNote,
                         dropoffNote = dNote,
                         bookingNotes = bNotes,
-                        vehicleType = if (needsDropoff) selectedVehicleType else ""
+                        vehicleType = if (needsDropoff) selectedVehicleType else "",
+                        paymentMethod = if (user.isDelinquent) "WALLET_CREDITS" else selectedPaymentMethod
                     )
                     res.onSuccess {
                         sequentialWaypoints.clear()
@@ -1445,6 +1527,197 @@ class CustomerMainActivity : AppCompatActivity() {
 
         scroll.addView(container)
         return scroll
+    }
+
+    private fun buildCustomerWalletTab(user: AuthenticatedUser): View {
+        val payInfo = AlistoKernelClient.currentPaymentModeInfo
+        val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP)) }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(22), dp(18), dp(24))
+        }
+
+        container.addView(TextView(this).apply {
+            text = "Customer Wallet"; textSize = 22f; setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); setPadding(0, 0, 0, dp(14))
+        })
+
+        val heroCard = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.GOLD_ACCENT, padDp = 20)
+        heroCard.addView(TextView(this).apply {
+            text = "AVAILABLE PREPAID CREDITS"; textSize = 11f; setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(AlistoUiKit.GOLD_SOFT))
+        })
+        heroCard.addView(TextView(this).apply {
+            text = "PHP ${"%.2f".format(user.creditBalance)}"
+            textSize = 30f; setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+            setPadding(0, dp(4), 0, dp(10))
+        })
+        heroCard.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(AlistoUiKit.badgePill(this@CustomerMainActivity, "Escrow: PHP ${"%.2f".format(user.heldCredits)}", AlistoUiKit.BG_DEEP, AlistoUiKit.GOLD_SOFT).apply {
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) }
+            })
+            addView(AlistoUiKit.badgePill(
+                this@CustomerMainActivity,
+                if (user.isDelinquent) "PREPAID REQUIRED" else "GOOD STANDING",
+                if (user.isDelinquent) "#7F1D1D" else "#064E3B",
+                if (user.isDelinquent) "#FCA5A5" else "#34D399"
+            ))
+        })
+        if (user.commissionArrearsPhp > 0.0) {
+            heroCard.addView(TextView(this).apply {
+                text = "Unpaid No-Show Arrears: PHP ${"%.2f".format(user.commissionArrearsPhp)} (auto-settled upon next top-up)"
+                textSize = 12f; setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor("#FCA5A5")); setPadding(0, dp(10), 0, 0)
+            })
+        } else {
+            heroCard.addView(TextView(this).apply {
+                text = if (user.isDelinquent) {
+                    "Delinquent standing active: top up credits to pay contractors across Skills, Delivery, Errands & Local Rides."
+                } else {
+                    "Optional cashless credits: pay contractors across Skills, Delivery, Errands & Local Rides."
+                }
+                textSize = 12f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(10), 0, 0)
+            })
+        }
+        container.addView(heroCard)
+
+        val modeSuffix = if (payInfo.paymentMode == "MANUAL") "(Manual Ref)" else "(PayMongo QR Ph)"
+        container.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+            addView(AlistoUiKit.pillButton(this@CustomerMainActivity, "+PHP 200", AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP, "#FEF08A", heightDp = 46) {
+                initiateCustomerPaymentFlow(200.0)
+            }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) } })
+            addView(AlistoUiKit.pillButton(this@CustomerMainActivity, "+PHP 500", AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP, "#FEF08A", heightDp = 46) {
+                initiateCustomerPaymentFlow(500.0)
+            }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
+        })
+
+        container.addView(AlistoUiKit.pillButton(
+            this, "Custom Top-Up Amount $modeSuffix", AlistoUiKit.BG_CARD, AlistoUiKit.GOLD_SOFT, AlistoUiKit.GOLD_ACCENT, heightDp = 46
+        ) {
+            val amtInput = AlistoUiKit.inputField(this, "e.g. 300", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL)
+            val box = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(14), dp(20), dp(6))
+                addView(AlistoUiKit.labeledField(this@CustomerMainActivity, "Top-Up Amount (PHP)", amtInput, 4))
+            }
+            AlertDialog.Builder(this)
+                .setTitle("Custom Wallet Top-Up").setView(box)
+                .setPositiveButton("Continue") { _, _ ->
+                    val amt = amtInput.text.toString().toDoubleOrNull() ?: 0.0
+                    if (amt < 20.0) Toast.makeText(this, "Minimum top-up is PHP 20.00", Toast.LENGTH_LONG).show()
+                    else initiateCustomerPaymentFlow(amt)
+                }.setNegativeButton("Cancel", null).show()
+        }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(18) } })
+
+        container.addView(TextView(this).apply {
+            text = "Recent Top-Up Transactions"; textSize = 15f; setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); setPadding(0, 0, 0, dp(8))
+        })
+        if (AlistoKernelClient.paymentTransactions.isEmpty()) {
+            val c = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 14)
+            c.addView(TextView(this).apply { text = "No top-up transactions recorded yet."; textSize = 13f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)) })
+            container.addView(c)
+        } else {
+            AlistoKernelClient.paymentTransactions.take(8).forEach { tx ->
+                val c = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 14)
+                val (sBg, sFg) = AlistoUiKit.statusColors(tx.status)
+                c.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                    addView(TextView(this@CustomerMainActivity).apply {
+                        text = "${tx.txRef}
+${tx.purpose} • PHP ${"%.2f".format(tx.amountPhp)}"
+                        textSize = 13f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    })
+                    addView(AlistoUiKit.badgePill(this@CustomerMainActivity, tx.status, sBg, sFg))
+                })
+                container.addView(c)
+            }
+        }
+
+        container.addView(TextView(this).apply {
+            text = "Wallet Credit Ledger"; textSize = 15f; setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); setPadding(0, dp(10), 0, dp(8))
+        })
+        if (AlistoKernelClient.ledgerHistory.isEmpty()) {
+            val c = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 14)
+            c.addView(TextView(this).apply { text = "No credit ledger movements yet."; textSize = 13f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)) })
+            container.addView(c)
+        } else {
+            AlistoKernelClient.ledgerHistory.take(12).forEach { entry ->
+                val c = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 12)
+                c.addView(TextView(this).apply {
+                    text = "${entry.entryType}  •  PHP ${entry.amount}  (Bal: PHP ${"%.2f".format(entry.balanceAfter)})"
+                    textSize = 12.5f; setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.parseColor(if (entry.amount.startsWith("-")) "#FCA5A5" else "#34D399"))
+                })
+                if (entry.notes.isNotBlank()) {
+                    c.addView(TextView(this).apply {
+                        text = entry.notes; textSize = 11.5f
+                        setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(3), 0, 0)
+                    })
+                }
+                container.addView(c)
+            }
+        }
+
+        scroll.addView(container)
+        return scroll
+    }
+
+    private fun initiateCustomerPaymentFlow(amountPhp: Double) {
+        val payInfo = AlistoKernelClient.currentPaymentModeInfo
+        if (payInfo.paymentMode == "MANUAL") {
+            val layout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(16), dp(20), dp(10))
+                setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
+            }
+            layout.addView(TextView(this).apply {
+                text = "Amount Due: PHP ${"%.2f".format(amountPhp)}
+
+${payInfo.manualInstructions}"
+                setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); textSize = 13f; setPadding(0, 0, 0, dp(12))
+            })
+            val refInput = AlistoUiKit.inputField(this, "GCash / QR Ph / Bank Reference No.")
+            layout.addView(AlistoUiKit.labeledField(this, "Payment Reference Number", refInput))
+
+            AlertDialog.Builder(this)
+                .setTitle("Customer Wallet Top-Up").setView(layout)
+                .setPositiveButton("Submit for Approval") { _, _ ->
+                    val ref = refInput.text.toString().trim()
+                    uiScope.launch {
+                        val res = AlistoKernelClient.submitManualPaymentRequestRpc(
+                            "WALLET_TOPUP", amountPhp, null, ref, "Manual receipt submitted via Customer APK"
+                        )
+                        res.onSuccess {
+                            Toast.makeText(this@CustomerMainActivity, "Reference submitted for Admin approval!", Toast.LENGTH_LONG).show()
+                            showAuthenticatedCustomerPortal()
+                        }.onFailure { err ->
+                            AlertDialog.Builder(this@CustomerMainActivity)
+                                .setTitle("Submission Error").setMessage(err.message).setPositiveButton("OK", null).show()
+                        }
+                    }
+                }.setNegativeButton("Cancel", null).show()
+            return
+        }
+
+        Toast.makeText(this, "Opening PayMongo (${payInfo.paymentMode})...", Toast.LENGTH_SHORT).show()
+        uiScope.launch {
+            val res = AlistoKernelClient.initiatePayMongoCheckout("WALLET_TOPUP", amountPhp, null)
+            res.onSuccess { json ->
+                val url = json.optString("checkout_url", "")
+                val txRef = json.optString("tx_ref", "")
+                Toast.makeText(this@CustomerMainActivity, "Checkout [$txRef]", Toast.LENGTH_LONG).show()
+                startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+                showAuthenticatedCustomerPortal()
+            }.onFailure { err ->
+                AlertDialog.Builder(this@CustomerMainActivity)
+                    .setTitle("PayMongo Checkout").setMessage(err.message).setPositiveButton("OK", null).show()
+            }
+        }
     }
 
     private fun buildCustomerAccountTab(user: AuthenticatedUser): View {

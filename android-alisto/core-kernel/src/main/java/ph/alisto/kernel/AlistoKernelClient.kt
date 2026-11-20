@@ -34,8 +34,14 @@ data class AuthenticatedUser(
     val vipGrindBadge: Boolean,
     val thumbsUpCount: Int = 5,
     val thumbsDownCount: Int = 0,
-    val customerTrustScore: Double = 100.0
-)
+    val customerTrustScore: Double = 100.0,
+    val trustDepositRequired: Boolean = false,
+    val commissionArrearsPhp: Double = 0.0,
+    val noShowStrikes: Int = 0
+) {
+    val isDelinquent: Boolean
+        get() = trustDepositRequired || commissionArrearsPhp > 0.0 || noShowStrikes >= 2 || customerTrustScore < 70.0
+}
 
 data class ContractorProfileState(
     val offersSkills: Boolean,
@@ -338,7 +344,10 @@ object AlistoKernelClient {
                 vipGrindBadge = u.optBoolean("vip_grind_badge", false),
                 thumbsUpCount = u.optInt("thumbs_up_count", 5),
                 thumbsDownCount = u.optInt("thumbs_down_count", 0),
-                customerTrustScore = u.optDouble("customer_trust_score", 100.0)
+                customerTrustScore = u.optDouble("customer_trust_score", 100.0),
+                trustDepositRequired = u.optBoolean("trust_deposit_required", false),
+                commissionArrearsPhp = u.optDouble("commission_arrears_php", 0.0),
+                noShowStrikes = u.optInt("no_show_strikes", 0)
             )
             currentSessionToken = sessionToken
             currentSessionUser = userObj
@@ -625,10 +634,6 @@ object AlistoKernelClient {
 
         json.optJSONArray("ledger_history")?.let { arr ->
             ledgerHistory.clear()
-        paymentTransactions.clear()
-        currentPaymentModeInfo = PaymentModeInfo()
-        currentReleaseManifest = null
-        currentConsentState = null
             for (i in 0 until arr.length()) {
                 val l = arr.getJSONObject(i)
                 ledgerHistory.add(
@@ -934,7 +939,8 @@ object AlistoKernelClient {
         pickupNote: String = "",
         dropoffNote: String = "",
         bookingNotes: String = "",
-        vehicleType: String = ""
+        vehicleType: String = "",
+        paymentMethod: String = "CASH"
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
@@ -970,6 +976,7 @@ object AlistoKernelClient {
                 put("p_tip_amount", tipAmount)
                 put("p_errand_item_cost", errandItemCostPhp)
                 put("p_deadhead_return_km", deadheadReturnKm)
+                put("p_payment_method", paymentMethod)
             })
             if (json.optString("status") != "SUCCESS") {
                 return@withContext Result.failure(IllegalStateException(json.optString("message", "Booking blocked.")))
