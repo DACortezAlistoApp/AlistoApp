@@ -34,6 +34,30 @@ class ContractorMainActivity : AppCompatActivity() {
     private var compressedOrcrUrl: String? = null
     private var compressedVehicleUrl: String? = null
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.getStringExtra("open_tab")?.let { activeTab = it }
+        intent.getStringExtra("open_jobs_filter")?.let { jobsFilter = it }
+        AlistoKernelClient.currentSessionUser?.let { showActiveContractorPortal(it) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val dec = ContractorOfferBridge.lastResultDecision
+        if (dec != null && System.currentTimeMillis() - ContractorOfferBridge.lastHandledAtMs < 6000L) {
+            ContractorOfferBridge.lastResultDecision = null
+            if (dec == "ACCEPT") {
+                activeTab = "JOBS"
+                jobsFilter = "MINE"
+            }
+            uiScope.launch {
+                AlistoKernelClient.syncBookingsAndWallet()
+                AlistoKernelClient.currentSessionUser?.let { showActiveContractorPortal(it) }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AlistoUiKit.applyDarkSystemBars(this)
@@ -309,6 +333,69 @@ class ContractorMainActivity : AppCompatActivity() {
         return if (active.isNotEmpty()) active else approved
     }
 
+    private fun supportsAutoAssign(shifts: List<String>): Boolean {
+        return shifts.any { it == "delivery_logistics" || it == "ride_hailing" }
+    }
+
+    private fun shiftModeLabel(shifts: List<String>): String {
+        val hasDel = "delivery_logistics" in shifts
+        val hasRide = "ride_hailing" in shifts
+        val hasSkills = "skills_marketplace" in shifts
+        return when {
+            hasDel && hasRide && hasSkills -> "All Services"
+            hasDel && hasRide -> "Delivery & Local Ride"
+            hasDel -> "Delivery Logistics"
+            hasRide -> "Local Ride-Hailing"
+            hasSkills -> "Skills & Errands"
+            else -> "Select Shift Mode"
+        }
+    }
+
+    private fun openSwitchShiftDialog(user: AuthenticatedUser) {
+        val prof = AlistoKernelClient.currentContractorProfile ?: return
+        val approved = getApprovedVerticals(prof)
+        if (approved.size <= 1) {
+            Toast.makeText(this, "Only one approved vertical is active on your account.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val rideVerticals = buildList {
+            if (prof.offersDelivery) add("delivery_logistics")
+            if (prof.offersRideHailing) add("ride_hailing")
+        }
+        val options = mutableListOf<Pair<String, List<String>>>()
+        if (rideVerticals.isNotEmpty()) {
+            options.add("Delivery & Local Ride" to rideVerticals)
+        }
+        if (prof.offersDelivery && prof.offersRideHailing) {
+            options.add("Delivery Only" to listOf("delivery_logistics"))
+            options.add("Local Ride Only" to listOf("ride_hailing"))
+        }
+        if (prof.offersSkills) {
+            options.add("Skills Marketplace & Errands" to listOf("skills_marketplace"))
+        }
+        val labels = options.map { it.first }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("Switch Active Shift Mode")
+            .setItems(labels) { _, which ->
+                val (label, chosen) = options[which]
+                val canAuto = supportsAutoAssign(chosen)
+                val nextAuto = if (canAuto) autoAcceptEnabled else false
+                autoAcceptEnabled = nextAuto
+                uiScope.launch {
+                    AlistoKernelClient.toggleContractorDispatchModeRpc(
+                        isOnline = prof.isOnline,
+                        autoAccept = nextAuto,
+                        activeShiftVerticals = chosen
+                    )
+                    Toast.makeText(this@ContractorMainActivity, "Shift switched to $label", Toast.LENGTH_SHORT).show()
+                    routeContractorByAccountState()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun maybePromptEarnModeToday(user: AuthenticatedUser) {
         if (promptedEarnModeThisSession) return
         val prof = AlistoKernelClient.currentContractorProfile ?: return
@@ -327,7 +414,7 @@ class ContractorMainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this)
             .setTitle("How would you like to earn today?")
-            .setMessage("Choose your active earning mode for this shift. You can switch anytime on the Drive tab.")
+            .setMessage("Choose your active shift mode. You can switch anytime inside your Profile tab.")
             .setCancelable(false)
             .setPositiveButton("Ride (Delivery & Local Ride)") { _, _ ->
                 uiScope.launch {
@@ -336,11 +423,11 @@ class ContractorMainActivity : AppCompatActivity() {
                         autoAccept = autoAcceptEnabled,
                         activeShiftVerticals = rideVerticals
                     )
-                    Toast.makeText(this@ContractorMainActivity, "Shift set: Ride (Delivery & Local Ride)", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@ContractorMainActivity, "Shift set: Delivery & Local Ride", Toast.LENGTH_SHORT).show()
                     routeContractorByAccountState()
                 }
             }
-            .setNegativeButton("Skills Marketplace (Skills & Errands)") { _, _ ->
+            .setNegativeButton("Skills Marketplace & Errands") { _, _ ->
                 autoAcceptEnabled = false
                 uiScope.launch {
                     AlistoKernelClient.toggleContractorDispatchModeRpc(
@@ -355,6 +442,27 @@ class ContractorMainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun openOverlayPermissionSettings() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                startActivity(
+                    Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+                )
+            } catch (_: Exception) {
+                Toast.makeText(this, "Open Android Settings > Apps > Alisto Contractor > Display over other apps.", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun isBookingOpenForBoard(b: BookingRecord, currentShifts: List<String>, myUserId: String): Boolean {
+        if (b.verticalKey !in currentShifts) return false
+        if (b.contractorId != null) return false
+        if (b.status !in listOf("CREATED", "PENDING", "SEARCHING")) return false
+        val offeredTo = b.offerContractorId
+        if (offeredTo != null && offeredTo != myUserId) return false
+        return true
+    }
+
     private fun showActiveContractorPortal(user: AuthenticatedUser) {
         AlistoPushCenter.ensureNotificationPermission(this)
         AlistoPushCenter.dispatchUnreadNotifications(this, uiScope)
@@ -362,6 +470,15 @@ class ContractorMainActivity : AppCompatActivity() {
         AlistoComplianceGate.checkOtaUpdate(this, "contractor", BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
         AlistoComplianceGate.enforceRa10173ConsentIfRequired(this, uiScope, "contractor")
         maybePromptEarnModeToday(user)
+
+        val prof = AlistoKernelClient.currentContractorProfile
+        val token = AlistoKernelClient.currentSessionToken
+        if (prof?.isOnline == true && !token.isNullOrBlank()) {
+            ContractorDispatchMonitorService.startMonitoring(this, token)
+        } else {
+            ContractorDispatchMonitorService.stopMonitoring(this)
+        }
+
         if (!AlistoLocationTracker.hasPermission(this) && !promptedLocationPerm) {
             promptedLocationPerm = true
             AlistoLocationTracker.requestPermission(this)
@@ -384,23 +501,23 @@ class ContractorMainActivity : AppCompatActivity() {
             else -> contentHost.addView(buildContractorDriveMapTab(user))
         }
 
-        val prof = AlistoKernelClient.currentContractorProfile
         val currentShifts = getEffectiveShiftVerticals(prof)
-        val openCount = AlistoKernelClient.bookings.count {
-            (it.verticalKey in currentShifts || it.contractorId == user.id) &&
-                it.status !in listOf("COMPLETED", "CANCELLED", "EXPIRED")
+        val myActiveCount = AlistoKernelClient.bookings.count {
+            it.contractorId == user.id && it.status !in listOf("COMPLETED", "CANCELLED", "EXPIRED")
         }
+        val openBoardCount = AlistoKernelClient.bookings.count { isBookingOpenForBoard(it, currentShifts, user.id) }
+        val badgeTotal = myActiveCount + openBoardCount
 
         val bottomNav = AlistoUiKit.bottomNavBar(
             this,
             tabs = listOf(
                 Triple("DRIVE", "◎", "Drive"),
-                Triple("JOBS", "☰", if (openCount > 0) "Jobs ($openCount)" else "Jobs"),
+                Triple("JOBS", "☰", if (badgeTotal > 0) "Board ($badgeTotal)" else "Board"),
                 Triple("WALLET", "₱", "Wallet"),
                 Triple("PROFILE", "●", "Profile")
             ),
             activeKey = activeTab,
-            accentHex = AlistoUiKit.AMBER
+            accentHex = AlistoUiKit.GOLD_ACCENT
         ) { nextTab ->
             activeTab = nextTab
             showActiveContractorPortal(user)
@@ -416,15 +533,20 @@ class ContractorMainActivity : AppCompatActivity() {
         val approvedVerticals = getApprovedVerticals(prof)
         val currentShifts = getEffectiveShiftVerticals(prof)
         val isOnline = prof?.isOnline == true
+        val canAutoAssign = supportsAutoAssign(currentShifts)
+        if (!canAutoAssign && autoAcceptEnabled) {
+            autoAcceptEnabled = false
+        }
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        val root = FrameLayout(this).apply {
             setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
         }
 
-        // Upper full-bleed demand heat map and live job radar
+        // Full-bleed interactive map stage
         val mapStage = FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 0.56f)
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
+            )
         }
         val cMap = AlistoInteractiveMapView(this)
         contractorMapView = cMap
@@ -440,13 +562,16 @@ class ContractorMainActivity : AppCompatActivity() {
                 cMap.updateUserLocation(lat, lng, AlistoLocationTracker.lastAccuracyM, flyTo = false)
             }
         }
+        val visibleMapBookings = AlistoKernelClient.bookings.filter {
+            it.contractorId == user.id || isBookingOpenForBoard(it, currentShifts, user.id)
+        }
         cMap.updateMapLayers(
-            bookings = AlistoKernelClient.bookings,
+            bookings = visibleMapBookings,
             telemetryPins = AlistoKernelClient.liveTelemetryPins,
             heatClusters = AlistoKernelClient.heatmapClusters
         )
 
-        // Floating top HUD: Wallet balance, GPS stream badge, Sync
+        // Clean Floating Top HUD: Wallet Pill (left) + Auto-ON/OFF Toggle (upper-right, Delivery & Ride ONLY)
         val topHud = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -455,151 +580,258 @@ class ContractorMainActivity : AppCompatActivity() {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP
             )
         }
-        val walletHudPill = LinearLayout(this).apply {
+
+        val walletPill = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = AlistoUiKit.roundedBg(this@ContractorMainActivity, "#E60D1424", 24, AlistoUiKit.BORDER_LIGHT)
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-            elevation = dp(4).toFloat()
+            background = AlistoUiKit.frostedGlassBg(this@ContractorMainActivity, "#D90A1931", 24, "#6638BDF8", alphaFraction = 0.88f)
+            setPadding(dp(14), dp(9), dp(14), dp(9))
+            elevation = dp(6).toFloat()
             setOnClickListener { activeTab = "WALLET"; showActiveContractorPortal(user) }
+            addView(View(this@ContractorMainActivity).apply {
+                background = AlistoUiKit.roundedBg(
+                    this@ContractorMainActivity,
+                    if (isOnline) AlistoUiKit.EMERALD else "#64748B",
+                    5
+                )
+                layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(8) }
+            })
             addView(TextView(this@ContractorMainActivity).apply {
-                text = "PHP ${"%.2f".format(AlistoKernelClient.contractorAvailableCredits)}"
-                textSize = 14f
+                text = "₱${"%.2f".format(AlistoKernelClient.contractorAvailableCredits)}"
+                textSize = 14.5f
                 setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor(AlistoUiKit.EMERALD))
+                setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
             })
         }
-        topHud.addView(walletHudPill, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
-
-        val gpsLive = AlistoSpatialEngine.isHeartbeatStreaming
-        val gpsPill = TextView(this).apply {
-            text = if (gpsLive) "● GPS LIVE" else "○ STANDBY"
-            textSize = 11.5f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor(if (gpsLive) AlistoUiKit.EMERALD else AlistoUiKit.TEXT_MUTED))
-            background = AlistoUiKit.roundedBg(
-                this@ContractorMainActivity, "#E60D1424", 20,
-                if (gpsLive) AlistoUiKit.EMERALD else AlistoUiKit.BORDER_LIGHT
-            )
-            setPadding(dp(11), dp(8), dp(11), dp(8))
-            elevation = dp(4).toFloat()
-        }
-        topHud.addView(gpsPill)
+        topHud.addView(walletPill)
         topHud.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
-        topHud.addView(AlistoUiKit.chipButton(this, "Sync", true, "#E60D1424", AlistoUiKit.AMBER) {
-            uiScope.launch {
-                AlistoKernelClient.fetchAppBootStateRpc(AlistoKernelClient.currentSessionToken ?: "", "contractor")
-                routeContractorByAccountState()
+
+        // Upper-right slot: Auto-ON / Auto-OFF strictly for Delivery & Ride-Hailing (hidden for Skills & Errands)
+        if (canAutoAssign) {
+            val autoOn = autoAcceptEnabled
+            val autoTogglePill = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = AlistoUiKit.frostedGlassBg(
+                    this@ContractorMainActivity,
+                    if (autoOn) "#E6064E3B" else "#D90F172A",
+                    24,
+                    if (autoOn) "#34D399" else "#475569",
+                    alphaFraction = 0.92f
+                )
+                setPadding(dp(14), dp(9), dp(14), dp(9))
+                elevation = dp(6).toFloat()
+                setOnClickListener {
+                    val nextAuto = !autoAcceptEnabled
+                    autoAcceptEnabled = nextAuto
+                    uiScope.launch {
+                        AlistoKernelClient.toggleContractorDispatchModeRpc(
+                            isOnline = isOnline || nextAuto,
+                            autoAccept = nextAuto,
+                            activeShiftVerticals = currentShifts
+                        )
+                        Toast.makeText(
+                            this@ContractorMainActivity,
+                            if (nextAuto) "Auto-Assignment ON (Delivery & Ride)" else "Auto-Assignment OFF",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        routeContractorByAccountState()
+                    }
+                }
+                addView(View(this@ContractorMainActivity).apply {
+                    background = AlistoUiKit.roundedBg(
+                        this@ContractorMainActivity,
+                        if (autoOn) AlistoUiKit.EMERALD else "#94A3B8",
+                        5
+                    )
+                    layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(7) }
+                })
+                addView(TextView(this@ContractorMainActivity).apply {
+                    text = if (autoOn) "AUTO: ON" else "AUTO: OFF"
+                    textSize = 12.5f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.parseColor(if (autoOn) "#A7F3D0" else "#CBD5E1"))
+                })
             }
-        }.apply { elevation = dp(4).toFloat() })
+            topHud.addView(autoTogglePill)
+        }
         mapStage.addView(topHud)
 
-        // Bottom-left radar telemetry pill (tap to recenter)
-        val radarStats = TextView(this).apply {
-            val openPins = AlistoKernelClient.bookings.count { it.status !in listOf("COMPLETED", "CANCELLED", "EXPIRED") }
-            text = "Zones: ${AlistoKernelClient.heatmapClusters.size} • Open Pins: $openPins"
-            textSize = 11.5f
+        // Floating My-GPS recenter pill above bottom sheet
+        val gpsFab = TextView(this).apply {
+            text = "◎ My GPS"
+            textSize = 12f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor(AlistoUiKit.CYAN))
-            background = AlistoUiKit.roundedBg(this@ContractorMainActivity, "#E60D1424", 18, AlistoUiKit.BORDER_LIGHT)
-            setPadding(dp(12), dp(7), dp(12), dp(7))
-            elevation = dp(4).toFloat()
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM or Gravity.START
-            ).apply {
-                leftMargin = dp(14)
-                bottomMargin = dp(12)
-            }
+            setTextColor(Color.parseColor("#E0F2FE"))
+            background = AlistoUiKit.frostedGlassBg(this@ContractorMainActivity, "#D90A1931", 20, "#6638BDF8", alphaFraction = 0.88f)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            elevation = dp(6).toFloat()
             setOnClickListener {
                 if (!AlistoLocationTracker.hasPermission(this@ContractorMainActivity)) {
                     AlistoLocationTracker.requestPermission(this@ContractorMainActivity)
                 } else {
                     val lat = AlistoLocationTracker.lastLat ?: user.homeLat
                     val lng = AlistoLocationTracker.lastLng ?: user.homeLng
-                    contractorMapView?.recenter(lat, lng, 15)
+                    contractorMapView?.recenter(lat, lng, 16)
                     startContractorLiveGps(forceCenter = true)
                 }
             }
         }
-        mapStage.addView(radarStats)
+        mapStage.addView(
+            gpsFab,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.START
+            ).apply {
+                leftMargin = dp(14)
+                topMargin = dp(68)
+            }
+        )
         root.addView(mapStage)
 
-        // Lyft-driver rounded bottom sheet
+        // Sleek uncluttered bottom driver console sheet
         val sheetWrap = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = AlistoUiKit.topSheetBg(this@ContractorMainActivity, AlistoUiKit.BG_SURFACE, 24, AlistoUiKit.BORDER)
-            elevation = dp(10).toFloat()
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 0.44f)
+            isClickable = true
+            isFocusable = true
+            background = AlistoUiKit.topSheetBg(this@ContractorMainActivity, "#F5091224", 26, "#334155")
+            elevation = dp(14).toFloat()
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM
+            )
         }
         sheetWrap.addView(AlistoUiKit.dragHandle(this))
 
-        val sheetScroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
-        }
         val sheetBody = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(2), dp(18), dp(18))
+            setPadding(dp(18), dp(2), dp(18), dp(16))
         }
 
-        // Primary Go Online + Auto-Accept control bar
-        sheetBody.addView(LinearLayout(this).apply {
+        // Compact Shift Identity Row (no shift-toggle button clutter!)
+        val statusHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) }
-            addView(
-                AlistoUiKit.pillButton(
-                    this@ContractorMainActivity,
-                    if (isOnline) "● ONLINE — PAUSE" else "GO ONLINE",
-                    if (isOnline) AlistoUiKit.EMERALD else AlistoUiKit.AMBER,
-                    AlistoUiKit.BG_DEEP, heightDp = 48, textSizeSp = 14f
-                ) {
-                    val nextOnline = !isOnline
-                    uiScope.launch {
-                        AlistoKernelClient.toggleContractorDispatchModeRpc(
-                            isOnline = nextOnline, autoAccept = autoAcceptEnabled, activeShiftVerticals = currentShifts
-                        )
-                        routeContractorByAccountState()
-                    }
-                }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.3f).apply { rightMargin = dp(8) } }
-            )
-            addView(
-                AlistoUiKit.pillButton(
-                    this@ContractorMainActivity,
-                    if (autoAcceptEnabled) "Auto: ON" else "Open Board",
-                    if (autoAcceptEnabled) "#0C4A6E" else AlistoUiKit.BG_CARD,
-                    if (autoAcceptEnabled) AlistoUiKit.CYAN else AlistoUiKit.TEXT_MUTED,
-                    if (autoAcceptEnabled) AlistoUiKit.CYAN else AlistoUiKit.BORDER_LIGHT,
-                    heightDp = 48, textSizeSp = 12.5f
-                ) {
-                    autoAcceptEnabled = !autoAcceptEnabled
-                    uiScope.launch {
-                        AlistoKernelClient.toggleContractorDispatchModeRpc(
-                            isOnline = true, autoAccept = autoAcceptEnabled, activeShiftVerticals = currentShifts
-                        )
-                        routeContractorByAccountState()
-                    }
-                }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.9f) }
-            )
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(12) }
+        }
+        val shiftCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        shiftCol.addView(TextView(this).apply {
+            text = if (isOnline) "You're Online" else "You're Offline"
+            textSize = 18f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(if (isOnline) AlistoUiKit.EMERALD else AlistoUiKit.TEXT_PRIMARY))
         })
+        shiftCol.addView(TextView(this).apply {
+            text = "Active Shift: ${shiftModeLabel(currentShifts)}"
+            textSize = 12.5f
+            setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED))
+        })
+        statusHeader.addView(shiftCol)
+
+        val openBoardCount = AlistoKernelClient.bookings.count { isBookingOpenForBoard(it, currentShifts, user.id) }
+        statusHeader.addView(AlistoUiKit.badgePill(
+            this,
+            if (openBoardCount > 0) "$openBoardCount Open" else "Quiet",
+            if (openBoardCount > 0) "#1E3A5F" else "#111827",
+            if (openBoardCount > 0) AlistoUiKit.GOLD_ACCENT else AlistoUiKit.TEXT_MUTED
+        ).apply {
+            setOnClickListener { jobsFilter = "OPEN"; activeTab = "JOBS"; showActiveContractorPortal(user) }
+        })
+        sheetBody.addView(statusHeader)
+
+        // Single bold Primary Go Online / Pause CTA
+        sheetBody.addView(
+            AlistoUiKit.pillButton(
+                this,
+                if (isOnline) "● ONLINE — TAP TO GO OFFLINE" else "GO ONLINE",
+                if (isOnline) "#065F46" else AlistoUiKit.GOLD_ACCENT,
+                if (isOnline) "#ECFDF5" else AlistoUiKit.BG_DEEP,
+                if (isOnline) "#10B981" else "#FEF08A",
+                heightDp = 50,
+                textSizeSp = 14.5f
+            ) {
+                val nextOnline = !isOnline
+                val nextAuto = if (nextOnline && canAutoAssign) autoAcceptEnabled else false
+                uiScope.launch {
+                    AlistoKernelClient.toggleContractorDispatchModeRpc(
+                        isOnline = nextOnline,
+                        autoAccept = nextAuto,
+                        activeShiftVerticals = currentShifts
+                    )
+                    if (!nextOnline) ContractorDispatchMonitorService.stopMonitoring(this@ContractorMainActivity)
+                    routeContractorByAccountState()
+                }
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(10) }
+            }
+        )
+
+        // Only show one-time shift selector if contractor somehow has zero selected shifts
+        if (currentShifts.isEmpty()) {
+            if (approvedVerticals.isEmpty()) {
+                sheetBody.addView(TextView(this).apply {
+                    text = "No approved service verticals yet. Contact Admin to activate your vertical."
+                    textSize = 12f
+                    setTextColor(Color.parseColor("#FCA5A5"))
+                    setPadding(0, dp(4), 0, dp(8))
+                })
+            } else {
+                sheetBody.addView(
+                    AlistoUiKit.pillButton(
+                        this, "Select Active Shift Mode", "#1E293B", AlistoUiKit.GOLD_ACCENT, "#334155", heightDp = 42, textSizeSp = 13f
+                    ) { openSwitchShiftDialog(user) }.apply {
+                        layoutParams = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                        ).apply { bottomMargin = dp(8) }
+                    }
+                )
+            }
+        }
+
+        // One-tap overlay permission helper (only shown until enabled so pop-ups appear over other apps)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            sheetBody.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = AlistoUiKit.roundedBg(this@ContractorMainActivity, "#1E1B0C", 12, "#854D0E")
+                setPadding(dp(12), dp(8), dp(10), dp(8))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(10) }
+                addView(TextView(this@ContractorMainActivity).apply {
+                    text = "Enable pop-ups over other apps so booking offers show immediately."
+                    textSize = 11.5f
+                    setTextColor(Color.parseColor("#FDE68A"))
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) }
+                })
+                addView(AlistoUiKit.chipButton(this@ContractorMainActivity, "Enable", true, AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP) {
+                    openOverlayPermissionSettings()
+                })
+            })
+        }
 
         // Active assigned job spotlight card
         val myActiveJob = AlistoKernelClient.bookings.firstOrNull {
             it.contractorId == user.id && it.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS")
         }
         if (myActiveJob != null) {
-            val spotCard = AlistoUiKit.surfaceCard(this, "#0C2942", AlistoUiKit.CYAN, padDp = 14)
+            val spotCard = AlistoUiKit.surfaceCard(this, "#0C2542", "#38BDF8", padDp = 14)
             spotCard.addView(TextView(this).apply {
                 text = "ACTIVE JOB • ${myActiveJob.bookingRef} (${myActiveJob.status})"
-                textSize = 11.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.CYAN))
+                textSize = 11.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor("#38BDF8"))
             })
-            val spotLines = buildString {
-                append("${myActiveJob.serviceTitle} • ${myActiveJob.pickupAddress}")
-                if (myActiveJob.pickupNote.isNotBlank()) append("\nPickup Note: ${myActiveJob.pickupNote}")
-                if (myActiveJob.bookingNotes.isNotBlank()) append("\nSpecial Note: ${myActiveJob.bookingNotes}")
-            }
             spotCard.addView(TextView(this).apply {
-                text = spotLines
-                textSize = 13f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                text = "${myActiveJob.serviceTitle} • ${myActiveJob.pickupAddress}"
+                textSize = 13.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
                 setPadding(0, dp(4), 0, dp(10))
             })
             spotCard.addView(LinearLayout(this).apply {
@@ -607,67 +839,47 @@ class ContractorMainActivity : AppCompatActivity() {
                 addView(AlistoUiKit.pillButton(this@ContractorMainActivity, "Navigate", "#064E3B", "#34D399", "#10B981", heightDp = 40, textSizeSp = 12.5f) {
                     AlistoSpatialEngine.launchLocalRoadNavigation(this@ContractorMainActivity, myActiveJob.pickupLat, myActiveJob.pickupLng)
                 }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) } })
-                addView(AlistoUiKit.pillButton(this@ContractorMainActivity, "Open Job →", AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP, heightDp = 40, textSizeSp = 12.5f) {
+                addView(AlistoUiKit.pillButton(this@ContractorMainActivity, "Manage Job →", AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP, heightDp = 40, textSizeSp = 12.5f) {
                     jobsFilter = "MINE"; activeTab = "JOBS"; showActiveContractorPortal(user)
                 }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
             })
             sheetBody.addView(spotCard)
-        }
-
-        // Shift verticals quick-toggle chips
-        sheetBody.addView(TextView(this).apply {
-            text = "Active Shift Verticals (Tap to toggle)"
-            textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED))
-            setPadding(dp(2), 0, 0, dp(8))
-        })
-
-        val shiftRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
-        }
-        val verticalsSpec = listOf(
-            "skills_marketplace" to "Skills",
-            "delivery_logistics" to "Delivery",
-            "ride_hailing" to "Ride-Hailing"
-        ).filter { (vKey, _) -> vKey in approvedVerticals }
-        if (verticalsSpec.isEmpty()) {
-            shiftRow.addView(TextView(this).apply {
-                text = "No approved service verticals yet. Contact Admin to activate your vertical."
-                textSize = 12f
-                setTextColor(Color.parseColor("#FCA5A5"))
-            })
         } else {
-            verticalsSpec.forEachIndexed { idx, (vKey, label) ->
-                shiftRow.addView(
-                    AlistoUiKit.chipButton(this, label, vKey in currentShifts, AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP) {
-                        val updated = currentShifts.toMutableList()
-                        if (vKey in updated) updated.remove(vKey) else updated.add(vKey)
-                        if (updated.isEmpty()) updated.add(vKey)
-                        val allowAuto = autoAcceptEnabled && updated.any { it != "skills_marketplace" }
-                        uiScope.launch {
-                            AlistoKernelClient.toggleContractorDispatchModeRpc(
-                                isOnline = isOnline, autoAccept = allowAuto, activeShiftVerticals = updated
-                            )
-                            Toast.makeText(this@ContractorMainActivity, "Shift updated: ${updated.joinToString(", ")}", Toast.LENGTH_SHORT).show()
-                            routeContractorByAccountState()
-                        }
-                    }.apply {
-                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                            if (idx < verticalsSpec.lastIndex) rightMargin = dp(8)
-                        }
-                    }
-                )
+            // Compact 2-tile driver stats strip
+            val autoDecided = (prof?.autoOffersAccepted ?: 0) + (prof?.autoOffersRejected ?: 0) + (prof?.autoOffersTimedOut ?: 0)
+            val acceptRateStr = if (autoDecided > 0) "${((prof?.autoOffersAccepted ?: 0) * 100) / autoDecided}%" else "100%"
+            val statsRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             }
+            fun miniTile(label: String, value: String, colorHex: String, onTap: (() -> Unit)? = null): LinearLayout {
+                return LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    background = AlistoUiKit.roundedBg(this@ContractorMainActivity, "#0F172A", 12, "#1E293B")
+                    setPadding(dp(12), dp(9), dp(12), dp(9))
+                    if (onTap != null) setOnClickListener { onTap() }
+                    addView(TextView(this@ContractorMainActivity).apply {
+                        text = label; textSize = 10.5f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED))
+                    })
+                    addView(TextView(this@ContractorMainActivity).apply {
+                        text = value; textSize = 14f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(colorHex))
+                    })
+                }
+            }
+            statsRow.addView(
+                miniTile("Open Board", "$openBoardCount Available", AlistoUiKit.GOLD_ACCENT) {
+                    jobsFilter = "OPEN"; activeTab = "JOBS"; showActiveContractorPortal(user)
+                }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) } }
+            )
+            statsRow.addView(
+                miniTile("Auto Accept Rate", acceptRateStr, AlistoUiKit.EMERALD) {
+                    activeTab = "PROFILE"; showActiveContractorPortal(user)
+                }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) }
+            )
+            sheetBody.addView(statsRow)
         }
-        sheetBody.addView(shiftRow)
 
-        sheetBody.addView(TextView(this).apply {
-            text = "Auto-Accept Rings: 1km → 1.5km → 2km → 2.5km  •  Vehicle: ${prof?.vehicleType ?: "motorcycle"} (${prof?.authorizedPlateNo ?: "Unbound"})"
-            textSize = 11.5f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_DIM))
-        })
-
-        sheetScroll.addView(sheetBody)
-        sheetWrap.addView(sheetScroll)
+        sheetWrap.addView(sheetBody)
         root.addView(sheetWrap)
         return root
     }
@@ -679,49 +891,67 @@ class ContractorMainActivity : AppCompatActivity() {
         val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP)) }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(22), dp(18), dp(24))
+            setPadding(dp(16), dp(20), dp(16), dp(24))
         }
 
+        // Clean header with live Auto-Sync indicator (no manual refresh button)
         container.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(14) }
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) }
             addView(TextView(this@ContractorMainActivity).apply {
-                text = "Job Board"; textSize = 22f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                text = "Dispatch Board"
+                textSize = 22f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
-            addView(AlistoUiKit.chipButton(this@ContractorMainActivity, "Refresh", true, AlistoUiKit.BG_CARD, AlistoUiKit.AMBER) {
-                uiScope.launch {
-                    AlistoKernelClient.fetchAppBootStateRpc(AlistoKernelClient.currentSessionToken ?: "", "contractor")
-                    routeContractorByAccountState()
-                }
-            })
+            addView(AlistoUiKit.badgePill(this@ContractorMainActivity, "● Live Auto-Sync", "#064E3B", "#6EE7B7"))
         })
 
+        val openList = AlistoKernelClient.bookings.filter { isBookingOpenForBoard(it, currentShifts, user.id) }
+        val myList = AlistoKernelClient.bookings.filter { it.contractorId == user.id }
+
+        // Segmented filter bar
         container.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            background = AlistoUiKit.roundedBg(this@ContractorMainActivity, "#0F172A", 14, "#1E293B")
+            setPadding(dp(4), dp(4), dp(4), dp(4))
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(14) }
-            addView(AlistoUiKit.chipButton(this@ContractorMainActivity, "Open Requests", jobsFilter == "OPEN", AlistoUiKit.AMBER) {
+            addView(AlistoUiKit.pillButton(
+                this@ContractorMainActivity,
+                "Open Board (${openList.size})",
+                if (jobsFilter == "OPEN") AlistoUiKit.GOLD_ACCENT else "#0F172A",
+                if (jobsFilter == "OPEN") AlistoUiKit.BG_DEEP else AlistoUiKit.TEXT_MUTED,
+                heightDp = 40, textSizeSp = 13f
+            ) {
                 jobsFilter = "OPEN"; showActiveContractorPortal(user)
-            }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) } })
-            addView(AlistoUiKit.chipButton(this@ContractorMainActivity, "My Jobs", jobsFilter == "MINE", AlistoUiKit.AMBER) {
+            }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(4) } })
+            addView(AlistoUiKit.pillButton(
+                this@ContractorMainActivity,
+                "My Jobs (${myList.size})",
+                if (jobsFilter == "MINE") AlistoUiKit.GOLD_ACCENT else "#0F172A",
+                if (jobsFilter == "MINE") AlistoUiKit.BG_DEEP else AlistoUiKit.TEXT_MUTED,
+                heightDp = 40, textSizeSp = 13f
+            ) {
                 jobsFilter = "MINE"; showActiveContractorPortal(user)
-            })
+            }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
         })
 
-        val shiftBookings = AlistoKernelClient.bookings.filter { b ->
-            if (jobsFilter == "MINE") b.contractorId == user.id
-            else b.verticalKey in currentShifts && b.status in listOf("CREATED", "PENDING", "SEARCHING")
-        }
+        val shiftBookings = if (jobsFilter == "MINE") myList else openList
 
         if (shiftBookings.isEmpty()) {
-            val emptyCard = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 22)
+            val emptyCard = AlistoUiKit.surfaceCard(this, "#0B1324", "#1E293B", padDp = 22)
             emptyCard.addView(TextView(this).apply {
-                text = if (jobsFilter == "MINE") "No assigned jobs yet." else "No open requests in your active verticals."
-                textSize = 15f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                text = if (jobsFilter == "MINE") "No active or past jobs yet." else "No open bookings right now."
+                textSize = 15.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
             })
             emptyCard.addView(TextView(this).apply {
-                text = "Keep your shift verticals active on the Drive tab to receive live bids and auto-accept matches."
+                text = if (jobsFilter == "MINE") {
+                    "Request an available job from the Open Board or turn Auto-Assignment ON for Delivery & Ride."
+                } else {
+                    "New requests for ${shiftModeLabel(currentShifts)} appear here automatically in real time."
+                }
                 textSize = 13f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(6), 0, 0)
             })
             container.addView(emptyCard)
@@ -823,42 +1053,98 @@ class ContractorMainActivity : AppCompatActivity() {
 
     private fun buildContractorProfileTab(user: AuthenticatedUser): View {
         val prof = AlistoKernelClient.currentContractorProfile
+        val approvedVerticals = getApprovedVerticals(prof)
+        val currentShifts = getEffectiveShiftVerticals(prof)
+
         val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP)) }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(22), dp(18), dp(24))
+            setPadding(dp(16), dp(20), dp(16), dp(24))
         }
 
         container.addView(TextView(this).apply {
-            text = "Contractor Profile"; textSize = 22f; setTypeface(null, Typeface.BOLD)
+            text = "Pro Profile"; textSize = 22f; setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)); setPadding(0, 0, 0, dp(14))
         })
 
-        val card = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 18)
-        card.addView(TextView(this).apply { text = user.fullName; textSize = 18f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY)) })
+        // Identity & Vehicle card
+        val card = AlistoUiKit.surfaceCard(this, "#0B1324", "#1E293B", padDp = 18)
+        card.addView(TextView(this).apply {
+            text = user.fullName; textSize = 18f; setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+        })
         card.addView(TextView(this).apply {
             text = "@${user.username} • ${user.phone}\n${user.barangayZone}, ${user.municipality}"
             textSize = 13f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(4), 0, dp(12))
         })
-
-        val plateText = if (prof?.ltfrbCompliant == true && !prof.authorizedPlateNo.isNullOrBlank()) {
-            "LTFRB Plate: ${prof.authorizedPlateNo}"
-        } else {
-            "Vehicle: ${prof?.vehicleType ?: "Skills Only"}"
-        }
-        card.addView(AlistoUiKit.badgePill(this, "$plateText • ${prof?.dispatchRadiusM ?: 1000}m start", "#0C4A6E", AlistoUiKit.CYAN))
+        val plateStr = prof?.authorizedPlateNo?.takeIf { it.isNotBlank() }?.let { " • Plate: $it" }.orEmpty()
+        val vTypeStr = prof?.vehicleType?.replace("_", " ")?.replaceFirstChar { it.uppercase() } ?: "Skills Only"
+        card.addView(AlistoUiKit.badgePill(this, "$vTypeStr$plateStr • Shift: ${shiftModeLabel(currentShifts)}", "#0C2D48", "#7DD3FC"))
         container.addView(card)
 
-        container.addView(AlistoUiKit.pillButton(this, "Sync Profile & Jobs", AlistoUiKit.BG_CARD, AlistoUiKit.AMBER, AlistoUiKit.BORDER_LIGHT, heightDp = 46) {
-            uiScope.launch {
-                AlistoKernelClient.fetchAppBootStateRpc(AlistoKernelClient.currentSessionToken ?: "", "contractor")
-                Toast.makeText(this@ContractorMainActivity, "Synced", Toast.LENGTH_SHORT).show()
-                routeContractorByAccountState()
-            }
-        }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) } })
+        // Auto-Assignment & Award Scorecard
+        val autoRecv = prof?.autoOffersReceived ?: 0
+        val autoAcc = prof?.autoOffersAccepted ?: 0
+        val autoRej = prof?.autoOffersRejected ?: 0
+        val autoTo = prof?.autoOffersTimedOut ?: 0
+        val autoDecided = autoAcc + autoRej + autoTo
+        val autoRate = if (autoDecided > 0) "${(autoAcc * 100) / autoDecided}%" else "—"
+        val boardAcc = prof?.boardAwardsAccepted ?: 0
+        val boardRej = (prof?.boardAwardsRejected ?: 0) + (prof?.boardAwardsTimedOut ?: 0)
+
+        val perfCard = AlistoUiKit.surfaceCard(this, "#0B1324", "#1E293B", padDp = 16)
+        perfCard.addView(TextView(this).apply {
+            text = "DISPATCH ACCEPTANCE METRICS"
+            textSize = 11f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.GOLD_ACCENT))
+            setPadding(0, 0, 0, dp(8))
+        })
+        perfCard.addView(TextView(this).apply {
+            text = "Auto-Assignment Acceptance Rate: $autoRate"
+            textSize = 15f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.EMERALD))
+        })
+        perfCard.addView(TextView(this).apply {
+            text = "Auto Offers: $autoRecv received • $autoAcc accepted • $autoRej rejected • $autoTo timed out\nOpen Board Awards: $boardAcc accepted • $boardRej declined/lapsed"
+            textSize = 12.5f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(6), 0, 0)
+        })
+        container.addView(perfCard)
+
+        // Shift mode switcher (kept neatly in Profile so Drive stays clutter-free)
+        if (approvedVerticals.size > 1) {
+            container.addView(
+                AlistoUiKit.pillButton(
+                    this, "Switch Active Shift Mode (${shiftModeLabel(currentShifts)})", "#0F1E3A", "#7DD3FC", "#1D4ED8", heightDp = 46, textSizeSp = 13.5f
+                ) { openSwitchShiftDialog(user) }.apply {
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+                }
+            )
+        }
+
+        // Overlay pop-up permission status
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val granted = Settings.canDrawOverlays(this)
+            container.addView(
+                AlistoUiKit.pillButton(
+                    this,
+                    if (granted) "Pop-Up Over Other Apps: ENABLED" else "Enable Pop-Up Over Other Apps",
+                    if (granted) "#064E3B" else "#2A1B08",
+                    if (granted) "#6EE7B7" else "#FDE68A",
+                    if (granted) "#10B981" else "#B45309",
+                    heightDp = 44, textSizeSp = 13f
+                ) { openOverlayPermissionSettings() }.apply {
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+                }
+            )
+        }
 
         container.addView(AlistoUiKit.pillButton(this, "Sign Out & Lock", "#450A0A", "#FCA5A5", "#7F1D1D", heightDp = 46) {
-            realtimePollJob?.cancel(); AlistoLocationTracker.stopLiveUpdates(); AlistoSpatialEngine.stopHeartbeat(); promptedEarnModeThisSession = false; AlistoKernelClient.signOut(); showContractorEntryGate()
+            realtimePollJob?.cancel()
+            AlistoLocationTracker.stopLiveUpdates()
+            AlistoSpatialEngine.stopHeartbeat()
+            ContractorDispatchMonitorService.stopMonitoring(this)
+            ContractorDispatchMonitorService.saveSessionToken(this, null)
+            promptedEarnModeThisSession = false
+            AlistoKernelClient.signOut()
+            showContractorEntryGate()
         }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT) })
 
         scroll.addView(container)
@@ -928,27 +1214,64 @@ class ContractorMainActivity : AppCompatActivity() {
                 val myActiveBid = AlistoKernelClient.bookingBids.find {
                     it.bookingId == b.id && it.contractorId == user.id && it.status == "ACTIVE"
                 }
-                card.addView(LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
-                    addView(AlistoUiKit.pillButton(
-                        this@ContractorMainActivity,
-                        if (myActiveBid != null) "Update Bid (PHP ${"%.0f".format(myActiveBid.bidAmountPhp)})" else "Submit Bid",
-                        AlistoUiKit.CYAN, AlistoUiKit.BG_DEEP, heightDp = 42, textSizeSp = 13f
-                    ) { promptSubmitOpenBid(b) }.apply {
-                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) }
-                    })
-                    addView(AlistoUiKit.pillButton(this@ContractorMainActivity, "Claim Now", AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP, heightDp = 42, textSizeSp = 13f) {
-                        uiScope.launch {
-                            val res = AlistoKernelClient.claimBookingRpc(b.id)
-                            res.onSuccess { jobsFilter = "MINE"; routeContractorByAccountState() }
-                                .onFailure { err ->
-                                    AlertDialog.Builder(this@ContractorMainActivity)
-                                        .setTitle("Wallet Check").setMessage(err.message).setPositiveButton("OK", null).show()
-                                }
+                val requestBtn = AlistoUiKit.pillButton(
+                    this@ContractorMainActivity, "Request Booking", AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP, "#FEF08A", heightDp = 44, textSizeSp = 13.5f
+                ) {
+                    uiScope.launch {
+                        val res = AlistoKernelClient.requestOpenBookingRpc(b.id)
+                        res.onSuccess { awardJson ->
+                            val secs = awardJson.optInt("seconds_remaining", 25)
+                            val offerPayload = JSONObject().apply {
+                                put("seconds_remaining", secs)
+                                put("offer", JSONObject().apply {
+                                    put("id", b.id)
+                                    put("booking_ref", b.bookingRef)
+                                    put("offer_source", "BOARD_REQUEST")
+                                    put("vertical_key", b.verticalKey)
+                                    put("service_title", b.serviceTitle)
+                                    put("pickup_address", b.pickupAddress)
+                                    put("pickup_note", b.pickupNote)
+                                    put("dropoff_address", b.dropoffAddress)
+                                    put("dropoff_note", b.dropoffNote)
+                                    put("booking_notes", b.bookingNotes)
+                                    put("municipality", b.municipality)
+                                    put("barangay_zone", b.barangayZone)
+                                    put("quoted_fee", b.quotedFee)
+                                    put("tip_amount", b.tipAmount)
+                                    put("payment_method", b.paymentMethod)
+                                    put("client_nickname", b.clientNickname)
+                                    put("client_trust_score", b.clientTrustScore)
+                                })
+                            }
+                            startActivity(ContractorOfferBridge.buildIntent(this@ContractorMainActivity, offerPayload))
+                        }.onFailure { err ->
+                            Toast.makeText(this@ContractorMainActivity, err.message ?: "Booking already awarded.", Toast.LENGTH_LONG).show()
+                            AlistoKernelClient.syncBookingsAndWallet()
+                            showActiveContractorPortal(user)
                         }
-                    }.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) })
-                })
+                    }
+                }
+
+                if (b.verticalKey == "skills_marketplace") {
+                    card.addView(LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+                        addView(AlistoUiKit.pillButton(
+                            this@ContractorMainActivity,
+                            if (myActiveBid != null) "Update Bid (₱${"%.0f".format(myActiveBid.bidAmountPhp)})" else "Place Bid",
+                            "#0F294A", "#7DD3FC", "#38BDF8", heightDp = 44, textSizeSp = 13f
+                        ) { promptSubmitOpenBid(b) }.apply {
+                            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.9f).apply { rightMargin = dp(8) }
+                        })
+                        addView(requestBtn.apply {
+                            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.1f)
+                        })
+                    })
+                } else {
+                    card.addView(requestBtn.apply {
+                        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+                    })
+                }
 
                 if (myActiveBid != null) {
                     card.addView(AlistoUiKit.pillButton(this, "Withdraw Bid", "#450A0A", "#FCA5A5", "#7F1D1D", heightDp = 38, textSizeSp = 12f) {
@@ -1166,17 +1489,37 @@ class ContractorMainActivity : AppCompatActivity() {
         realtimePollJob?.cancel()
         realtimePollJob = uiScope.launch {
             while (isActive) {
-                delay(8_000L)
-                if (AlistoKernelClient.currentSessionToken.isNullOrBlank()) break
+                delay(4_000L)
+                val tok = AlistoKernelClient.currentSessionToken
+                if (tok.isNullOrBlank()) break
+
+                // Check for any incoming Auto-Assign or Board Award offer immediately
+                val pendingEnvelope = AlistoKernelClient.fetchPendingContractorOfferRpc(tok)
+                if (pendingEnvelope != null) {
+                    val offerObj = pendingEnvelope.optJSONObject("offer")
+                    val offerBid = offerObj?.optString("id").orEmpty()
+                    val recentlyHandled = (ContractorOfferBridge.lastResultBookingId == offerBid &&
+                        System.currentTimeMillis() - ContractorOfferBridge.lastHandledAtMs < 5000L)
+                    if (offerBid.isNotBlank() && ContractorOfferBridge.activeBookingId != offerBid && !recentlyHandled) {
+                        startActivity(ContractorOfferBridge.buildIntent(this@ContractorMainActivity, pendingEnvelope))
+                    }
+                }
+
                 AlistoKernelClient.syncBookingsAndWallet()
                 val fired = AlistoPushCenter.dispatchUnreadNotifications(this@ContractorMainActivity, uiScope)
+                val user = AlistoKernelClient.currentSessionUser
+                val shifts = getEffectiveShiftVerticals(AlistoKernelClient.currentContractorProfile)
+                val mapBookings = if (user != null) {
+                    AlistoKernelClient.bookings.filter { it.contractorId == user.id || isBookingOpenForBoard(it, shifts, user.id) }
+                } else {
+                    AlistoKernelClient.bookings
+                }
                 contractorMapView?.updateMapLayers(
-                    bookings = AlistoKernelClient.bookings,
+                    bookings = mapBookings,
                     telemetryPins = AlistoKernelClient.liveTelemetryPins,
                     heatClusters = AlistoKernelClient.heatmapClusters
                 )
-                val user = AlistoKernelClient.currentSessionUser
-                val digest = AlistoKernelClient.bookings.joinToString("|") { "${it.id}:${it.status}:${it.contractorId}" }
+                val digest = AlistoKernelClient.bookings.joinToString("|") { "${it.id}:${it.status}:${it.contractorId}:${it.offerContractorId}" }
                 if (user != null && digest != lastBookingsDigest) {
                     lastBookingsDigest = digest
                     if (activeTab == "JOBS" || activeTab == "DRIVE") {

@@ -59,7 +59,14 @@ data class ContractorProfileState(
     val isElectricVehicle: Boolean = false,
     val engineDisplacementCc: Int = 0,
     val electricMotorKw: Double? = null,
-    val ltfrbCompliant: Boolean = false
+    val ltfrbCompliant: Boolean = false,
+    val autoOffersReceived: Int = 0,
+    val autoOffersAccepted: Int = 0,
+    val autoOffersRejected: Int = 0,
+    val autoOffersTimedOut: Int = 0,
+    val boardAwardsAccepted: Int = 0,
+    val boardAwardsRejected: Int = 0,
+    val boardAwardsTimedOut: Int = 0
 )
 
 data class ActiveSubscriptionPass(
@@ -174,6 +181,10 @@ data class BookingRecord(
     val contractorLiveLng: Double? = null,
     val clientLiveLat: Double? = null,
     val clientLiveLng: Double? = null,
+    val offerContractorId: String? = null,
+    val offerSource: String? = null,
+    val offerExpiresAt: String? = null,
+    val offerRound: Int = 0,
     val contractorFullName: String? = null,
     val contractorRatingAvg: Double = 5.0,
     val contractorRatingCount: Int = 1,
@@ -385,6 +396,13 @@ object AlistoKernelClient {
                     activeShiftVerticals = if (shifts.isEmpty()) listOf("skills_marketplace") else shifts,
                     isOnline = cp.optBoolean("is_online", true),
                     autoAcceptEnabled = cp.optBoolean("auto_accept_enabled", false),
+                    autoOffersReceived = cp.optInt("auto_offers_received", 0),
+                    autoOffersAccepted = cp.optInt("auto_offers_accepted", 0),
+                    autoOffersRejected = cp.optInt("auto_offers_rejected", 0),
+                    autoOffersTimedOut = cp.optInt("auto_offers_timed_out", 0),
+                    boardAwardsAccepted = cp.optInt("board_awards_accepted", 0),
+                    boardAwardsRejected = cp.optInt("board_awards_rejected", 0),
+                    boardAwardsTimedOut = cp.optInt("board_awards_timed_out", 0),
                     authorizedPlateNo = if (cp.isNull("authorized_plate_no")) null else cp.optString("authorized_plate_no"),
                     isElectricVehicle = cp.optBoolean("is_electric_vehicle", false),
                     engineDisplacementCc = cp.optInt("engine_displacement_cc", 0),
@@ -499,6 +517,10 @@ object AlistoKernelClient {
                         contractorLiveLng = if (o.isNull("contractor_live_lng") || !o.has("contractor_live_lng")) null else o.optDouble("contractor_live_lng"),
                         clientLiveLat = if (o.isNull("client_live_lat") || !o.has("client_live_lat")) null else o.optDouble("client_live_lat"),
                         clientLiveLng = if (o.isNull("client_live_lng") || !o.has("client_live_lng")) null else o.optDouble("client_live_lng"),
+                        offerContractorId = if (o.isNull("offer_contractor_id")) null else o.optString("offer_contractor_id").ifBlank { null },
+                        offerSource = if (o.isNull("offer_source")) null else o.optString("offer_source").ifBlank { null },
+                        offerExpiresAt = if (o.isNull("offer_expires_at")) null else o.optString("offer_expires_at").ifBlank { null },
+                        offerRound = o.optInt("offer_round", 0),
                         pickupLat = o.optDouble("pickup_lat", 15.1450),
                         pickupLng = o.optDouble("pickup_lng", 120.5887),
                         dropoffLat = o.optDouble("dropoff_lat", o.optDouble("pickup_lat", 15.1450)),
@@ -1024,6 +1046,62 @@ object AlistoKernelClient {
                 if (!activeBookingId.isNullOrBlank()) put("p_booking_id", activeBookingId)
             })
         } catch (_: Exception) {}
+    }
+
+    suspend fun requestOpenBookingRpc(bookingId: String): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val token = currentSessionToken ?: return@withContext Result.failure(IllegalStateException("Session expired."))
+        try {
+            val json = postRpc("secure_request_open_booking_rpc", JSONObject().apply {
+                put("p_session_token", token)
+                put("p_booking_id", bookingId)
+            })
+            val status = json.optString("status", "ERROR")
+            if (status == "AWARDED") {
+                syncBookingsAndWallet()
+                Result.success(json)
+            } else {
+                Result.failure(IllegalStateException(json.optString("message", "Another contractor requested this booking first.")))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun respondBookingOfferRpc(
+        bookingId: String,
+        decision: String,
+        sessionTokenOverride: String? = null
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val token = sessionTokenOverride?.takeIf { it.isNotBlank() } ?: currentSessionToken
+            ?: return@withContext Result.failure(IllegalStateException("Session expired."))
+        try {
+            val json = postRpc("secure_respond_booking_offer_rpc", JSONObject().apply {
+                put("p_session_token", token)
+                put("p_booking_id", bookingId)
+                put("p_decision", decision.uppercase())
+            })
+            val status = json.optString("status", "ERROR")
+            if (status in listOf("ACCEPTED", "REJECT", "TIMEOUT")) {
+                if (currentSessionToken != null) syncBookingsAndWallet()
+                Result.success(json)
+            } else {
+                Result.failure(IllegalStateException(json.optString("message", "Offer response could not be processed.")))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchPendingContractorOfferRpc(sessionTokenOverride: String? = null): JSONObject? = withContext(Dispatchers.IO) {
+        val token = sessionTokenOverride?.takeIf { it.isNotBlank() } ?: currentSessionToken ?: return@withContext null
+        try {
+            val json = postRpc("secure_get_pending_contractor_offer_rpc", JSONObject().apply {
+                put("p_session_token", token)
+            })
+            if (json.optString("status") == "OFFER_FOUND") json else null
+        } catch (_: Exception) {
+            null
+        }
     }
 
     suspend fun submitContractorBidRpc(
