@@ -1,5 +1,9 @@
 package ph.alisto.contractor
 
+import android.os.Build
+import android.provider.Settings
+import org.json.JSONObject
+
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
