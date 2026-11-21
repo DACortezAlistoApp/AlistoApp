@@ -197,7 +197,21 @@ data class BookingRecord(
     val pickupNote: String = "",
     val dropoffNote: String = "",
     val bookingNotes: String = "",
-    val allowAutoAssign: Boolean = true
+    val allowAutoAssign: Boolean = true,
+    val waypointsJson: String = "[]",
+    val scheduledStartAt: String? = null,
+    val acceptedAt: String? = null,
+    val onTheWayAt: String? = null,
+    val arrivedAt: String? = null,
+    val startedAt: String? = null,
+    val completedAt: String? = null,
+    val clientFullName: String = "Customer",
+    val clientUsername: String = "",
+    val clientPhone: String = "",
+    val clientMunicipality: String = "",
+    val clientBarangayZone: String = "",
+    val clientProfilePhotoUrl: String? = null,
+    val clientAccountStatus: String = "ACTIVE"
 )
 
 data class ReleaseManifestInfo(
@@ -519,6 +533,20 @@ object AlistoKernelClient {
                         clientLiveLat = if (o.isNull("client_live_lat") || !o.has("client_live_lat")) null else o.optDouble("client_live_lat"),
                         clientLiveLng = if (o.isNull("client_live_lng") || !o.has("client_live_lng")) null else o.optDouble("client_live_lng"),
                         paymentMethod = o.optString("payment_method", "CASH").ifBlank { "CASH" },
+                        waypointsJson = o.optJSONArray("waypoints")?.toString() ?: o.optString("waypoints", "[]").ifBlank { "[]" },
+                        scheduledStartAt = if (o.isNull("scheduled_start_at")) null else o.optString("scheduled_start_at").ifBlank { null },
+                        acceptedAt = if (o.isNull("accepted_at")) null else o.optString("accepted_at").ifBlank { null },
+                        onTheWayAt = if (o.isNull("on_the_way_at")) null else o.optString("on_the_way_at").ifBlank { null },
+                        arrivedAt = if (o.isNull("arrived_at")) null else o.optString("arrived_at").ifBlank { null },
+                        startedAt = if (o.isNull("started_at")) null else o.optString("started_at").ifBlank { null },
+                        completedAt = if (o.isNull("completed_at")) null else o.optString("completed_at").ifBlank { null },
+                        clientFullName = o.optString("client_full_name", "Customer").ifBlank { "Customer" },
+                        clientUsername = o.optString("client_username", ""),
+                        clientPhone = o.optString("client_phone", ""),
+                        clientMunicipality = o.optString("client_municipality", ""),
+                        clientBarangayZone = o.optString("client_barangay_zone", ""),
+                        clientProfilePhotoUrl = if (o.isNull("client_profile_photo_url")) null else o.optString("client_profile_photo_url").ifBlank { null },
+                        clientAccountStatus = o.optString("client_account_status", "ACTIVE").ifBlank { "ACTIVE" },
                         offerContractorId = if (o.isNull("offer_contractor_id")) null else o.optString("offer_contractor_id").ifBlank { null },
                         offerSource = if (o.isNull("offer_source")) null else o.optString("offer_source").ifBlank { null },
                         offerExpiresAt = if (o.isNull("offer_expires_at")) null else o.optString("offer_expires_at").ifBlank { null },
@@ -1088,6 +1116,58 @@ object AlistoKernelClient {
                 Result.success(json)
             } else {
                 Result.failure(IllegalStateException(json.optString("message", "Offer response could not be processed.")))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateBookingRouteRpc(
+        bookingId: String,
+        dropoffAddress: String,
+        dropoffLat: Double,
+        dropoffLng: Double,
+        waypointsArray: JSONArray
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val token = currentSessionToken ?: return@withContext Result.failure(IllegalStateException("Session expired."))
+        try {
+            val json = postRpc("secure_update_booking_route_rpc", JSONObject().apply {
+                put("p_session_token", token)
+                put("p_booking_id", bookingId)
+                put("p_dropoff_address", dropoffAddress.trim())
+                put("p_dropoff_lat", dropoffLat)
+                put("p_dropoff_lng", dropoffLng)
+                put("p_waypoints", waypointsArray)
+            })
+            if (json.optString("status") == "SUCCESS") {
+                syncBookingsAndWallet()
+                Result.success(json)
+            } else {
+                Result.failure(IllegalStateException(json.optString("message", "Unable to update route.")))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun completeBookingWithDisputeRpc(
+        bookingId: String,
+        reasonCategory: String,
+        description: String
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val token = currentSessionToken ?: return@withContext Result.failure(IllegalStateException("Session expired."))
+        try {
+            val json = postRpc("secure_complete_booking_with_dispute_rpc", JSONObject().apply {
+                put("p_session_token", token)
+                put("p_booking_id", bookingId)
+                put("p_reason_category", reasonCategory.trim())
+                put("p_description", description.trim())
+            })
+            if (json.optString("status") == "SUCCESS") {
+                syncBookingsAndWallet()
+                Result.success(json)
+            } else {
+                Result.failure(IllegalStateException(json.optString("message", "Dispute submission failed.")))
             }
         } catch (e: Exception) {
             Result.failure(e)

@@ -114,31 +114,12 @@ class ContractorOfferOverlayActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
-    @Suppress("DEPRECATION")
     private fun playOfferAlert() {
-        stopOfferAlert()
-        try {
-            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            ringtone = RingtoneManager.getRingtone(applicationContext, uri)?.apply { play() }
-        } catch (_: Exception) {}
-
-        try {
-            val vib = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-            if (vib != null && vib.hasVibrator()) {
-                val pattern = longArrayOf(0, 350, 200, 350, 200, 450)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    vib.vibrate(VibrationEffect.createWaveform(pattern, -1))
-                } else {
-                    vib.vibrate(pattern, -1)
-                }
-            }
-        } catch (_: Exception) {}
+        ContractorSoundEngine.startIncomingOfferAlarm(this)
     }
 
     private fun stopOfferAlert() {
-        try { ringtone?.stop() } catch (_: Exception) {}
-        ringtone = null
+        ContractorSoundEngine.stopIncomingOfferAlarm()
     }
 
     private fun renderOfferFromIntent(srcIntent: Intent) {
@@ -388,8 +369,12 @@ class ContractorOfferOverlayActivity : AppCompatActivity() {
             ContractorOfferBridge.lastHandledAtMs = System.currentTimeMillis()
 
             res.onSuccess {
+                when (decision) {
+                    "ACCEPT" -> ContractorSoundEngine.playAcceptedTone(this@ContractorOfferOverlayActivity)
+                    else -> ContractorSoundEngine.playRejectedTone(this@ContractorOfferOverlayActivity)
+                }
                 val msg = when (decision) {
-                    "ACCEPT" -> "Booking accepted! Navigating to Active Job."
+                    "ACCEPT" -> "Booking accepted! Opening Active Booking tab."
                     "REJECT" -> "Booking declined and forwarded."
                     else -> "Offer timer lapsed and forwarded."
                 }
@@ -397,8 +382,7 @@ class ContractorOfferOverlayActivity : AppCompatActivity() {
                 if (decision == "ACCEPT") {
                     startActivity(Intent(this@ContractorOfferOverlayActivity, ContractorMainActivity::class.java).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                        putExtra("open_tab", "JOBS")
-                        putExtra("open_jobs_filter", "MINE")
+                        putExtra("open_tab", "ACTIVE")
                     })
                 }
             }.onFailure { err ->
