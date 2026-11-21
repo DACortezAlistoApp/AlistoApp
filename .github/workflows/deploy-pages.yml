@@ -32,8 +32,11 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout Latest Main
         uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 1
 
       - name: Stage Public Web & APK Assets Only
         run: |
@@ -42,6 +45,7 @@ jobs:
           [ -f alisto-customer.apk ] && cp alisto-customer.apk _site/
           [ -f alisto-contractor.apk ] && cp alisto-contractor.apk _site/
           ls -lh _site/
+          sha256sum _site/alisto-contractor.apk
 
       - name: Setup GitHub Pages (Auto-Enable)
         uses: actions/configure-pages@v5
@@ -52,6 +56,9 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: '_site'
+
+      - name: Wait for Artifact Metadata Propagation
+        run: sleep 6
 
       - name: Deploy to GitHub Pages
         id: deployment
