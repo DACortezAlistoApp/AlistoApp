@@ -1,6 +1,7 @@
 package ph.alisto.contractor
 
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import org.json.JSONObject
 
@@ -39,6 +40,7 @@ class ContractorMainActivity : AppCompatActivity() {
     private var lastBookingsDigest: String = ""
     private var lastContractorLocSyncMs: Long = 0L
     private var realtimePollJob: Job? = null
+    private var chatHeartbeatJob: Job? = null
     private var contractorMapView: AlistoInteractiveMapView? = null
     private var promptedLocationPerm = false
     private var hasAutoCenteredGps = false
@@ -63,6 +65,11 @@ class ContractorMainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         ContractorOfferBridge.isMainActivityForeground = true
+        if (AlistoKernelClient.currentSessionUser != null) {
+            if (AlistoLocationTracker.ensureExplicitGpsGate(this, "Alisto Contractor")) {
+                startContractorLiveGps(forceCenter = false)
+            }
+        }
         val dec = ContractorOfferBridge.lastResultDecision
         if (dec != null && System.currentTimeMillis() - ContractorOfferBridge.lastHandledAtMs < 6000L) {
             ContractorOfferBridge.lastResultDecision = null
@@ -94,8 +101,10 @@ class ContractorMainActivity : AppCompatActivity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == AlistoLocationTracker.REQ_LOCATION_PERMISSION && AlistoLocationTracker.hasPermission(this)) {
-            startContractorLiveGps(forceCenter = true)
+        if (requestCode == AlistoLocationTracker.REQ_LOCATION_PERMISSION) {
+            if (AlistoLocationTracker.ensureExplicitGpsGate(this, "Alisto Contractor")) {
+                startContractorLiveGps(forceCenter = true)
+            }
         }
     }
 
@@ -506,10 +515,7 @@ class ContractorMainActivity : AppCompatActivity() {
             ContractorDispatchMonitorService.startMonitoring(this, token)
         }
 
-        if (!AlistoLocationTracker.hasPermission(this) && !promptedLocationPerm) {
-            promptedLocationPerm = true
-            AlistoLocationTracker.requestPermission(this)
-        } else if (AlistoLocationTracker.hasPermission(this)) {
+        if (AlistoLocationTracker.ensureExplicitGpsGate(this, "Alisto Contractor")) {
             startContractorLiveGps(forceCenter = false)
         }
 
@@ -835,6 +841,34 @@ class ContractorMainActivity : AppCompatActivity() {
                     openOverlayPermissionSettings()
                 })
             })
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = getSystemService(POWER_SERVICE) as? PowerManager
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(packageName)) {
+                sheetBody.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    background = AlistoUiKit.roundedBg(this@ContractorMainActivity, "#0C2542", 12, "#0284C7")
+                    setPadding(dp(12), dp(8), dp(10), dp(8))
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(10) }
+                    addView(TextView(this@ContractorMainActivity).apply {
+                        text = "Allow unrestricted background battery so minimized offers never sleep."
+                        textSize = 11.5f
+                        setTextColor(Color.parseColor("#BAE6FD"))
+                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) }
+                    })
+                    addView(AlistoUiKit.chipButton(this@ContractorMainActivity, "Allow", true, "#38BDF8", AlistoUiKit.BG_DEEP) {
+                        try {
+                            startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                data = Uri.parse("package:$packageName")
+                            })
+                        } catch (_: Exception) {}
+                    })
+                })
+            }
         }
 
         // Active assigned job spotlight card
@@ -1523,7 +1557,42 @@ class ContractorMainActivity : AppCompatActivity() {
         }
     }
 
+    private fun startContractorChatHeartbeat() {
+        if (chatHeartbeatJob?.isActive == true) return
+        chatHeartbeatJob = uiScope.launch {
+            while (isActive) {
+                val user = AlistoKernelClient.currentSessionUser
+                val tok = AlistoKernelClient.currentSessionToken
+                if (user != null && !tok.isNullOrBlank()) {
+                    val activeChatJob = AlistoKernelClient.bookings.firstOrNull {
+                        it.contractorId == user.id && it.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS")
+                    }
+                    if (activeChatJob != null) {
+                        val chatRes = AlistoKernelClient.fetchBookingMessagesRpc(activeChatJob.id)
+                        chatRes.onSuccess { msgs ->
+                            val latest = msgs.lastOrNull()
+                            if (latest != null && latest.id.isNotBlank()) {
+                                val prevId = lastSeenChatMsgIds[activeChatJob.id]
+                                lastSeenChatMsgIds[activeChatJob.id] = latest.id
+                                if (prevId != null && prevId != latest.id && latest.senderId != user.id) {
+                                    ContractorSoundEngine.playStepUpdatedTone(this@ContractorMainActivity)
+                                    Toast.makeText(
+                                        this@ContractorMainActivity,
+                                        "New message from ${latest.senderName}: ${latest.body}",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        }
+                    }
+                }
+                delay(3_000L)
+            }
+        }
+    }
+
     private fun startContractorRealtimeLoop() {
+        startContractorChatHeartbeat()
         realtimePollJob?.cancel()
         realtimePollJob = uiScope.launch {
             var tick = 0
@@ -1596,6 +1665,7 @@ class ContractorMainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         realtimePollJob?.cancel()
+        chatHeartbeatJob?.cancel()
         AlistoLocationTracker.stopLiveUpdates()
         AlistoSpatialEngine.stopHeartbeat()
         uiScope.cancel()

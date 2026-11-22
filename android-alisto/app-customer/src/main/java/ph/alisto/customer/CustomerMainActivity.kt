@@ -54,6 +54,7 @@ class CustomerMainActivity : AppCompatActivity() {
     private var compressedProfilePhotoDataUrl: String? = null
     private val sequentialWaypoints = mutableListOf<JSONObject>()
     private var realtimePollJob: Job? = null
+    private var chatHeartbeatJob: Job? = null
     private var pickupSearchJob: Job? = null
     private var dropoffSearchJob: Job? = null
     private var reverseGeoJob: Job? = null
@@ -179,6 +180,15 @@ class CustomerMainActivity : AppCompatActivity() {
         return "$prefix, ${nickname.ifBlank { "Friend" }}"
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (AlistoKernelClient.currentSessionUser != null) {
+            if (AlistoLocationTracker.ensureExplicitGpsGate(this, "Alisto Customer")) {
+                startLiveGpsOnMap(forceCenter = false, snapOriginToGps = false)
+            }
+        }
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
@@ -186,14 +196,8 @@ class CustomerMainActivity : AppCompatActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == AlistoLocationTracker.REQ_LOCATION_PERMISSION) {
-            if (AlistoLocationTracker.hasPermission(this)) {
+            if (AlistoLocationTracker.ensureExplicitGpsGate(this, "Alisto Customer")) {
                 startLiveGpsOnMap(forceCenter = true, snapOriginToGps = !originPinnedManually)
-            } else {
-                Toast.makeText(
-                    this,
-                    "Location permission not granted. You can still search or drop a pin.",
-                    Toast.LENGTH_LONG
-                ).show()
             }
         }
     }
@@ -407,10 +411,7 @@ class CustomerMainActivity : AppCompatActivity() {
         AlistoComplianceGate.checkOtaUpdate(this, "customer", BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
         AlistoComplianceGate.enforceRa10173ConsentIfRequired(this, uiScope, "customer")
 
-        if (!AlistoLocationTracker.hasPermission(this) && !promptedLocationPerm) {
-            promptedLocationPerm = true
-            AlistoLocationTracker.requestPermission(this)
-        } else if (AlistoLocationTracker.hasPermission(this)) {
+        if (AlistoLocationTracker.ensureExplicitGpsGate(this, "Alisto Customer")) {
             startLiveGpsOnMap(forceCenter = false, snapOriginToGps = false)
         }
 
@@ -2043,7 +2044,7 @@ class CustomerMainActivity : AppCompatActivity() {
         }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) } })
 
         container.addView(AlistoUiKit.pillButton(this, "Sign Out & Lock", "#450A0A", "#FCA5A5", "#7F1D1D", heightDp = 46) {
-            realtimePollJob?.cancel(); AlistoLocationTracker.stopLiveUpdates(); AlistoKernelClient.signOut(); showEntryPortalGate()
+            realtimePollJob?.cancel(); chatHeartbeatJob?.cancel(); AlistoLocationTracker.stopLiveUpdates(); AlistoKernelClient.signOut(); showEntryPortalGate()
         }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT) })
 
         scroll.addView(container)
@@ -2330,7 +2331,42 @@ class CustomerMainActivity : AppCompatActivity() {
         openLiveCustomerChatDialog(booking)
     }
 
+    private fun startCustomerChatHeartbeat() {
+        if (chatHeartbeatJob?.isActive == true) return
+        chatHeartbeatJob = uiScope.launch {
+            while (isActive) {
+                val user = AlistoKernelClient.currentSessionUser
+                val token = AlistoKernelClient.currentSessionToken
+                if (user != null && !token.isNullOrBlank()) {
+                    val activeChatJob = AlistoKernelClient.bookings.firstOrNull {
+                        it.clientId == user.id && it.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS")
+                    }
+                    if (activeChatJob != null) {
+                        val chatRes = AlistoKernelClient.fetchBookingMessagesRpc(activeChatJob.id)
+                        chatRes.onSuccess { msgs ->
+                            val latest = msgs.lastOrNull()
+                            if (latest != null && latest.id.isNotBlank()) {
+                                val prevId = lastSeenChatMsgIds[activeChatJob.id]
+                                lastSeenChatMsgIds[activeChatJob.id] = latest.id
+                                if (prevId != null && prevId != latest.id && latest.senderId != user.id) {
+                                    CustomerDoorbellEngine.playIncomingChatChime(this@CustomerMainActivity)
+                                    Toast.makeText(
+                                        this@CustomerMainActivity,
+                                        "New message from ${latest.senderName}: ${latest.body}",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        }
+                    }
+                }
+                delay(3_000L)
+            }
+        }
+    }
+
     private fun startCustomerRealtimeLoop() {
+        startCustomerChatHeartbeat()
         realtimePollJob?.cancel()
         AlistoKernelClient.bookings.forEach { b ->
             if (!lastBookingStatuses.containsKey(b.id)) lastBookingStatuses[b.id] = b.status
@@ -2399,6 +2435,7 @@ class CustomerMainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         realtimePollJob?.cancel()
+        chatHeartbeatJob?.cancel()
         pickupSearchJob?.cancel()
         dropoffSearchJob?.cancel()
         reverseGeoJob?.cancel()

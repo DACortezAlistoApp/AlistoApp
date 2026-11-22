@@ -205,15 +205,27 @@ private fun computeElapsedLabel(b: BookingRecord): String {
 // ==========================================================================
 internal fun ContractorMainActivity.buildContractorActiveBookingTab(user: AuthenticatedUser): View {
     val dm = resources.displayMetrics
-    val compact = (dm.widthPixels / dm.density) < 375f
-    val padH = dp(if (compact) 11 else 15)
-    val scroll = ScrollView(this).apply {
-        isFillViewport = true
+    val compact = (dm.widthPixels / dm.density) < 395f
+    val padH = dp(if (compact) 10 else 14)
+    val pageRoot = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
         setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.MATCH_PARENT
+        )
+    }
+    val scroll = ScrollView(this).apply {
+        isFillViewport = false
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            0,
+            1f
+        )
     }
     val container = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(padH, dp(12), padH, dp(22))
+        setPadding(padH, dp(10), padH, dp(12))
     }
 
     val activeJob = findMyActiveBooking(user.id)
@@ -259,7 +271,8 @@ internal fun ContractorMainActivity.buildContractorActiveBookingTab(user: Authen
         )
         container.addView(emptyCard)
         scroll.addView(container)
-        return scroll
+        pageRoot.addView(scroll)
+        return pageRoot
     }
 
     val b = activeJob
@@ -549,50 +562,53 @@ internal fun ContractorMainActivity.buildContractorActiveBookingTab(user: Authen
     }
     container.addView(routeCard)
 
-    // Status Progression Actions
-    val actionCard = AlistoUiKit.surfaceCard(this, "#0B1324", "#1E293B", padDp = 15)
-    actionCard.addView(TextView(this).apply {
-        text = "UPDATE BOOKING STATUS"
-        textSize = 11f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.GOLD_ACCENT))
-        setPadding(0, 0, 0, dp(10))
-    })
+    scroll.addView(container)
+    pageRoot.addView(scroll)
 
+    // Pinned Bottom Action Dock (Always visible & autofits every screen height)
+    val actionDock = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setBackgroundColor(Color.parseColor("#081124"))
+        setPadding(padH, dp(8), padH, dp(8))
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+    }
+    val ctaH = if (compact) 44 else 48
     when (b.status) {
         "ACCEPTED" -> {
-            actionCard.addView(AlistoUiKit.pillButton(this, "Heading to Pickup (On The Way)", "#0284C7", "#FFFFFF", heightDp = 48, textSizeSp = 14f) {
+            actionDock.addView(AlistoUiKit.pillButton(this, "Heading to Pickup (On The Way)", "#0284C7", "#FFFFFF", heightDp = ctaH, textSizeSp = 13.5f) {
                 transitionJob(b.id, "ON_THE_WAY")
             })
         }
         "ON_THE_WAY" -> {
-            actionCard.addView(AlistoUiKit.pillButton(this, "Arrived at Pickup Location", AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP, heightDp = 48, textSizeSp = 14f) {
+            actionDock.addView(AlistoUiKit.pillButton(this, "Arrived at Pickup Location", AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP, heightDp = ctaH, textSizeSp = 13.5f) {
                 transitionJob(b.id, "ARRIVED")
             })
         }
         "ARRIVED" -> {
-            actionCard.addView(AlistoUiKit.pillButton(this, "Start Trip / Service (Ongoing)", AlistoUiKit.EMERALD, AlistoUiKit.BG_DEEP, heightDp = 48, textSizeSp = 14f) {
+            actionDock.addView(AlistoUiKit.pillButton(this, "Start Trip / Service (Ongoing)", AlistoUiKit.EMERALD, AlistoUiKit.BG_DEEP, heightDp = ctaH, textSizeSp = 13.5f) {
                 transitionJob(b.id, "ONGOING")
             })
         }
         "ONGOING", "IN_PROGRESS" -> {
-            actionCard.addView(AlistoUiKit.pillButton(this, "Complete Booking & Payment Summary", AlistoUiKit.EMERALD, AlistoUiKit.BG_DEEP, "#6EE7B7", heightDp = 50, textSizeSp = 14.5f) {
+            actionDock.addView(AlistoUiKit.pillButton(this, "Complete Booking & Payment Summary", AlistoUiKit.EMERALD, AlistoUiKit.BG_DEEP, "#6EE7B7", heightDp = ctaH, textSizeSp = 14f) {
                 verifyDropoffProximityThenComplete(b, user)
             })
         }
     }
-
     if (b.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED")) {
-        actionCard.addView(
-            AlistoUiKit.pillButton(this, "Safety / Unable to Fulfill Refusal", "#450A0A", "#FCA5A5", "#7F1D1D", heightDp = 40, textSizeSp = 12.5f) {
-                promptLtfrbSafetyRefusal(b, user)
-            }.apply {
-                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) }
-            }
-        )
+        actionDock.addView(TextView(this).apply {
+            text = "Safety / Unable to Fulfill Refusal"
+            textSize = 11.5f; gravity = Gravity.CENTER; setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#FCA5A5"))
+            setPadding(dp(8), dp(7), dp(8), dp(2))
+            setOnClickListener { promptLtfrbSafetyRefusal(b, user) }
+        })
     }
-    container.addView(actionCard)
-
-    scroll.addView(container)
-    return scroll
+    pageRoot.addView(actionDock)
+    return pageRoot
 }
 
 // ==========================================================================
@@ -685,6 +701,14 @@ internal fun ContractorMainActivity.openContractorChatDialog(b: BookingRecord) {
     inputRow.addView(sendBtn)
     wrap.addView(inputRow)
 
+    val syncStatusTv = TextView(this).apply {
+        text = "● Syncing live every 3s..."
+        textSize = 10.5f
+        setTextColor(Color.parseColor("#6EE7B7"))
+        setPadding(dp(2), dp(6), dp(2), 0)
+    }
+    wrap.addView(syncStatusTv)
+
     var chatPollJob: Job? = null
     val dialog = AlertDialog.Builder(this)
         .setTitle("Chat • ${b.clientNickname}")
@@ -698,9 +722,14 @@ internal fun ContractorMainActivity.openContractorChatDialog(b: BookingRecord) {
                 val res = AlistoKernelClient.fetchBookingMessagesRpc(b.id)
                 res.onSuccess { msgs ->
                     renderMsgs(msgs)
+                    syncStatusTv.text = "● Live chat synced (${msgs.size} message${if (msgs.size == 1) "" else "s"}) • 3s heartbeat"
+                    syncStatusTv.setTextColor(Color.parseColor("#6EE7B7"))
                     msgs.lastOrNull()?.id?.takeIf { it.isNotBlank() }?.let { lastSeenChatMsgIds[b.id] = it }
+                }.onFailure { err ->
+                    syncStatusTv.text = "Sync retry: ${err.message ?: "reconnecting..."}"
+                    syncStatusTv.setTextColor(Color.parseColor("#FDA4AF"))
                 }
-                delay(2_500L)
+                delay(3_000L)
             }
         }
     }

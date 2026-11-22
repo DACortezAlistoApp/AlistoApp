@@ -3,6 +3,12 @@ package ph.alisto.kernel
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import java.lang.ref.WeakReference
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Geocoder
@@ -62,12 +68,96 @@ object AlistoLocationTracker {
         return fine || coarse
     }
 
+    private var activeGpsDialogRef: WeakReference<AlertDialog>? = null
+    private var gpsPermRequestedOnce: Boolean = false
+
+    fun hasPreciseGpsPermission(context: Context): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun isGpsEnabled(context: Context): Boolean {
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return false
+        val hwEnabled = try { lm.isProviderEnabled(LocationManager.GPS_PROVIDER) } catch (_: Exception) { false }
+        val sysEnabled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try { lm.isLocationEnabled } catch (_: Exception) { hwEnabled }
+        } else {
+            hwEnabled
+        }
+        return hwEnabled && sysEnabled
+    }
+
     fun requestPermission(activity: Activity) {
+        gpsPermRequestedOnce = true
         ActivityCompat.requestPermissions(
             activity,
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
             REQ_LOCATION_PERMISSION
         )
+    }
+
+    /**
+     * Enforces explicit Precise GPS permission and active GPS hardware.
+     * Returns true only when both ACCESS_FINE_LOCATION and device GPS are enabled.
+     */
+    fun ensureExplicitGpsGate(activity: Activity, appLabel: String = "Alisto"): Boolean {
+        if (activity.isFinishing || activity.isDestroyed) return false
+        val hasFine = hasPreciseGpsPermission(activity)
+        val gpsOn = isGpsEnabled(activity)
+
+        if (hasFine && gpsOn) {
+            try { activeGpsDialogRef?.get()?.dismiss() } catch (_: Exception) {}
+            activeGpsDialogRef = null
+            return true
+        }
+
+        if (activeGpsDialogRef?.get()?.isShowing == true) return false
+
+        if (!hasFine) {
+            val permanentlyDenied = gpsPermRequestedOnce &&
+                !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.ACCESS_FINE_LOCATION)
+            val dlg = AlertDialog.Builder(activity)
+                .setTitle("Precise GPS Required")
+                .setMessage(
+                    "$appLabel explicitly requires Precise GPS location access for accurate pickup pins, live route tracking, and verified arrival/drop-off distance."
+                )
+                .setCancelable(false)
+                .setPositiveButton(if (permanentlyDenied) "Open App Settings" else "Allow Precise GPS") { _, _ ->
+                    if (permanentlyDenied) {
+                        try {
+                            activity.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.parse("package:${activity.packageName}")
+                            })
+                        } catch (_: Exception) {
+                            requestPermission(activity)
+                        }
+                    } else {
+                        requestPermission(activity)
+                    }
+                }
+                .create()
+            activeGpsDialogRef = WeakReference(dlg)
+            dlg.show()
+            return false
+        }
+
+        // Permission granted, but device GPS toggle is OFF
+        val dlg = AlertDialog.Builder(activity)
+            .setTitle("Turn On Device GPS")
+            .setMessage(
+                "Your phone's GPS is currently turned off. Please enable Location / GPS so $appLabel can lock your live coordinates."
+            )
+            .setCancelable(false)
+            .setPositiveButton("Enable GPS") { _, _ ->
+                try {
+                    activity.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                } catch (_: Exception) {}
+            }
+            .create()
+        activeGpsDialogRef = WeakReference(dlg)
+        dlg.show()
+        return false
     }
 
     @SuppressLint("MissingPermission")

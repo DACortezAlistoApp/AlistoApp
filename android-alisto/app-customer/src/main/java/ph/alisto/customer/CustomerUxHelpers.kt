@@ -514,6 +514,14 @@ internal fun CustomerMainActivity.openLiveCustomerChatDialog(booking: BookingRec
     inputRow.addView(sendBtn)
     dialogLayout.addView(inputRow)
 
+    val syncStatusTv = TextView(this).apply {
+        text = "● Syncing live every 3s..."
+        textSize = 10.5f
+        setTextColor(Color.parseColor("#6EE7B7"))
+        setPadding(dp(2), dp(6), dp(2), 0)
+    }
+    dialogLayout.addView(syncStatusTv)
+
     var chatPollJob: Job? = null
     val dialog = AlertDialog.Builder(this)
         .setTitle("Chat • ${booking.contractorFullName ?: booking.bookingRef}")
@@ -527,9 +535,14 @@ internal fun CustomerMainActivity.openLiveCustomerChatDialog(booking: BookingRec
                 val res = AlistoKernelClient.fetchBookingMessagesRpc(booking.id)
                 res.onSuccess { msgs ->
                     renderMessages(msgs)
+                    syncStatusTv.text = "● Live chat synced (${msgs.size} message${if (msgs.size == 1) "" else "s"}) • 3s heartbeat"
+                    syncStatusTv.setTextColor(Color.parseColor("#6EE7B7"))
                     msgs.lastOrNull()?.id?.takeIf { it.isNotBlank() }?.let { lastSeenChatMsgIds[booking.id] = it }
+                }.onFailure { err ->
+                    syncStatusTv.text = "Sync retry: ${err.message ?: "reconnecting..."}"
+                    syncStatusTv.setTextColor(Color.parseColor("#FDA4AF"))
                 }
-                delay(2_500L)
+                delay(3_000L)
             }
         }
     }

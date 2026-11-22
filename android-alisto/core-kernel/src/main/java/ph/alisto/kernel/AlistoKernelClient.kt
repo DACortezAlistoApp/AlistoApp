@@ -1050,7 +1050,7 @@ object AlistoKernelClient {
                     ChatMessage(
                         o.optString("sender_name", "User").ifBlank { "User" },
                         o.optString("message_body", ""),
-                        formatManilaClock(o.optString("created_at", "")),
+                        formatManilaClock(o.optString("sent_at", "").ifBlank { o.optString("created_at", "") }),
                         id = o.optString("id", ""),
                         senderId = o.optString("sender_id", ""),
                         senderRole = o.optString("sender_role", "")
@@ -1080,7 +1080,7 @@ object AlistoKernelClient {
             val msg = ChatMessage(
                 activeUser.nickname,
                 messageBody.trim(),
-                formatManilaClock(rec?.optString("created_at")),
+                formatManilaClock(rec?.optString("sent_at")?.ifBlank { rec.optString("created_at") }),
                 id = rec?.optString("id", "").orEmpty(),
                 senderId = activeUser.id,
                 senderRole = activeUser.role

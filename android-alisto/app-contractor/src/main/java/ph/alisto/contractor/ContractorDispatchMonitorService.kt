@@ -17,6 +17,8 @@ import android.os.CountDownTimer
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
+import android.view.ContextThemeWrapper
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
@@ -96,6 +98,7 @@ class ContractorDispatchMonitorService : Service() {
     private var floatingOverlayView: View? = null
     private var floatingTimer: CountDownTimer? = null
     private var floatingDecisionInFlight: Boolean = false
+    private var offerWakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -267,19 +270,30 @@ class ContractorDispatchMonitorService : Service() {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            @Suppress("DEPRECATION")
+            offerWakeLock = pm?.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "alisto:offer_overlay_wake"
+            )?.apply { acquire(35_000L) }
+        } catch (_: Exception) {}
+
+        @Suppress("DEPRECATION")
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             overlayType,
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.CENTER
         }
 
-        val ctx = this
+        val ctx = ContextThemeWrapper(this, androidx.appcompat.R.style.Theme_AppCompat_NoActionBar)
         val bookingRef = offer.optString("booking_ref", "ALISTO")
         val offerSource = offer.optString("offer_source", "AUTO_ASSIGN")
         val verticalKey = offer.optString("vertical_key", "delivery_logistics")
@@ -484,6 +498,10 @@ class ContractorDispatchMonitorService : Service() {
                 } catch (_: Exception) {}
             }
             floatingOverlayView = null
+            try {
+                if (offerWakeLock?.isHeld == true) offerWakeLock?.release()
+            } catch (_: Exception) {}
+            offerWakeLock = null
         }
     }
 
