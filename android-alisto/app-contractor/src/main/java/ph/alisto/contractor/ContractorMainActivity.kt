@@ -15,6 +15,8 @@ import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import kotlinx.coroutines.*
 import ph.alisto.kernel.*
 import ph.alisto.kernel.AlistoUiKit.dp
@@ -29,6 +31,8 @@ class ContractorMainActivity : AppCompatActivity() {
     internal var pendingSubCategory = "ALL"
     internal var lastCompletedAtMs: Long = 0L
     internal var cachedWalletEntries: List<WalletLedgerEntry> = emptyList()
+    internal val lastSeenChatMsgIds = mutableMapOf<String, String>()
+    internal val paidWaitAlertedIds = mutableSetOf<String>()
     private var autoOnlineSyncedThisSession = false
     private var autoAcceptEnabled = false
     private var promptedEarnModeThisSession = false
@@ -512,6 +516,15 @@ class ContractorMainActivity : AppCompatActivity() {
         val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(shell) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(0, bars.top, 0, bars.bottom)
+            insets
         }
         val contentHost = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
@@ -551,6 +564,7 @@ class ContractorMainActivity : AppCompatActivity() {
         shell.addView(contentHost)
         shell.addView(bottomNav)
         setContentView(shell)
+        ViewCompat.requestApplyInsets(shell)
     }
 
     private fun buildContractorDriveMapTab(user: AuthenticatedUser): View {
@@ -1548,10 +1562,26 @@ class ContractorMainActivity : AppCompatActivity() {
                     val digest = AlistoKernelClient.bookings.joinToString("|") {
                         "${it.id}:${it.status}:${it.contractorId}:${it.offerContractorId}:${it.customerGoingOutAt}"
                     }
-                    val hasArrivedJob = user != null && AlistoKernelClient.bookings.any {
-                        it.contractorId == user.id && it.status == "ARRIVED"
+                    if (user != null) {
+                        val activeChatJob = AlistoKernelClient.bookings.firstOrNull {
+                            it.contractorId == user.id && it.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS")
+                        }
+                        if (activeChatJob != null) {
+                            val chatRes = AlistoKernelClient.fetchBookingMessagesRpc(activeChatJob.id)
+                            chatRes.onSuccess { msgs ->
+                                val latest = msgs.lastOrNull()
+                                if (latest != null && latest.id.isNotBlank()) {
+                                    val prevId = lastSeenChatMsgIds[activeChatJob.id]
+                                    lastSeenChatMsgIds[activeChatJob.id] = latest.id
+                                    if (prevId != null && prevId != latest.id && latest.senderId != user.id) {
+                                        ContractorSoundEngine.playStepUpdatedTone(this@ContractorMainActivity)
+                                        Toast.makeText(this@ContractorMainActivity, "Message from ${latest.senderName}: ${latest.body}", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            }
+                        }
                     }
-                    if (user != null && (digest != lastBookingsDigest || (hasArrivedJob && activeTab == "ACTIVE"))) {
+                    if (user != null && digest != lastBookingsDigest) {
                         lastBookingsDigest = digest
                         if (activeTab == "JOBS" || activeTab == "DRIVE" || activeTab == "ACTIVE") {
                             showActiveContractorPortal(user)

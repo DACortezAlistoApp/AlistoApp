@@ -10,6 +10,11 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Instant
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 data class AuthenticatedUser(
@@ -321,7 +326,10 @@ data class LedgerEntry(
 data class ChatMessage(
     val senderName: String,
     val body: String,
-    val sentAt: String
+    val sentAt: String,
+    val id: String = "",
+    val senderId: String = "",
+    val senderRole: String = ""
 )
 
 object AlistoKernelClient {
@@ -996,6 +1004,66 @@ object AlistoKernelClient {
         }
     }
 
+    fun parseServerInstant(raw: String?): Instant? {
+        val s = raw?.trim().orEmpty()
+        if (s.isBlank() || s.equals("null", ignoreCase = true)) return null
+        val normalized = s.replace(" ", "T").let {
+            when {
+                it.endsWith("+00") -> "${it}:00"
+                it.endsWith("-00") -> "${it}:00"
+                else -> it
+            }
+        }
+        return try {
+            OffsetDateTime.parse(normalized).toInstant()
+        } catch (_: Exception) {
+            try {
+                Instant.parse(normalized)
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
+    fun formatManilaClock(rawIso: String?): String {
+        val inst = parseServerInstant(rawIso) ?: return "Now"
+        val zone = try { ZoneId.of("Asia/Manila") } catch (_: Exception) { ZoneId.systemDefault() }
+        return DateTimeFormatter.ofPattern("hh:mm a", Locale.US).format(inst.atZone(zone))
+    }
+
+    suspend fun fetchBookingMessagesRpc(bookingId: String, limit: Int = 60): Result<List<ChatMessage>> = withContext(Dispatchers.IO) {
+        val token = currentSessionToken ?: return@withContext Result.failure(IllegalStateException("Session expired."))
+        try {
+            val json = postRpc("secure_get_booking_messages_rpc", JSONObject().apply {
+                put("p_session_token", token)
+                put("p_booking_id", bookingId)
+                put("p_limit", limit)
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Unable to load messages.")))
+            }
+            val arr = json.optJSONArray("messages") ?: JSONArray()
+            val list = mutableListOf<ChatMessage>()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                list.add(
+                    ChatMessage(
+                        o.optString("sender_name", "User").ifBlank { "User" },
+                        o.optString("message_body", ""),
+                        formatManilaClock(o.optString("created_at", "")),
+                        id = o.optString("id", ""),
+                        senderId = o.optString("sender_id", ""),
+                        senderRole = o.optString("sender_role", "")
+                    )
+                )
+            }
+            chatTranscripts[bookingId] = list
+            Result.success(list)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun sendModeratedChatMessageRpc(bookingId: String, messageBody: String): Result<ChatMessage> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
@@ -1008,8 +1076,16 @@ object AlistoKernelClient {
             if (status == "BLOCKED_MODERATION" || status == "LOCKED_STATE" || status == "ERROR") {
                 return@withContext Result.failure(SecurityException(json.optString("message", "Message blocked by moderation trigger.")))
             }
-            val msg = ChatMessage(activeUser.nickname, messageBody.trim(), "Live")
-            chatTranscripts.getOrPut(bookingId) { mutableListOf() }.add(msg)
+            val rec = json.optJSONObject("message_record")
+            val msg = ChatMessage(
+                activeUser.nickname,
+                messageBody.trim(),
+                formatManilaClock(rec?.optString("created_at")),
+                id = rec?.optString("id", "").orEmpty(),
+                senderId = activeUser.id,
+                senderRole = activeUser.role
+            )
+            fetchBookingMessagesRpc(bookingId)
             return@withContext Result.success(msg)
         } catch (e: Exception) {
             return@withContext Result.failure(e)

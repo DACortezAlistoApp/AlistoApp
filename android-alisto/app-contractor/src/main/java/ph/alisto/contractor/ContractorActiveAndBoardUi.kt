@@ -10,6 +10,8 @@ import android.location.Location
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.view.Gravity
 import android.view.View
@@ -19,6 +21,9 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -30,6 +35,7 @@ import ph.alisto.kernel.AlistoUiKit
 import ph.alisto.kernel.AlistoUiKit.dp
 import ph.alisto.kernel.AuthenticatedUser
 import ph.alisto.kernel.BookingRecord
+import ph.alisto.kernel.ChatMessage
 import ph.alisto.kernel.WalletLedgerEntry
 import java.text.SimpleDateFormat
 import java.time.Duration
@@ -86,29 +92,25 @@ private data class ContractorWaitingSnapshot(
 private fun computeContractorWaitingSnapshot(b: BookingRecord): ContractorWaitingSnapshot {
     val rules = AlistoKernelClient.currentPricingRules
     val freeSec = rules.freeWaitMinutes * 60L
-    if (b.status == "ARRIVED" && !b.arrivedAt.isNullOrBlank()) {
-        return try {
-            val arrived = Instant.parse(b.arrivedAt)
-            val elapsedSec = Duration.between(arrived, Instant.now()).seconds.coerceAtLeast(0L)
-            if (elapsedSec <= freeSec) {
-                val rem = (freeSec - elapsedSec).coerceAtLeast(0L)
-                ContractorWaitingSnapshot(
-                    0, 0.0,
-                    "Free Waiting Countdown: %02d:%02d left (PHP %.2f/min after)".format(rem / 60L, rem % 60L, rules.waitingRatePerMinPhp),
-                    false
-                )
-            } else {
-                val overSec = elapsedSec - freeSec
-                val billMins = ceil(overSec / 60.0).toInt().coerceAtLeast(1)
-                val fee = billMins * rules.waitingRatePerMinPhp
-                ContractorWaitingSnapshot(
-                    billMins, fee,
-                    "Paid Waiting Active (+%02d:%02d over free %dm) • +PHP %.2f".format(overSec / 60L, overSec % 60L, rules.freeWaitMinutes, fee),
-                    true
-                )
-            }
-        } catch (_: Exception) {
-            ContractorWaitingSnapshot(0, 0.0, "Free ${rules.freeWaitMinutes}-minute waiting window active", false)
+    if (b.status == "ARRIVED") {
+        val arrived = AlistoKernelClient.parseServerInstant(b.arrivedAt) ?: Instant.now()
+        val elapsedSec = Duration.between(arrived, Instant.now()).seconds.coerceAtLeast(0L)
+        return if (elapsedSec <= freeSec) {
+            val rem = (freeSec - elapsedSec).coerceAtLeast(0L)
+            ContractorWaitingSnapshot(
+                0, 0.0,
+                "Free Waiting Timer: %02d:%02d left (PHP %.2f/min after)".format(rem / 60L, rem % 60L, rules.waitingRatePerMinPhp),
+                false
+            )
+        } else {
+            val overSec = elapsedSec - freeSec
+            val billMins = ceil(overSec / 60.0).toInt().coerceAtLeast(1)
+            val fee = billMins * rules.waitingRatePerMinPhp
+            ContractorWaitingSnapshot(
+                billMins, fee,
+                "PAID WAITING ACTIVE (+%02d:%02d over %dm free) • +PHP %.2f".format(overSec / 60L, overSec % 60L, rules.freeWaitMinutes, fee),
+                true
+            )
         }
     }
     return ContractorWaitingSnapshot(
@@ -185,7 +187,7 @@ private fun formatManilaDateTime(isoOrNow: Instant = Instant.now()): String {
 private fun computeElapsedLabel(b: BookingRecord): String {
     val startIso = b.startedAt ?: b.onTheWayAt ?: b.acceptedAt ?: return "Just now"
     return try {
-        val dur = Duration.between(Instant.parse(startIso), Instant.now())
+        val dur = Duration.between(AlistoKernelClient.parseServerInstant(startIso) ?: Instant.now(), Instant.now())
         val totalMin = dur.toMinutes().coerceAtLeast(0L)
         val hrs = totalMin / 60L
         val mins = totalMin % 60L
@@ -202,10 +204,16 @@ private fun computeElapsedLabel(b: BookingRecord): String {
 // 1. DEDICATED CURRENT / ACTIVE BOOKING TAB
 // ==========================================================================
 internal fun ContractorMainActivity.buildContractorActiveBookingTab(user: AuthenticatedUser): View {
-    val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP)) }
+    val dm = resources.displayMetrics
+    val compact = (dm.widthPixels / dm.density) < 375f
+    val padH = dp(if (compact) 11 else 15)
+    val scroll = ScrollView(this).apply {
+        isFillViewport = true
+        setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
+    }
     val container = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(16), dp(18), dp(16), dp(28))
+        setPadding(padH, dp(12), padH, dp(22))
     }
 
     val activeJob = findMyActiveBooking(user.id)
@@ -259,31 +267,39 @@ internal fun ContractorMainActivity.buildContractorActiveBookingTab(user: Authen
     val tripDistKm = computeTripDistanceKm(b)
     val totalCollect = b.quotedFee + waitSnap.runningFeePhp + b.tipAmount
 
-    // Hero Fare, Distance & Elapsed Card
-    val hero = AlistoUiKit.surfaceCard(this, "#0B1D39", "#38BDF8", padDp = 15)
+    // Hero Fare, Distance & Elapsed Card (responsive, never overflows screen width)
+    val hero = AlistoUiKit.surfaceCard(this, "#0B1D39", "#38BDF8", padDp = if (compact) 12 else 14)
     hero.addView(TextView(this).apply {
-        text = "${b.bookingRef}  •  ${b.verticalKey.replace("_", " ").uppercase()}  •  ${b.paymentMethod}"
-        textSize = 11f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor("#93C5FD"))
+        text = "${b.bookingRef} • ${b.verticalKey.replace("_", " ").uppercase()} • ${b.paymentMethod}"
+        textSize = if (compact) 10.5f else 11f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor("#93C5FD"))
     })
     hero.addView(TextView(this).apply {
         text = b.serviceTitle
-        textSize = 17.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
-        setPadding(0, dp(3), 0, dp(6))
+        textSize = if (compact) 15.5f else 17f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+        setPadding(0, dp(2), 0, dp(6))
     })
+    val totalCollectBadge = AlistoUiKit.badgePill(
+        this@buildContractorActiveBookingTab,
+        "Total: PHP ${"%.2f".format(totalCollect)}",
+        "#064E3B",
+        "#6EE7B7"
+    )
     hero.addView(LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        addView(AlistoUiKit.badgePill(this@buildContractorActiveBookingTab, "Total: PHP ${"%.2f".format(totalCollect)}", "#064E3B", "#6EE7B7").apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        addView(totalCollectBadge.apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(6) }
         })
         if (tripDistKm != null) {
-            addView(AlistoUiKit.badgePill(this@buildContractorActiveBookingTab, "Trip: ${formatTripKm(tripDistKm)}", "#1E3A8A", "#93C5FD").apply {
-                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(6) }
-            })
+            addView(AlistoUiKit.badgePill(this@buildContractorActiveBookingTab, "Trip: ${formatTripKm(tripDistKm)}", "#1E3A8A", "#93C5FD"))
         }
-        addView(AlistoUiKit.badgePill(this@buildContractorActiveBookingTab, computeElapsedLabel(b), "#1E293B", "#CBD5E1"))
+    })
+    hero.addView(TextView(this).apply {
+        text = "Elapsed: ${computeElapsedLabel(b)}  •  Fare: PHP ${"%.2f".format(b.quotedFee)}" +
+            if (b.tipAmount > 0.0) "  •  Tip: PHP ${"%.0f".format(b.tipAmount)}" else ""
+        textSize = 11.5f; setTextColor(Color.parseColor("#CBD5E1")); setPadding(0, dp(6), 0, 0)
     })
 
-    // Live 5-minute free waiting countdown banner once ARRIVED
+    // Live 1-second 5-minute free waiting countdown -> Paid Wait alert & dynamic Total update
     if (b.status == "ARRIVED" || waitSnap.runningFeePhp > 0.0) {
         val waitBanner = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -294,17 +310,50 @@ internal fun ContractorMainActivity.buildContractorActiveBookingTab(user: Authen
                 if (waitSnap.isOverFree) "#F43F5E" else "#10B981"
             )
             setPadding(dp(10), dp(8), dp(10), dp(8))
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) }
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(9) }
         }
-        waitBanner.addView(TextView(this).apply {
+        val waitTitleTv = TextView(this).apply {
             text = waitSnap.bannerText
-            textSize = 12.5f; setTypeface(null, Typeface.BOLD)
+            textSize = if (compact) 12f else 12.5f; setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor(if (waitSnap.isOverFree) "#FDA4AF" else "#6EE7B7"))
-        })
+        }
+        waitBanner.addView(waitTitleTv)
         if (!b.customerGoingOutAt.isNullOrBlank()) {
             waitBanner.addView(TextView(this).apply {
                 text = "✓ Customer tapped \"I am going out\""
                 textSize = 11.5f; setTextColor(Color.parseColor("#D1FAE5")); setPadding(0, dp(3), 0, 0)
+            })
+        }
+        if (b.status == "ARRIVED") {
+            val tickHandler = Handler(Looper.getMainLooper())
+            val ticker = object : Runnable {
+                override fun run() {
+                    if (!waitBanner.isAttachedToWindow) return
+                    val cur = computeContractorWaitingSnapshot(b)
+                    waitTitleTv.text = cur.bannerText
+                    waitTitleTv.setTextColor(Color.parseColor(if (cur.isOverFree) "#FDA4AF" else "#6EE7B7"))
+                    waitBanner.background = AlistoUiKit.roundedBg(
+                        this@buildContractorActiveBookingTab,
+                        if (cur.isOverFree) "#450A0A" else "#064E3B",
+                        10,
+                        if (cur.isOverFree) "#F43F5E" else "#10B981"
+                    )
+                    val updatedTotal = b.quotedFee + cur.runningFeePhp + b.tipAmount
+                    totalCollectBadge.text = "Total: PHP ${"%.2f".format(updatedTotal)}"
+                    if (cur.isOverFree && paidWaitAlertedIds.add(b.id)) {
+                        ContractorSoundEngine.playStepUpdatedTone(this@buildContractorActiveBookingTab)
+                        Toast.makeText(
+                            this@buildContractorActiveBookingTab,
+                            "Free waiting window ended — Paid waiting timer is now active!",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                    tickHandler.postDelayed(this, 1_000L)
+                }
+            }
+            waitBanner.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) { tickHandler.postDelayed(ticker, 1_000L) }
+                override fun onViewDetachedFromWindow(v: View) { tickHandler.removeCallbacks(ticker) }
             })
         }
         hero.addView(waitBanner)
@@ -550,49 +599,113 @@ internal fun ContractorMainActivity.buildContractorActiveBookingTab(user: Authen
 // 2. IN-APP CONTRACTOR <-> CUSTOMER CHAT DIALOG
 // ==========================================================================
 internal fun ContractorMainActivity.openContractorChatDialog(b: BookingRecord) {
+    val myId = AlistoKernelClient.currentSessionUser?.id.orEmpty()
     val wrap = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(20), dp(14), dp(20), dp(10))
+        setPadding(dp(16), dp(12), dp(16), dp(10))
         setBackgroundColor(Color.parseColor("#0B1324"))
     }
-    val history = AlistoKernelClient.chatTranscripts[b.id].orEmpty()
-    if (history.isNotEmpty()) {
-        val logBox = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = AlistoUiKit.roundedBg(this@openContractorChatDialog, "#0F172A", 10, "#1E293B")
-            setPadding(dp(10), dp(8), dp(10), dp(8))
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
-        }
-        history.takeLast(6).forEach { m ->
-            logBox.addView(TextView(this).apply {
-                text = "${m.senderName}: ${m.body}"
-                textSize = 12.5f; setTextColor(Color.parseColor("#E2E8F0")); setPadding(0, dp(2), 0, dp(2))
-            })
-        }
-        wrap.addView(logBox)
+    val msgScroll = ScrollView(this).apply {
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(230)).apply { bottomMargin = dp(10) }
+        background = AlistoUiKit.roundedBg(this@openContractorChatDialog, "#060B17", 10, "#1E293B")
+        setPadding(dp(8), dp(8), dp(8), dp(8))
     }
-    val msgInput = AlistoUiKit.inputField(this, "Message ${b.clientNickname} (arrival, gate, items)...")
-    wrap.addView(msgInput)
+    val msgList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    msgScroll.addView(msgList)
+    wrap.addView(msgScroll)
 
-    AlertDialog.Builder(this)
-        .setTitle("Chat with ${b.clientNickname} • ${b.bookingRef}")
-        .setView(wrap)
-        .setNegativeButton("Close", null)
-        .setPositiveButton("Send") { _, _ ->
-            val body = msgInput.text.toString().trim()
-            if (body.isBlank()) return@setPositiveButton
-            uiScope.launch {
-                val res = AlistoKernelClient.sendModeratedChatMessageRpc(b.id, body)
-                res.onSuccess {
-                    ContractorSoundEngine.playStepUpdatedTone(this@openContractorChatDialog)
-                    Toast.makeText(this@openContractorChatDialog, "Message sent to ${b.clientNickname}", Toast.LENGTH_SHORT).show()
-                }.onFailure { err ->
-                    AlertDialog.Builder(this@openContractorChatDialog)
-                        .setTitle("Chat Notice").setMessage(err.message ?: "Unable to send message.").setPositiveButton("OK", null).show()
+    fun renderMsgs(messages: List<ChatMessage>) {
+        msgList.removeAllViews()
+        if (messages.isEmpty()) {
+            msgList.addView(TextView(this).apply {
+                text = "No messages yet. Send an update to ${b.clientNickname}."
+                textSize = 12f; setTextColor(Color.parseColor("#94A3B8")); setPadding(dp(6), dp(12), dp(6), dp(12))
+            })
+        } else {
+            messages.forEach { m ->
+                val isMine = m.senderId.isNotBlank() && m.senderId == myId
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = if (isMine) Gravity.END else Gravity.START
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
                 }
+                val bubble = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    background = AlistoUiKit.roundedBg(
+                        this@openContractorChatDialog,
+                        if (isMine) "#064E3B" else "#1E293B",
+                        12,
+                        if (isMine) "#10B981" else "#334155"
+                    )
+                    setPadding(dp(10), dp(7), dp(10), dp(7))
+                }
+                bubble.addView(TextView(this).apply {
+                    text = "${if (isMine) "You" else m.senderName} • ${m.timestampLabel}"
+                    textSize = 10f; setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.parseColor(if (isMine) "#6EE7B7" else "#7DD3FC"))
+                })
+                bubble.addView(TextView(this).apply {
+                    text = m.body
+                    textSize = 13f; setTextColor(Color.parseColor("#F8FAFC")); setPadding(0, dp(2), 0, 0)
+                })
+                row.addView(bubble)
+                msgList.addView(row)
+            }
+            msgScroll.post { msgScroll.fullScroll(View.FOCUS_DOWN) }
+        }
+    }
+
+    renderMsgs(AlistoKernelClient.chatTranscripts[b.id].orEmpty())
+
+    val inputRow = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+    }
+    val msgInput = AlistoUiKit.inputField(this, "Message ${b.clientNickname}...").apply {
+        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) }
+    }
+    val sendBtn = AlistoUiKit.pillButton(this, "Send", AlistoUiKit.EMERALD, AlistoUiKit.BG_DEEP, "#6EE7B7", heightDp = 42, textSizeSp = 13f) {
+        val body = msgInput.text.toString().trim()
+        if (body.isBlank()) return@pillButton
+        msgInput.setText("")
+        uiScope.launch {
+            val res = AlistoKernelClient.sendModeratedChatMessageRpc(b.id, body)
+            res.onSuccess {
+                ContractorSoundEngine.playStepUpdatedTone(this@openContractorChatDialog)
+                renderMsgs(AlistoKernelClient.chatTranscripts[b.id].orEmpty())
+                AlistoKernelClient.chatTranscripts[b.id]?.lastOrNull()?.id?.takeIf { it.isNotBlank() }?.let {
+                    lastSeenChatMsgIds[b.id] = it
+                }
+            }.onFailure { err ->
+                AlertDialog.Builder(this@openContractorChatDialog)
+                    .setTitle("Chat Notice").setMessage(err.message ?: "Unable to send message.").setPositiveButton("OK", null).show()
             }
         }
-        .show()
+    }
+    inputRow.addView(msgInput)
+    inputRow.addView(sendBtn)
+    wrap.addView(inputRow)
+
+    var chatPollJob: Job? = null
+    val dialog = AlertDialog.Builder(this)
+        .setTitle("Chat • ${b.clientNickname}")
+        .setView(wrap)
+        .setNegativeButton("Close", null)
+        .create()
+
+    dialog.setOnShowListener {
+        chatPollJob = uiScope.launch {
+            while (isActive && dialog.isShowing) {
+                val res = AlistoKernelClient.fetchBookingMessagesRpc(b.id)
+                res.onSuccess { msgs ->
+                    renderMsgs(msgs)
+                    msgs.lastOrNull()?.id?.takeIf { it.isNotBlank() }?.let { lastSeenChatMsgIds[b.id] = it }
+                }
+                delay(2_500L)
+            }
+        }
+    }
+    dialog.setOnDismissListener { chatPollJob?.cancel() }
+    dialog.show()
 }
 
 // ==========================================================================

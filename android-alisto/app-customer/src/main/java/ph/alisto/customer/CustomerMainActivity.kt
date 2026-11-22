@@ -27,6 +27,8 @@ class CustomerMainActivity : AppCompatActivity() {
 
     internal val uiScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val arrivedAlertedBookingIds = mutableSetOf<String>()
+    internal val lastSeenChatMsgIds = mutableMapOf<String, String>()
+    private var activeMapCardMinimized: Boolean = false
     private var entryMode = "LOGIN"
     private var activeTab = "BOOK"          // BOOK, ACTIVITY, ACCOUNT
     private var bookingStep = "LAUNCHER"    // LAUNCHER -> PICKUP_MAP
@@ -511,67 +513,83 @@ class CustomerMainActivity : AppCompatActivity() {
         mapStage.addView(topHud)
         root.addView(mapStage)
 
+        val activeBookings = AlistoKernelClient.bookings.filter {
+            (user.role == "super_admin" || it.clientId == user.id) &&
+                it.status !in listOf("COMPLETED", "COMPLETED_WITH_DISPUTE", "CANCELLED", "EXPIRED")
+        }
+        val hasActive = activeBookings.isNotEmpty()
+
         val sheet = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             isClickable = true
             isFocusable = true
-            background = AlistoUiKit.topSheetBg(this@CustomerMainActivity, AlistoUiKit.BG_SURFACE, 24, AlistoUiKit.BORDER)
+            background = AlistoUiKit.topSheetBg(this@CustomerMainActivity, AlistoUiKit.BG_SURFACE, 20, AlistoUiKit.BORDER)
             elevation = dp(12).toFloat()
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                (resources.displayMetrics.heightPixels * 0.58f).toInt(),
+                if (hasActive) FrameLayout.LayoutParams.WRAP_CONTENT else (resources.displayMetrics.heightPixels * 0.58f).toInt(),
                 Gravity.BOTTOM
             )
         }
-        root.post {
-            if (root.height > 0) {
-                (sheet.layoutParams as? FrameLayout.LayoutParams)?.height = (root.height * 0.58f).toInt()
-                sheet.requestLayout()
+        if (!hasActive) {
+            root.post {
+                if (root.height > 0) {
+                    (sheet.layoutParams as? FrameLayout.LayoutParams)?.height = (root.height * 0.58f).toInt()
+                    sheet.requestLayout()
+                }
             }
         }
         sheet.addView(AlistoUiKit.dragHandle(this))
 
         val scroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                if (hasActive) LinearLayout.LayoutParams.WRAP_CONTENT else 0,
+                if (hasActive) 0f else 1f
+            )
         }
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(4), dp(18), dp(20))
+            setPadding(dp(14), dp(2), dp(14), dp(12))
         }
 
-        val activeBookings = AlistoKernelClient.bookings.filter {
-            (user.role == "super_admin" || it.clientId == user.id) &&
-                it.status !in listOf("COMPLETED", "CANCELLED", "EXPIRED")
-        }
-        if (activeBookings.isNotEmpty()) {
+        if (hasActive) {
             val topB = activeBookings.first()
             val bidCount = AlistoKernelClient.bookingBids.count { it.bookingId == topB.id && it.status == "ACTIVE" }
             body.addView(LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#0C2942", 14, AlistoUiKit.CYAN)
-                setPadding(dp(14), dp(10), dp(14), dp(10))
-                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
-                setOnClickListener { activeTab = "ACTIVITY"; showAuthenticatedCustomerPortal() }
+                background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#0C2942", 12, AlistoUiKit.CYAN)
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
                 addView(LinearLayout(this@CustomerMainActivity).apply {
                     orientation = LinearLayout.VERTICAL
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    setOnClickListener { activeTab = "ACTIVITY"; showAuthenticatedCustomerPortal() }
                     addView(TextView(this@CustomerMainActivity).apply {
-                        text = "LIVE TRACKING • ${topB.bookingRef} • ${topB.status.replace("_", " ")}" + if (bidCount > 0) " • $bidCount offer(s)" else ""
-                        textSize = 12.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.CYAN))
+                        text = "${topB.bookingRef} • ${topB.status.replace("_", " ")}" + if (bidCount > 0) " • $bidCount offer(s)" else ""
+                        textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.CYAN))
                     })
                     if (!topB.contractorFullName.isNullOrBlank()) {
                         addView(TextView(this@CustomerMainActivity).apply {
-                            text = "Pro: ${topB.contractorFullName} (Tap for Profile)"
-                            textSize = 12f; setTextColor(Color.parseColor(AlistoUiKit.GOLD_SOFT)); setPadding(0, dp(2), 0, 0)
+                            text = "Pro: ${topB.contractorFullName} (Tap Profile)"
+                            textSize = 11.5f; setTextColor(Color.parseColor(AlistoUiKit.GOLD_SOFT))
                             setOnClickListener { showAssignedContractorProfileModal(topB) }
                         })
                     }
                 })
-                addView(TextView(this@CustomerMainActivity).apply {
-                    text = "Details →"; textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                if (topB.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS")) {
+                    addView(AlistoUiKit.chipButton(this@CustomerMainActivity, "Chat", true, "#064E3B", "#6EE7B7") {
+                        openLiveCustomerChatDialog(topB)
+                    }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(6) } })
+                }
+                addView(AlistoUiKit.chipButton(this@CustomerMainActivity, if (activeMapCardMinimized) "More" else "Map", false, "#1E293B", "#E2E8F0") {
+                    activeMapCardMinimized = !activeMapCardMinimized
+                    showAuthenticatedCustomerPortal()
                 })
             })
-            body.addView(buildKindnessAndWaitingBanner(topB))
+            if (!activeMapCardMinimized) {
+                body.addView(buildKindnessAndWaitingBanner(topB, compactForMap = true))
+            }
         } else {
             body.addView(TextView(this).apply {
                 text = "What do you need today?"
@@ -2309,35 +2327,7 @@ class CustomerMainActivity : AppCompatActivity() {
     }
 
     private fun openChatDialog(booking: BookingRecord) {
-        val dialogLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(16), dp(20), dp(10))
-            setBackgroundColor(Color.parseColor(AlistoUiKit.BG_SURFACE))
-        }
-        dialogLayout.addView(TextView(this).apply {
-            text = "Eyes on the Road, Hands on the Bars — Your rider may take a moment to reply while navigating traffic safely. They'll read your message at their next safe stop!"
-            textSize = 12f; setTextColor(Color.parseColor("#FDE68A"))
-            background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#2A1B08", 10, "#92400E")
-            setPadding(dp(11), dp(8), dp(11), dp(8))
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
-        })
-        val msgInput = AlistoUiKit.inputField(this, "Coordinate arrival or pabili item details...")
-        dialogLayout.addView(msgInput)
-
-        AlertDialog.Builder(this)
-            .setTitle("Chat • ${booking.bookingRef}").setView(dialogLayout)
-            .setPositiveButton("Send") { _, _ ->
-                val body = msgInput.text.toString()
-                if (body.isNotBlank()) {
-                    uiScope.launch {
-                        val res = AlistoKernelClient.sendModeratedChatMessageRpc(booking.id, body)
-                        res.onSuccess { Toast.makeText(this@CustomerMainActivity, "Message sent", Toast.LENGTH_SHORT).show() }
-                            .onFailure { err ->
-                                AlertDialog.Builder(this@CustomerMainActivity)
-                                    .setTitle("Moderation Notice").setMessage(err.message).setPositiveButton("OK", null).show()
-                            }
-                    }
-                }
-            }.setNegativeButton("Close", null).show()
+        openLiveCustomerChatDialog(booking)
     }
 
     private fun startCustomerRealtimeLoop() {
@@ -2376,9 +2366,25 @@ class CustomerMainActivity : AppCompatActivity() {
                         }
                         lastBookingStatuses[b.id] = b.status
                     }
+                    val activeChatJob = AlistoKernelClient.bookings.firstOrNull {
+                        it.clientId == user.id && it.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS")
+                    }
+                    if (activeChatJob != null) {
+                        val chatRes = AlistoKernelClient.fetchBookingMessagesRpc(activeChatJob.id)
+                        chatRes.onSuccess { msgs ->
+                            val latest = msgs.lastOrNull()
+                            if (latest != null && latest.id.isNotBlank()) {
+                                val prevId = lastSeenChatMsgIds[activeChatJob.id]
+                                lastSeenChatMsgIds[activeChatJob.id] = latest.id
+                                if (prevId != null && prevId != latest.id && latest.senderId != user.id) {
+                                    CustomerDoorbellEngine.playIncomingChatChime(this@CustomerMainActivity)
+                                    Toast.makeText(this@CustomerMainActivity, "Message from ${latest.senderName}: ${latest.body}", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    }
                     refreshCustomerMapLayers(user)
-                    val hasArrivedBooking = AlistoKernelClient.bookings.any { it.clientId == user.id && it.status == "ARRIVED" }
-                    if ((statusChanged || hasArrivedBooking) && (activeTab == "ACTIVITY" || (activeTab == "BOOK" && bookingStep == "LAUNCHER"))) {
+                    if (statusChanged && (activeTab == "ACTIVITY" || (activeTab == "BOOK" && bookingStep == "LAUNCHER"))) {
                         showAuthenticatedCustomerPortal()
                         break
                     }
