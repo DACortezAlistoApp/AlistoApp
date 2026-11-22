@@ -190,7 +190,7 @@ internal fun CustomerMainActivity.showBroadcastChargesConfirmation(
         textSize = 26f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.EMERALD))
     })
     box.addView(TextView(this).apply {
-        text = "$serviceTitle\nBase / Quoted Fare: PHP${"%.2f".format(fee)}\nTip (100% to Pro): PHP ${"\%.2f".format(tip)}\nPayment Method: $payLabel"
+        text = "$serviceTitle\nBase / Quoted Fare: PHP${"%.2f".format(fee)}\nTip (100% to Pro): PHP ${"%.2f".format(tip)}\nPayment Method: $payLabel"
         textSize = 13f; setTextColor(Color.parseColor("#E2E8F0")); setPadding(0, dp(8), 0, dp(12))
     })
     box.addView(TextView(this).apply {
@@ -256,7 +256,7 @@ internal fun CustomerMainActivity.showAssignedContractorProfileModal(b: BookingR
             })
         }
         addView(TextView(this@showAssignedContractorProfileModal).apply {
-            text = "★ ${"\%.2f".format(b.contractorRatingAvg)} (${b.contractorRatingCount} reviews)"
+            text = "★ ${"%.2f".format(b.contractorRatingAvg)} (${b.contractorRatingCount} reviews)"
             textSize = 13f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.GOLD_ACCENT))
         })
     })
@@ -470,7 +470,7 @@ internal fun CustomerMainActivity.openLiveCustomerChatDialog(booking: BookingRec
                     setPadding(dp(10), dp(7), dp(10), dp(7))
                 }
                 bubble.addView(TextView(this).apply {
-                    text = "${if (isMine) "You" else m.senderName} • ${m.timestampLabel}"
+                    text = "${if (isMine) "You" else m.senderName} • ${m.sentAt}"
                     textSize = 10f; setTypeface(null, Typeface.BOLD)
                     setTextColor(Color.parseColor(if (isMine) "#6EE7B7" else "#7DD3FC"))
                 })

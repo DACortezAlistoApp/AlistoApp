@@ -640,7 +640,7 @@ internal fun ContractorMainActivity.openContractorChatDialog(b: BookingRecord) {
                     setPadding(dp(10), dp(7), dp(10), dp(7))
                 }
                 bubble.addView(TextView(this).apply {
-                    text = "${if (isMine) "You" else m.senderName} • ${m.timestampLabel}"
+                    text = "${if (isMine) "You" else m.senderName} • ${m.sentAt}"
                     textSize = 10f; setTypeface(null, Typeface.BOLD)
                     setTextColor(Color.parseColor(if (isMine) "#6EE7B7" else "#7DD3FC"))
                 })
