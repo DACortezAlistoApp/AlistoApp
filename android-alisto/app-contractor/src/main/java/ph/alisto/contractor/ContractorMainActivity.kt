@@ -28,6 +28,7 @@ class ContractorMainActivity : AppCompatActivity() {
     internal var boardCategory = "OPEN"
     internal var pendingSubCategory = "ALL"
     internal var lastCompletedAtMs: Long = 0L
+    internal var cachedWalletEntries: List<WalletLedgerEntry> = emptyList()
     private var autoOnlineSyncedThisSession = false
     private var autoAcceptEnabled = false
     private var promptedEarnModeThisSession = false
@@ -42,6 +43,11 @@ class ContractorMainActivity : AppCompatActivity() {
     private var compressedOrcrUrl: String? = null
     private var compressedVehicleUrl: String? = null
 
+    override fun onPause() {
+        super.onPause()
+        ContractorOfferBridge.isMainActivityForeground = false
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -52,6 +58,7 @@ class ContractorMainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        ContractorOfferBridge.isMainActivityForeground = true
         val dec = ContractorOfferBridge.lastResultDecision
         if (dec != null && System.currentTimeMillis() - ContractorOfferBridge.lastHandledAtMs < 6000L) {
             ContractorOfferBridge.lastResultDecision = null
@@ -1044,6 +1051,7 @@ class ContractorMainActivity : AppCompatActivity() {
             }
         }
 
+        appendWalletLedgerSection(container, user)
         scroll.addView(container)
         return scroll
     }
@@ -1504,46 +1512,53 @@ class ContractorMainActivity : AppCompatActivity() {
     private fun startContractorRealtimeLoop() {
         realtimePollJob?.cancel()
         realtimePollJob = uiScope.launch {
+            var tick = 0
             while (isActive) {
-                delay(4_000L)
+                delay(2_500L)
+                tick += 1
                 val tok = AlistoKernelClient.currentSessionToken
                 if (tok.isNullOrBlank()) break
 
-                // Check for any incoming Auto-Assign or Board Award offer immediately
+                // Check for any incoming Auto-Assign or Board Award offer immediately across ALL tabs
                 val pendingEnvelope = AlistoKernelClient.fetchPendingContractorOfferRpc(tok)
                 if (pendingEnvelope != null) {
                     val offerObj = pendingEnvelope.optJSONObject("offer")
                     val offerBid = offerObj?.optString("id").orEmpty()
                     val recentlyHandled = (ContractorOfferBridge.lastResultBookingId == offerBid &&
-                        System.currentTimeMillis() - ContractorOfferBridge.lastHandledAtMs < 5000L)
+                        System.currentTimeMillis() - ContractorOfferBridge.lastHandledAtMs < 5500L)
                     if (offerBid.isNotBlank() && ContractorOfferBridge.activeBookingId != offerBid && !recentlyHandled) {
                         startActivity(ContractorOfferBridge.buildIntent(this@ContractorMainActivity, pendingEnvelope))
                     }
                 }
 
-                AlistoKernelClient.syncBookingsAndWallet()
-                val fired = AlistoPushCenter.dispatchUnreadNotifications(this@ContractorMainActivity, uiScope)
-                val user = AlistoKernelClient.currentSessionUser
-                val shifts = getEffectiveShiftVerticals(AlistoKernelClient.currentContractorProfile)
-                val mapBookings = if (user != null) {
-                    AlistoKernelClient.bookings.filter { it.contractorId == user.id || isBookingOpenForBoard(it, shifts, user.id) }
-                } else {
-                    AlistoKernelClient.bookings
-                }
-                contractorMapView?.updateMapLayers(
-                    bookings = mapBookings,
-                    telemetryPins = AlistoKernelClient.liveTelemetryPins,
-                    heatClusters = AlistoKernelClient.heatmapClusters
-                )
-                val digest = AlistoKernelClient.bookings.joinToString("|") { "${it.id}:${it.status}:${it.contractorId}:${it.offerContractorId}" }
-                if (user != null && digest != lastBookingsDigest) {
-                    lastBookingsDigest = digest
-                    if (activeTab == "JOBS" || activeTab == "DRIVE" || activeTab == "ACTIVE") {
-                        showActiveContractorPortal(user)
-                        break
+                if (tick % 2 == 0) {
+                    AlistoKernelClient.syncBookingsAndWallet()
+                    val user = AlistoKernelClient.currentSessionUser
+                    val shifts = getEffectiveShiftVerticals(AlistoKernelClient.currentContractorProfile)
+                    val mapBookings = if (user != null) {
+                        AlistoKernelClient.bookings.filter { it.contractorId == user.id || isBookingOpenForBoard(it, shifts, user.id) }
+                    } else {
+                        AlistoKernelClient.bookings
+                    }
+                    contractorMapView?.updateMapLayers(
+                        bookings = mapBookings,
+                        telemetryPins = AlistoKernelClient.liveTelemetryPins,
+                        heatClusters = AlistoKernelClient.heatmapClusters
+                    )
+                    val digest = AlistoKernelClient.bookings.joinToString("|") {
+                        "${it.id}:${it.status}:${it.contractorId}:${it.offerContractorId}:${it.customerGoingOutAt}"
+                    }
+                    val hasArrivedJob = user != null && AlistoKernelClient.bookings.any {
+                        it.contractorId == user.id && it.status == "ARRIVED"
+                    }
+                    if (user != null && (digest != lastBookingsDigest || (hasArrivedJob && activeTab == "ACTIVE"))) {
+                        lastBookingsDigest = digest
+                        if (activeTab == "JOBS" || activeTab == "DRIVE" || activeTab == "ACTIVE") {
+                            showActiveContractorPortal(user)
+                            break
+                        }
                     }
                 }
-                if (fired > 0) Toast.makeText(this@ContractorMainActivity, "$fired new dispatch alert(s)", Toast.LENGTH_SHORT).show()
             }
         }
     }
