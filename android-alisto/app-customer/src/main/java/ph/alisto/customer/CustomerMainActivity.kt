@@ -25,7 +25,8 @@ import ph.alisto.kernel.AlistoUiKit.dp
 
 class CustomerMainActivity : AppCompatActivity() {
 
-    private val uiScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    internal val uiScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val arrivedAlertedBookingIds = mutableSetOf<String>()
     private var entryMode = "LOGIN"
     private var activeTab = "BOOK"          // BOOK, ACTIVITY, ACCOUNT
     private var bookingStep = "LAUNCHER"    // LAUNCHER -> PICKUP_MAP
@@ -101,7 +102,7 @@ class CustomerMainActivity : AppCompatActivity() {
 
     private fun showAnimatedLaunchSplash() {
         val root = FrameLayout(this).apply {
-            setBackgroundColor(Color.parseColor(AlistoUiKit.BG_DEEP))
+            setBackgroundColor(Color.parseColor("#0F172A"))
         }
         val centerCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -115,7 +116,7 @@ class CustomerMainActivity : AppCompatActivity() {
         val logoView = ImageView(this).apply {
             setImageResource(R.drawable.ic_alisto_app_logo)
             scaleType = ImageView.ScaleType.FIT_CENTER
-            layoutParams = LinearLayout.LayoutParams(dp(124), dp(124)).apply { bottomMargin = dp(18) }
+            layoutParams = LinearLayout.LayoutParams(dp(134), dp(134)).apply { bottomMargin = dp(18) }
         }
         centerCol.addView(logoView)
         centerCol.addView(TextView(this).apply {
@@ -390,7 +391,7 @@ class CustomerMainActivity : AppCompatActivity() {
         setContentView(scroll)
     }
 
-    private fun showAuthenticatedCustomerPortal() {
+    internal fun showAuthenticatedCustomerPortal() {
         val user = AlistoKernelClient.currentSessionUser ?: return showEntryPortalGate()
         AlistoPushCenter.ensureNotificationPermission(this)
         AlistoPushCenter.dispatchUnreadNotifications(this, uiScope)
@@ -549,81 +550,92 @@ class CustomerMainActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#0C2942", 14, AlistoUiKit.CYAN)
                 setPadding(dp(14), dp(10), dp(14), dp(10))
-                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(14) }
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
                 setOnClickListener { activeTab = "ACTIVITY"; showAuthenticatedCustomerPortal() }
-                addView(TextView(this@CustomerMainActivity).apply {
-                    text = "${topB.bookingRef} • ${topB.status}" + if (bidCount > 0) " • $bidCount offer(s)" else ""
-                    textSize = 12.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.CYAN))
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                })
-                addView(TextView(this@CustomerMainActivity).apply {
-                    text = "Track →"; textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
-                })
-            })
-        }
-
-        body.addView(TextView(this).apply {
-            text = "What do you need today?"
-            textSize = 21f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
-        })
-        body.addView(TextView(this).apply {
-            text = "Choose a service to set your pickup, destination, and notes."
-            textSize = 13f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(3), 0, dp(14))
-        })
-
-        data class LauncherOption(
-            val title: String, val subtitle: String, val badge: String, val accent: String,
-            val vKey: String, val sub: String, val cat: String
-        )
-        val options = listOf(
-            LauncherOption("Request Delivery", "Send packages, food, or documents point-to-point", "DELIVERY", AlistoUiKit.AMBER, "delivery_logistics", "POINT_TO_POINT", "Parcel & Delivery"),
-            LauncherOption("Request Errands (Pabili)", "Multi-stop store pickups, groceries & personal errands", "ERRANDS", AlistoUiKit.CYAN, "delivery_logistics", "ERRAND_PURCHASING", "Errands & Pabili"),
-            LauncherOption("Request Skills & Trades", "Book verified electricians, plumbers, aircon techs & shops", "SKILLS", AlistoUiKit.EMERALD, "skills_marketplace", "ON_SITE_SKILL", "General Service"),
-            LauncherOption("Request a Local Ride", "Point-to-point sub-400cc local road mobility", "MOBILITY", "#38BDF8", "ride_hailing", "POINT_TO_POINT", "Local Ride")
-        )
-
-        options.forEach { opt ->
-            val card = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER_LIGHT, padDp = 15)
-            card.setOnClickListener {
-                selectedVerticalKey = opt.vKey
-                selectedJobSubtype = opt.sub
-                selectedServiceLabel = opt.title
-                selectedSkillCategory = opt.cat
-                dropPinTarget = null
-                activeDropoffLat = null
-                activeDropoffLng = null
-                draftDropoffAddress = ""
-                sequentialWaypoints.clear()
-                activeRoutePoints = emptyList()
-                activeRouteDistanceKm = 0.0
-                activeRouteDurationMin = 0.0
-                activeCalculatedFare = null
-                userEditedFeeManually = false
-                draftOfferFee = ""
-                bookingStep = "PICKUP_MAP"
-                sheetExpanded = false
-                showAuthenticatedCustomerPortal()
-            }
-            card.addView(LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 addView(LinearLayout(this@CustomerMainActivity).apply {
                     orientation = LinearLayout.VERTICAL
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(10) }
-                    addView(AlistoUiKit.badgePill(this@CustomerMainActivity, opt.badge, AlistoUiKit.BG_INPUT, opt.accent).apply {
-                        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
-                    })
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                     addView(TextView(this@CustomerMainActivity).apply {
-                        text = opt.title; textSize = 15.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                        text = "LIVE TRACKING • ${topB.bookingRef} • ${topB.status.replace("_", " ")}" + if (bidCount > 0) " • $bidCount offer(s)" else ""
+                        textSize = 12.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.CYAN))
                     })
-                    addView(TextView(this@CustomerMainActivity).apply {
-                        text = opt.subtitle; textSize = 12.5f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(2), 0, 0)
-                    })
+                    if (!topB.contractorFullName.isNullOrBlank()) {
+                        addView(TextView(this@CustomerMainActivity).apply {
+                            text = "Pro: ${topB.contractorFullName} (Tap for Profile)"
+                            textSize = 12f; setTextColor(Color.parseColor(AlistoUiKit.GOLD_SOFT)); setPadding(0, dp(2), 0, 0)
+                            setOnClickListener { showAssignedContractorProfileModal(topB) }
+                        })
+                    }
                 })
                 addView(TextView(this@CustomerMainActivity).apply {
-                    text = "→"; textSize = 20f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(opt.accent))
+                    text = "Details →"; textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
                 })
             })
-            body.addView(card)
+            body.addView(buildKindnessAndWaitingBanner(topB))
+        } else {
+            body.addView(TextView(this).apply {
+                text = "What do you need today?"
+                textSize = 21f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+            })
+            body.addView(TextView(this).apply {
+                text = "Choose a service to set your pickup, destination, and notes."
+                textSize = 13f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(3), 0, dp(14))
+            })
+
+            data class LauncherOption(
+                val title: String, val subtitle: String, val badge: String, val accent: String,
+                val vKey: String, val sub: String, val cat: String
+            )
+            val options = listOf(
+                LauncherOption("Request Delivery", "Send packages, food, or documents point-to-point", "DELIVERY", AlistoUiKit.AMBER, "delivery_logistics", "POINT_TO_POINT", "Parcel & Delivery"),
+                LauncherOption("Request Errands (Pabili)", "Multi-stop store pickups, groceries & personal errands", "ERRANDS", AlistoUiKit.CYAN, "delivery_logistics", "ERRAND_PURCHASING", "Errands & Pabili"),
+                LauncherOption("Request Skills & Trades", "Book verified electricians, plumbers, aircon techs & shops", "SKILLS", AlistoUiKit.EMERALD, "skills_marketplace", "ON_SITE_SKILL", "General Service"),
+                LauncherOption("Request a Local Ride", "Point-to-point sub-400cc local road mobility", "MOBILITY", "#38BDF8", "ride_hailing", "POINT_TO_POINT", "Local Ride")
+            )
+
+            options.forEach { opt ->
+                val card = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER_LIGHT, padDp = 15)
+                card.setOnClickListener {
+                    selectedVerticalKey = opt.vKey
+                    selectedJobSubtype = opt.sub
+                    selectedServiceLabel = opt.title
+                    selectedSkillCategory = opt.cat
+                    dropPinTarget = null
+                    activeDropoffLat = null
+                    activeDropoffLng = null
+                    draftDropoffAddress = ""
+                    sequentialWaypoints.clear()
+                    activeRoutePoints = emptyList()
+                    activeRouteDistanceKm = 0.0
+                    activeRouteDurationMin = 0.0
+                    activeCalculatedFare = null
+                    userEditedFeeManually = false
+                    draftOfferFee = ""
+                    bookingStep = "PICKUP_MAP"
+                    sheetExpanded = false
+                    showAuthenticatedCustomerPortal()
+                }
+                card.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                    addView(LinearLayout(this@CustomerMainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(10) }
+                        addView(AlistoUiKit.badgePill(this@CustomerMainActivity, opt.badge, AlistoUiKit.BG_INPUT, opt.accent).apply {
+                            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
+                        })
+                        addView(TextView(this@CustomerMainActivity).apply {
+                            text = opt.title; textSize = 15.5f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
+                        })
+                        addView(TextView(this@CustomerMainActivity).apply {
+                            text = opt.subtitle; textSize = 12.5f; setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED)); setPadding(0, dp(2), 0, 0)
+                        })
+                    })
+                    addView(TextView(this@CustomerMainActivity).apply {
+                        text = "→"; textSize = 20f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(opt.accent))
+                    })
+                })
+                body.addView(card)
+            }
         }
 
         scroll.addView(body)
@@ -1286,7 +1298,8 @@ class CustomerMainActivity : AppCompatActivity() {
                 val tip = tipInput.text.toString().toDoubleOrNull() ?: 0.0
                 val wpArr = JSONArray().apply { sequentialWaypoints.forEach { put(it) } }
 
-                uiScope.launch {
+                showBroadcastChargesConfirmation(title, fee, tip, selectedPaymentMethod) {
+                    uiScope.launch {
                     val res = AlistoKernelClient.createBookingV2Rpc(
                         verticalKey = selectedVerticalKey,
                         jobSubtype = selectedJobSubtype,
@@ -1330,6 +1343,7 @@ class CustomerMainActivity : AppCompatActivity() {
                         AlertDialog.Builder(this@CustomerMainActivity)
                             .setTitle("Booking Notice").setMessage(err.message).setPositiveButton("OK", null).show()
                     }
+                }
                 }
             }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT) }
         )
@@ -2056,14 +2070,41 @@ class CustomerMainActivity : AppCompatActivity() {
             })
         }
 
+        val liveWaitSnap = computeLiveWaitingSnapshot(b)
+        val effWaitFee = if (b.waitingFeePhp > 0.0) b.waitingFeePhp else liveWaitSnap.runningFeePhp
+        val effWaitMins = if (b.waitingBillableMinutes > 0) b.waitingBillableMinutes else liveWaitSnap.billableMinutes
+        val finalBillTotal = b.quotedFee + effWaitFee + b.tipAmount
+
         card.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
-            addView(AlistoUiKit.badgePill(this@CustomerMainActivity, "PHP ${"%.2f".format(b.quotedFee)}", AlistoUiKit.BG_INPUT, AlistoUiKit.EMERALD).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+            addView(AlistoUiKit.badgePill(this@CustomerMainActivity, "Total: PHP ${"%.2f".format(finalBillTotal)}", AlistoUiKit.BG_INPUT, AlistoUiKit.EMERALD).apply {
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(6) }
             })
+            if (effWaitFee > 0.0) {
+                addView(AlistoUiKit.badgePill(this@CustomerMainActivity, "+PHP ${"%.2f".format(effWaitFee)} Wait (${effWaitMins}m)", "#450A0A", "#FDA4AF").apply {
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(6) }
+                })
+            }
             if (b.tipAmount > 0) addView(AlistoUiKit.badgePill(this@CustomerMainActivity, "+PHP ${"%.0f".format(b.tipAmount)} Tip", AlistoUiKit.BG_INPUT, AlistoUiKit.AMBER))
         })
+        if (b.status in listOf("COMPLETED", "COMPLETED_WITH_DISPUTE")) {
+            val compLines = buildString {
+                append("Fare: PHP ${"%.2f".format(b.quotedFee)}")
+                if (effWaitFee > 0.0) append("  •  Paid Waiting (${effWaitMins}m): PHP ${"%.2f".format(effWaitFee)}")
+                if (b.tipAmount > 0.0) append("  •  Tip: PHP ${"%.2f".format(b.tipAmount)}")
+                append("\nFinal Total Charged: PHP ${"%.2f".format(finalBillTotal)} (${b.paymentMethod})")
+            }
+            card.addView(TextView(this).apply {
+                text = compLines
+                textSize = 12f; setTextColor(Color.parseColor("#CBD5E1"))
+                background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#0F172A", 10, "#334155")
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+            })
+        } else {
+            card.addView(buildKindnessAndWaitingBanner(b))
+        }
 
         val proName = b.contractorFullName
         if (proName != null) {
@@ -2076,6 +2117,7 @@ class CustomerMainActivity : AppCompatActivity() {
             val headerRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
+                setOnClickListener { showAssignedContractorProfileModal(b) }
             }
             val decodedBmp = try {
                 val rawUrl = b.contractorProfilePhotoUrl.orEmpty()
@@ -2109,7 +2151,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
             infoCol.addView(TextView(this).apply {
-                text = "$proName$vipTag"
+                text = "$proName$vipTag  (Tap for Profile)"
                 textSize = 14f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor(AlistoUiKit.TEXT_PRIMARY))
             })
             infoCol.addView(TextView(this).apply {
@@ -2271,6 +2313,13 @@ class CustomerMainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(16), dp(20), dp(10))
             setBackgroundColor(Color.parseColor(AlistoUiKit.BG_SURFACE))
         }
+        dialogLayout.addView(TextView(this).apply {
+            text = "Eyes on the Road, Hands on the Bars — Your rider may take a moment to reply while navigating traffic safely. They'll read your message at their next safe stop!"
+            textSize = 12f; setTextColor(Color.parseColor("#FDE68A"))
+            background = AlistoUiKit.roundedBg(this@CustomerMainActivity, "#2A1B08", 10, "#92400E")
+            setPadding(dp(11), dp(8), dp(11), dp(8))
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+        })
         val msgInput = AlistoUiKit.inputField(this, "Coordinate arrival or pabili item details...")
         dialogLayout.addView(msgInput)
 
@@ -2311,10 +2360,10 @@ class CustomerMainActivity : AppCompatActivity() {
                         if (prev != null && prev != b.status) {
                             statusChanged = true
                             val promptMsg = when (b.status) {
-                                "ACCEPTED", "ON_THE_WAY" -> "Yey! We found a pro for you! ${b.contractorFullName ?: "Your pro"} is on the way."
+                                "ACCEPTED", "ON_THE_WAY" -> "Yey! We found a pro for you! ${b.contractorFullName ?: "Your pro"} is on the way. Please get ready for pickup!"
                                 "ARRIVED" -> "${b.contractorFullName ?: "Your pro"} has arrived at your pickup location!"
                                 "ONGOING", "IN_PROGRESS" -> "Your booking ${b.bookingRef} is now underway."
-                                "COMPLETED" -> "Booking ${b.bookingRef} completed! Thank you for riding with Alisto."
+                                "COMPLETED", "COMPLETED_WITH_DISPUTE" -> "Booking ${b.bookingRef} completed! Thank you for riding with Alisto."
                                 "EXPIRED" -> "No pro accepted ${b.bookingRef} in time. Please try again."
                                 else -> null
                             }
@@ -2322,10 +2371,14 @@ class CustomerMainActivity : AppCompatActivity() {
                                 Toast.makeText(this@CustomerMainActivity, promptMsg, Toast.LENGTH_LONG).show()
                             }
                         }
+                        if (b.status == "ARRIVED" && b.customerGoingOutAt.isNullOrBlank() && arrivedAlertedBookingIds.add(b.id)) {
+                            showArrivalDoorbellModal(b)
+                        }
                         lastBookingStatuses[b.id] = b.status
                     }
                     refreshCustomerMapLayers(user)
-                    if (statusChanged && activeTab == "ACTIVITY") {
+                    val hasArrivedBooking = AlistoKernelClient.bookings.any { it.clientId == user.id && it.status == "ARRIVED" }
+                    if ((statusChanged || hasArrivedBooking) && (activeTab == "ACTIVITY" || (activeTab == "BOOK" && bookingStep == "LAUNCHER"))) {
                         showAuthenticatedCustomerPortal()
                         break
                     }

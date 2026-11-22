@@ -211,7 +211,42 @@ data class BookingRecord(
     val clientMunicipality: String = "",
     val clientBarangayZone: String = "",
     val clientProfilePhotoUrl: String? = null,
-    val clientAccountStatus: String = "ACTIVE"
+    val clientAccountStatus: String = "ACTIVE",
+    val contractorUsername: String = "",
+    val waitingBillableMinutes: Int = 0,
+    val waitingFeePhp: Double = 0.0,
+    val actualDistanceKm: Double? = null,
+    val dropoffGpsAdjusted: Boolean = false,
+    val customerGoingOutAt: String? = null,
+    val finalCommissionPhp: Double = 0.0
+)
+
+data class DispatchPricingRules(
+    val commissionRate: Double = 0.12,
+    val freeWaitMinutes: Int = 5,
+    val waitingRatePerMinPhp: Double = 5.0
+)
+
+data class WalletLedgerEntry(
+    val id: String,
+    val createdAt: String,
+    val entryType: String,
+    val amount: Double,
+    val balanceAfter: Double,
+    val heldAfter: Double,
+    val notes: String,
+    val bookingRef: String?,
+    val verticalKey: String?,
+    val serviceTitle: String?,
+    val quotedFee: Double,
+    val tipAmount: Double,
+    val waitingFeePhp: Double,
+    val commissionPhp: Double,
+    val paymentMethod: String?,
+    val bookingStatus: String?,
+    val pickupAddress: String?,
+    val dropoffAddress: String?,
+    val actualDistanceKm: Double?
 )
 
 data class ReleaseManifestInfo(
@@ -302,6 +337,7 @@ object AlistoKernelClient {
 
     var currentSessionToken: String? = null
     var currentSessionUser: AuthenticatedUser? = null
+    var currentPricingRules: DispatchPricingRules = DispatchPricingRules()
     var currentContractorProfile: ContractorProfileState? = null
     var currentSubscriptionPass: ActiveSubscriptionPass? = null
 
@@ -547,6 +583,13 @@ object AlistoKernelClient {
                         clientBarangayZone = o.optString("client_barangay_zone", ""),
                         clientProfilePhotoUrl = if (o.isNull("client_profile_photo_url")) null else o.optString("client_profile_photo_url").ifBlank { null },
                         clientAccountStatus = o.optString("client_account_status", "ACTIVE").ifBlank { "ACTIVE" },
+                        contractorUsername = o.optString("contractor_username", ""),
+                        waitingBillableMinutes = o.optInt("waiting_billable_minutes", 0),
+                        waitingFeePhp = o.optDouble("waiting_fee_php", 0.0),
+                        actualDistanceKm = if (o.isNull("actual_distance_km")) null else o.optDouble("actual_distance_km"),
+                        dropoffGpsAdjusted = o.optBoolean("dropoff_gps_adjusted", false),
+                        customerGoingOutAt = if (o.isNull("customer_going_out_at")) null else o.optString("customer_going_out_at").ifBlank { null },
+                        finalCommissionPhp = o.optDouble("final_commission_php", o.optDouble("commission_locked", 0.0)),
                         offerContractorId = if (o.isNull("offer_contractor_id")) null else o.optString("offer_contractor_id").ifBlank { null },
                         offerSource = if (o.isNull("offer_source")) null else o.optString("offer_source").ifBlank { null },
                         offerExpiresAt = if (o.isNull("offer_expires_at")) null else o.optString("offer_expires_at").ifBlank { null },
@@ -1117,6 +1160,110 @@ object AlistoKernelClient {
             } else {
                 Result.failure(IllegalStateException(json.optString("message", "Offer response could not be processed.")))
             }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchDispatchPricingRulesRpc(): DispatchPricingRules = withContext(Dispatchers.IO) {
+        try {
+            val json = postRpc("get_dispatch_pricing_rules_rpc", JSONObject())
+            if (json.optString("status") == "SUCCESS") {
+                val rules = DispatchPricingRules(
+                    commissionRate = json.optDouble("platform_commission_rate", 0.12),
+                    freeWaitMinutes = json.optInt("free_waiting_time_minutes", 5),
+                    waitingRatePerMinPhp = json.optDouble("waiting_time_rate_per_min_php", 5.0)
+                )
+                currentPricingRules = rules
+                return@withContext rules
+            }
+        } catch (_: Exception) {}
+        return@withContext currentPricingRules
+    }
+
+    suspend fun ackCustomerArrivalRpc(bookingId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        val token = currentSessionToken ?: return@withContext Result.failure(IllegalStateException("Session expired."))
+        try {
+            val json = postRpc("secure_ack_arrival_rpc", JSONObject().apply {
+                put("p_session_token", token)
+                put("p_booking_id", bookingId)
+            })
+            if (json.optString("status") == "SUCCESS") {
+                syncBookingsAndWallet()
+                Result.success(true)
+            } else {
+                Result.failure(IllegalStateException(json.optString("message", "Unable to acknowledge arrival.")))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun adjustDropoffGpsRpc(
+        bookingId: String,
+        actualLat: Double,
+        actualLng: Double,
+        actualAddress: String? = null
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val token = currentSessionToken ?: return@withContext Result.failure(IllegalStateException("Session expired."))
+        try {
+            val json = postRpc("secure_adjust_dropoff_gps_rpc", JSONObject().apply {
+                put("p_session_token", token)
+                put("p_booking_id", bookingId)
+                put("p_actual_lat", actualLat)
+                put("p_actual_lng", actualLng)
+                if (!actualAddress.isNullOrBlank()) put("p_actual_address", actualAddress.trim())
+            })
+            if (json.optString("status") == "SUCCESS") {
+                syncBookingsAndWallet()
+                Result.success(json)
+            } else {
+                Result.failure(IllegalStateException(json.optString("message", "Drop-off GPS adjustment failed.")))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchMyWalletLedgerRpc(limit: Int = 150): Result<List<WalletLedgerEntry>> = withContext(Dispatchers.IO) {
+        val token = currentSessionToken ?: return@withContext Result.failure(IllegalStateException("Session expired."))
+        try {
+            val json = postRpc("secure_get_my_wallet_ledger_rpc", JSONObject().apply {
+                put("p_session_token", token)
+                put("p_limit", limit)
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Unable to load wallet ledger.")))
+            }
+            val arr = json.optJSONArray("entries") ?: JSONArray()
+            val out = mutableListOf<WalletLedgerEntry>()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                out.add(
+                    WalletLedgerEntry(
+                        id = o.optString("id"),
+                        createdAt = o.optString("created_at"),
+                        entryType = o.optString("entry_type"),
+                        amount = o.optDouble("amount", 0.0),
+                        balanceAfter = o.optDouble("balance_after", 0.0),
+                        heldAfter = o.optDouble("held_after", 0.0),
+                        notes = o.optString("notes", ""),
+                        bookingRef = if (o.isNull("booking_ref")) null else o.optString("booking_ref").ifBlank { null },
+                        verticalKey = if (o.isNull("vertical_key")) null else o.optString("vertical_key").ifBlank { null },
+                        serviceTitle = if (o.isNull("service_title")) null else o.optString("service_title").ifBlank { null },
+                        quotedFee = o.optDouble("quoted_fee", 0.0),
+                        tipAmount = o.optDouble("tip_amount", 0.0),
+                        waitingFeePhp = o.optDouble("waiting_fee_php", 0.0),
+                        commissionPhp = o.optDouble("commission_php", 0.0),
+                        paymentMethod = if (o.isNull("payment_method")) null else o.optString("payment_method").ifBlank { null },
+                        bookingStatus = if (o.isNull("booking_status")) null else o.optString("booking_status").ifBlank { null },
+                        pickupAddress = if (o.isNull("pickup_address")) null else o.optString("pickup_address").ifBlank { null },
+                        dropoffAddress = if (o.isNull("dropoff_address")) null else o.optString("dropoff_address").ifBlank { null },
+                        actualDistanceKm = if (o.isNull("actual_distance_km")) null else o.optDouble("actual_distance_km")
+                    )
+                )
+            }
+            Result.success(out)
         } catch (e: Exception) {
             Result.failure(e)
         }
