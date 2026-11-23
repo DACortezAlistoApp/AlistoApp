@@ -1872,21 +1872,6 @@ class ContractorMainActivity : AppCompatActivity() {
                         syncContractorChatEngineWatcher(user)
                         maybeOpenPendingContractorChat()
                     }
-                        if (activeChatJob != null) {
-                            val chatRes = AlistoKernelClient.fetchBookingMessagesRpc(activeChatJob.id)
-                            chatRes.onSuccess { msgs ->
-                                val latest = msgs.lastOrNull()
-                                if (latest != null && latest.id.isNotBlank()) {
-                                    val prevId = lastSeenChatMsgIds[activeChatJob.id]
-                                    lastSeenChatMsgIds[activeChatJob.id] = latest.id
-                                    if (prevId != null && prevId != latest.id && latest.senderId != user.id) {
-                                        ContractorSoundEngine.playStepUpdatedTone(this@ContractorMainActivity)
-                                        Toast.makeText(this@ContractorMainActivity, "Message from ${latest.senderName}: ${latest.body}", Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            }
-                        }
-                    }
                     if (user != null && digest != lastBookingsDigest) {
                         lastBookingsDigest = digest
                         if (activeTab == "JOBS" || activeTab == "DRIVE" || activeTab == "ACTIVE") {
