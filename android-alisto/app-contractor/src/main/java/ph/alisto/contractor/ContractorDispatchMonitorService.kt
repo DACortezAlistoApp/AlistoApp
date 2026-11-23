@@ -20,6 +20,9 @@ import android.os.Looper
 import android.os.PowerManager
 import android.view.ContextThemeWrapper
 import android.provider.Settings
+import android.hardware.display.DisplayManager
+import android.util.Log
+import android.view.Display
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -49,7 +52,9 @@ class ContractorDispatchMonitorService : Service() {
         const val PREFS_NAME = "alisto_contractor_dispatch"
         const val KEY_SESSION_TOKEN = "session_token"
         private const val CH_STATUS = "alisto_contractor_online_status_v2"
-        private const val CH_OFFER_SILENT = "alisto_contractor_urgent_offer_v3_silent"
+        private const val CH_OFFER_SILENT = "alisto_contractor_urgent_offer_v4_heads_up"
+        const val ACTION_OFFER_DECISION = "ph.alisto.contractor.ACTION_OFFER_DECISION"
+        const val ACTION_TEST_OVERLAY = "ph.alisto.contractor.ACTION_TEST_OVERLAY"
         private const val NOTIF_STATUS_ID = 4101
         const val NOTIF_OFFER_ID = 4102
 
@@ -80,6 +85,21 @@ class ContractorDispatchMonitorService : Service() {
             } catch (_: Exception) {}
         }
 
+        fun scheduleOverlaySelfTest(context: Context) {
+            val intent = Intent(context, ContractorDispatchMonitorService::class.java).apply {
+                action = ACTION_TEST_OVERLAY
+            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (_: Exception) {
+                try { context.startService(intent) } catch (_: Exception) {}
+            }
+        }
+
         fun cancelOfferNotification(context: Context) {
             try {
                 val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -96,6 +116,8 @@ class ContractorDispatchMonitorService : Service() {
     private var lastLaunchAtMs: Long = 0L
 
     private var floatingOverlayView: View? = null
+    private var activeOverlayWm: WindowManager? = null
+    private var isDemoOverlayActive: Boolean = false
     private var floatingTimer: CountDownTimer? = null
     private var floatingDecisionInFlight: Boolean = false
     private var offerWakeLock: PowerManager.WakeLock? = null
@@ -111,6 +133,47 @@ class ContractorDispatchMonitorService : Service() {
             startForeground(NOTIF_STATUS_ID, statusNotif)
         }
         startOfferPollingLoop()
+
+        when (intent?.action) {
+            ACTION_OFFER_DECISION -> {
+                val bid = intent.getStringExtra("booking_id").orEmpty()
+                val dec = intent.getStringExtra("decision").orEmpty()
+                if (bid.isNotBlank() && dec.isNotBlank()) {
+                    handleNotificationActionDecision(bid, dec)
+                }
+            }
+            ACTION_TEST_OVERLAY -> {
+                mainHandler.post {
+                    Toast.makeText(
+                        this,
+                        "Minimize Alisto Contractor now — test 15s overlay will pop in 5s!",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                mainHandler.postDelayed({
+                    val mockOffer = JSONObject().apply {
+                        put("id", "DEMO_OVERLAY_TEST")
+                        put("booking_ref", "DEMO-TEST")
+                        put("offer_source", "AUTO_ASSIGN")
+                        put("vertical_key", "ride_hailing")
+                        put("service_title", "Minimized Overlay Self-Test (Demo Only)")
+                        put("pickup_address", "SM City Clark Main Entrance, Angeles City")
+                        put("dropoff_address", "Nepo Quad, Sto. Rosario, Angeles City")
+                        put("booking_notes", "Demo test card — no live booking is affected.")
+                        put("quoted_fee", 95.0)
+                        put("tip_amount", 15.0)
+                        put("payment_method", "CASH")
+                        put("client_nickname", "Overlay Test")
+                    }
+                    val mockEnv = JSONObject().apply {
+                        put("seconds_remaining", 15)
+                        put("offer", mockOffer)
+                    }
+                    isDemoOverlayActive = true
+                    presentDominantOffer(mockEnv)
+                }, 5_000L)
+            }
+        }
         return START_STICKY
     }
 
@@ -118,6 +181,7 @@ class ContractorDispatchMonitorService : Service() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         try { nm.deleteNotificationChannel("alisto_contractor_urgent_offer_v2") } catch (_: Exception) {}
+        try { nm.deleteNotificationChannel("alisto_contractor_urgent_offer_v3_silent") } catch (_: Exception) {}
 
         if (nm.getNotificationChannel(CH_STATUS) == null) {
             nm.createNotificationChannel(
@@ -130,10 +194,11 @@ class ContractorDispatchMonitorService : Service() {
         }
         if (nm.getNotificationChannel(CH_OFFER_SILENT) == null) {
             nm.createNotificationChannel(
-                NotificationChannel(CH_OFFER_SILENT, "Incoming Booking Offers (In-App Audio)", NotificationManager.IMPORTANCE_HIGH).apply {
-                    description = "Full-screen visual alert for booking offers. Audio plays exclusively via Alisto's in-app sound engine."
+                NotificationChannel(CH_OFFER_SILENT, "Incoming Booking Offers (Heads-Up)", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "High-priority heads-up alert for incoming booking offers. Audio plays via Alisto's in-app sound engine."
                     setSound(null, null)
-                    enableVibration(false)
+                    enableVibration(true)
+                    vibrationPattern = longArrayOf(0, 220, 120, 220)
                     lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 }
             )
@@ -185,7 +250,7 @@ class ContractorDispatchMonitorService : Service() {
                         presentDominantOffer(envelope)
                     }
                 } else {
-                    if (!floatingDecisionInFlight &&
+                    if (!floatingDecisionInFlight && !isDemoOverlayActive &&
                         (lastLaunchedKey.isNotEmpty() || floatingOverlayView != null || ContractorOfferBridge.activeBookingId != null)
                     ) {
                         lastLaunchedKey = ""
@@ -216,18 +281,37 @@ class ContractorDispatchMonitorService : Service() {
         // Play in-app road-ready audio immediately (never native phone call/message tones)
         ContractorSoundEngine.startIncomingOfferAlarm(this)
 
-        // Silent high-priority full-screen intent notification (backup if overlay permission is off)
+        val bid = offer.optString("id", "")
+        val acceptPi = PendingIntent.getBroadcast(
+            this, 21,
+            Intent(this, ContractorOfferActionReceiver::class.java).apply {
+                putExtra("booking_id", bid); putExtra("decision", "ACCEPT")
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val rejectPi = PendingIntent.getBroadcast(
+            this, 22,
+            Intent(this, ContractorOfferActionReceiver::class.java).apply {
+                putExtra("booking_id", bid); putExtra("decision", "REJECT")
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // High-priority heads-up notification (NOT silent, so Android 14 displays the banner over any app)
         val notif = NotificationCompat.Builder(this, CH_OFFER_SILENT)
             .setSmallIcon(R.drawable.ic_alisto_app_logo)
             .setContentTitle("Incoming Booking • PHP ${"%.2f".format(fee)} (${secs}s)")
-            .setContentText("$ref • $title — Tap to Accept or Reject")
+            .setContentText("$ref • $title — Tap Accept or Reject")
             .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setSilent(true)
-            .setSound(null)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setDefaults(NotificationCompat.DEFAULT_VIBRATE)
+            .setTimeoutAfter((secs + 3) * 1000L)
             .setAutoCancel(true)
             .setFullScreenIntent(fullScreenPi, true)
             .setContentIntent(fullScreenPi)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "REJECT", rejectPi)
+            .addAction(android.R.drawable.ic_menu_send, "ACCEPT", acceptPi)
             .build()
 
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -235,16 +319,17 @@ class ContractorDispatchMonitorService : Service() {
 
         mainHandler.post {
             try {
-                if (ContractorOfferBridge.isMainActivityForeground) {
+                val canOverlay = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this@ContractorDispatchMonitorService)
+                if (ContractorOfferBridge.isMainActivityForeground && !isDemoOverlayActive) {
                     startActivity(overlayIntent)
-                } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this@ContractorDispatchMonitorService)) {
-                    // App is minimized: draw a real WindowManager overlay directly over other apps
+                } else if (canOverlay) {
+                    // Minimized Maxim-style path: render directly onto Android WindowContext overlay
                     showFloatingWindowOverlay(envelope)
                 } else {
-                    try { startActivity(overlayIntent) } catch (_: Exception) {}
+                    Log.w("AlistoOfferOverlay", "Display over other apps permission is OFF; relying on heads-up notification.")
                 }
-            } catch (_: Exception) {
-                try { startActivity(overlayIntent) } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e("AlistoOfferOverlay", "Failed to present minimized offer overlay: ${e.message}", e)
             }
         }
     }
@@ -266,12 +351,28 @@ class ContractorDispatchMonitorService : Service() {
         ContractorOfferBridge.activeBookingId = bid
         floatingDecisionInFlight = false
 
-        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         } else {
             @Suppress("DEPRECATION")
             WindowManager.LayoutParams.TYPE_PHONE
+        }
+
+        val (ctx, wm) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+                val disp = dm.getDisplay(Display.DEFAULT_DISPLAY)
+                val winCtx = createDisplayContext(disp).createWindowContext(overlayType, null)
+                val winWm = winCtx.getSystemService(WindowManager::class.java)
+                ContextThemeWrapper(winCtx, androidx.appcompat.R.style.Theme_AppCompat_NoActionBar) to winWm
+            } catch (e: Exception) {
+                Log.w("AlistoOfferOverlay", "WindowContext fallback: ${e.message}")
+                val fallbackWm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                ContextThemeWrapper(this, androidx.appcompat.R.style.Theme_AppCompat_NoActionBar) to fallbackWm
+            }
+        } else {
+            val fallbackWm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            ContextThemeWrapper(this, androidx.appcompat.R.style.Theme_AppCompat_NoActionBar) to fallbackWm
         }
 
         try {
@@ -280,24 +381,23 @@ class ContractorDispatchMonitorService : Service() {
             offerWakeLock = pm?.newWakeLock(
                 PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
                 "alisto:offer_overlay_wake"
-            )?.apply { acquire(35_000L) }
+            )?.apply { acquire(25_000L) }
         } catch (_: Exception) {}
 
-        @Suppress("DEPRECATION")
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             overlayType,
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.CENTER
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
         }
-
-        val ctx = ContextThemeWrapper(this, androidx.appcompat.R.style.Theme_AppCompat_NoActionBar)
         val bookingRef = offer.optString("booking_ref", "ALISTO")
         val offerSource = offer.optString("offer_source", "AUTO_ASSIGN")
         val verticalKey = offer.optString("vertical_key", "delivery_logistics")
@@ -430,6 +530,7 @@ class ContractorDispatchMonitorService : Service() {
         backdrop.addView(card)
 
         try {
+            activeOverlayWm = wm
             wm.addView(backdrop, params)
             floatingOverlayView = backdrop
             val startRemMs = (deadlineMs - System.currentTimeMillis()).coerceAtLeast(1_000L)
@@ -445,9 +546,27 @@ class ContractorDispatchMonitorService : Service() {
                     submitFloatingDecision(bid, "TIMEOUT", statusHint)
                 }
             }.start()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e("AlistoOfferOverlay", "wm.addView failed: ${e.message}", e)
+            activeOverlayWm = null
+            isDemoOverlayActive = false
             ContractorOfferBridge.activeBookingId = null
+            Toast.makeText(this, "Overlay blocked by OS (${e.javaClass.simpleName}) — use heads-up alert.", Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun handleNotificationActionDecision(bid: String, decision: String) {
+        if (bid == "DEMO_OVERLAY_TEST") {
+            isDemoOverlayActive = false
+            ContractorOfferBridge.activeBookingId = null
+            ContractorSoundEngine.stopIncomingOfferAlarm()
+            cancelOfferNotification(this)
+            dismissFloatingOverlay()
+            Toast.makeText(this, "Demo overlay $decision verified!", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val dummyHint = TextView(this)
+        submitFloatingDecision(bid, decision, dummyHint)
     }
 
     private fun submitFloatingDecision(bid: String, decision: String, statusHint: TextView) {
@@ -456,6 +575,14 @@ class ContractorDispatchMonitorService : Service() {
         floatingTimer?.cancel()
         ContractorSoundEngine.stopIncomingOfferAlarm()
         cancelOfferNotification(this)
+
+        if (bid == "DEMO_OVERLAY_TEST" || isDemoOverlayActive) {
+            isDemoOverlayActive = false
+            ContractorOfferBridge.activeBookingId = null
+            dismissFloatingOverlay()
+            Toast.makeText(this, "Minimized overlay self-test ($decision) passed!", Toast.LENGTH_SHORT).show()
+            return
+        }
 
         statusHint.text = when (decision) {
             "ACCEPT" -> "Accepting booking..."
@@ -500,11 +627,12 @@ class ContractorDispatchMonitorService : Service() {
             floatingTimer = null
             floatingOverlayView?.let { v ->
                 try {
-                    val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-                    wm.removeView(v)
+                    val wm = activeOverlayWm ?: (getSystemService(Context.WINDOW_SERVICE) as WindowManager)
+                    wm.removeViewImmediate(v)
                 } catch (_: Exception) {}
             }
             floatingOverlayView = null
+            activeOverlayWm = null
             try {
                 if (offerWakeLock?.isHeld == true) offerWakeLock?.release()
             } catch (_: Exception) {}

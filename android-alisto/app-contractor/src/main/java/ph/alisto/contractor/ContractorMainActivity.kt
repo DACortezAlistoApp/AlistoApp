@@ -758,6 +758,74 @@ class ContractorMainActivity : AppCompatActivity() {
                 topMargin = dp(68)
             }
         )
+
+        // Unmistakable top-right Going Home pill directly below AUTO: ON/OFF (Rides & Delivery)
+        if (canAutoAssign) {
+            val hbProf = AlistoKernelClient.currentContractorProfile
+            val hbActive = hbProf?.homeboundEnabled == true
+            val hbRadKm = (hbProf?.homeboundRadiusKm ?: 3.0).toInt()
+            val goingHomeFab = TextView(this).apply {
+                text = if (hbActive) "⌂ HOME: ON (${hbRadKm}km)" else "⌂ Going Home"
+                textSize = 12f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor(if (hbActive) "#A7F3D0" else "#BAE6FD"))
+                background = AlistoUiKit.frostedGlassBg(
+                    this@ContractorMainActivity,
+                    if (hbActive) "#E6064E3B" else "#D90A1931",
+                    20,
+                    if (hbActive) "#34D399" else "#38BDF8",
+                    alphaFraction = 0.92f
+                )
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                elevation = dp(6).toFloat()
+                setOnClickListener { openGoingHomeFilterDialog(user) }
+            }
+            mapStage.addView(
+                goingHomeFab,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.END
+                ).apply {
+                    rightMargin = dp(14)
+                    topMargin = dp(68)
+                }
+            )
+        }
+
+        // 1-tap Minimized Overlay Self-Test pill below My GPS
+        val testOverlayFab = TextView(this).apply {
+            text = "⚡ Test Overlay"
+            textSize = 11.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#FDE68A"))
+            background = AlistoUiKit.frostedGlassBg(this@ContractorMainActivity, "#D91E1B0C", 20, "#D97706", alphaFraction = 0.90f)
+            setPadding(dp(11), dp(7), dp(11), dp(7))
+            elevation = dp(6).toFloat()
+            setOnClickListener {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this@ContractorMainActivity)) {
+                    Toast.makeText(
+                        this@ContractorMainActivity,
+                        "Enable 'Display over other apps' for Alisto Contractor first, then tap Test Overlay again.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    openOverlayPermissionSettings()
+                } else {
+                    ContractorDispatchMonitorService.scheduleOverlaySelfTest(this@ContractorMainActivity)
+                }
+            }
+        }
+        mapStage.addView(
+            testOverlayFab,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.START
+            ).apply {
+                leftMargin = dp(14)
+                topMargin = dp(112)
+            }
+        )
         root.addView(mapStage)
 
         // Sleek uncluttered bottom driver console sheet
@@ -1846,7 +1914,11 @@ class ContractorMainActivity : AppCompatActivity() {
                     val offerBid = offerObj?.optString("id").orEmpty()
                     val recentlyHandled = (ContractorOfferBridge.lastResultBookingId == offerBid &&
                         System.currentTimeMillis() - ContractorOfferBridge.lastHandledAtMs < 5500L)
-                    if (offerBid.isNotBlank() && ContractorOfferBridge.activeBookingId != offerBid && !recentlyHandled) {
+                    if (ContractorOfferBridge.isMainActivityForeground &&
+                        offerBid.isNotBlank() &&
+                        ContractorOfferBridge.activeBookingId != offerBid &&
+                        !recentlyHandled
+                    ) {
                         startActivity(ContractorOfferBridge.buildIntent(this@ContractorMainActivity, pendingEnvelope))
                     }
                 }
