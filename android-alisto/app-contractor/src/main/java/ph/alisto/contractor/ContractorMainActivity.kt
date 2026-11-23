@@ -655,7 +655,7 @@ class ContractorMainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = AlistoUiKit.frostedGlassBg(this@ContractorMainActivity, "#D90A1931", 24, "#6638BDF8", alphaFraction = 0.88f)
-            setPadding(dp(14), dp(9), dp(14), dp(9))
+            setPadding(dp(11), dp(9), dp(11), dp(9))
             elevation = dp(6).toFloat()
             setOnClickListener { activeTab = "WALLET"; showActiveContractorPortal(user) }
             addView(View(this@ContractorMainActivity).apply {
@@ -676,8 +676,32 @@ class ContractorMainActivity : AppCompatActivity() {
         topHud.addView(walletPill)
         topHud.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
 
-        // Upper-right slot: Auto-ON / Auto-OFF strictly for Delivery & Ride-Hailing (hidden for Skills & Errands)
+        // Upper-right slots: Going Home pill immediately left of Auto-ON / Auto-OFF (Delivery & Ride-Hailing)
         if (canAutoAssign) {
+            val hbProf = AlistoKernelClient.currentContractorProfile
+            val hbActive = hbProf?.homeboundEnabled == true
+            val goingHomePill = TextView(this).apply {
+                text = if (hbActive) "⌂ Home ON" else "⌂ Home"
+                textSize = 12f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor(if (hbActive) "#A7F3D0" else "#BAE6FD"))
+                background = AlistoUiKit.frostedGlassBg(
+                    this@ContractorMainActivity,
+                    if (hbActive) "#E6064E3B" else "#D90A1931",
+                    24,
+                    if (hbActive) "#34D399" else "#38BDF8",
+                    alphaFraction = 0.92f
+                )
+                setPadding(dp(10), dp(9), dp(10), dp(9))
+                elevation = dp(6).toFloat()
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { rightMargin = dp(6) }
+                setOnClickListener { openGoingHomeFilterDialog(user) }
+            }
+            topHud.addView(goingHomePill)
+
             val autoOn = autoAcceptEnabled
             val autoTogglePill = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -689,7 +713,7 @@ class ContractorMainActivity : AppCompatActivity() {
                     if (autoOn) "#34D399" else "#475569",
                     alphaFraction = 0.92f
                 )
-                setPadding(dp(14), dp(9), dp(14), dp(9))
+                setPadding(dp(11), dp(9), dp(11), dp(9))
                 elevation = dp(6).toFloat()
                 setOnClickListener {
                     val nextAuto = !autoAcceptEnabled
@@ -759,73 +783,6 @@ class ContractorMainActivity : AppCompatActivity() {
             }
         )
 
-        // Unmistakable top-right Going Home pill directly below AUTO: ON/OFF (Rides & Delivery)
-        if (canAutoAssign) {
-            val hbProf = AlistoKernelClient.currentContractorProfile
-            val hbActive = hbProf?.homeboundEnabled == true
-            val hbRadKm = (hbProf?.homeboundRadiusKm ?: 3.0).toInt()
-            val goingHomeFab = TextView(this).apply {
-                text = if (hbActive) "⌂ HOME: ON (${hbRadKm}km)" else "⌂ Going Home"
-                textSize = 12f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor(if (hbActive) "#A7F3D0" else "#BAE6FD"))
-                background = AlistoUiKit.frostedGlassBg(
-                    this@ContractorMainActivity,
-                    if (hbActive) "#E6064E3B" else "#D90A1931",
-                    20,
-                    if (hbActive) "#34D399" else "#38BDF8",
-                    alphaFraction = 0.92f
-                )
-                setPadding(dp(12), dp(8), dp(12), dp(8))
-                elevation = dp(6).toFloat()
-                setOnClickListener { openGoingHomeFilterDialog(user) }
-            }
-            mapStage.addView(
-                goingHomeFab,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.TOP or Gravity.END
-                ).apply {
-                    rightMargin = dp(14)
-                    topMargin = dp(68)
-                }
-            )
-        }
-
-        // 1-tap Minimized Overlay Self-Test pill below My GPS
-        val testOverlayFab = TextView(this).apply {
-            text = "⚡ Test Overlay"
-            textSize = 11.5f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#FDE68A"))
-            background = AlistoUiKit.frostedGlassBg(this@ContractorMainActivity, "#D91E1B0C", 20, "#D97706", alphaFraction = 0.90f)
-            setPadding(dp(11), dp(7), dp(11), dp(7))
-            elevation = dp(6).toFloat()
-            setOnClickListener {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this@ContractorMainActivity)) {
-                    Toast.makeText(
-                        this@ContractorMainActivity,
-                        "Enable 'Display over other apps' for Alisto Contractor first, then tap Test Overlay again.",
-                        Toast.LENGTH_LONG
-                    ).show()
-                    openOverlayPermissionSettings()
-                } else {
-                    ContractorDispatchMonitorService.scheduleOverlaySelfTest(this@ContractorMainActivity)
-                }
-            }
-        }
-        mapStage.addView(
-            testOverlayFab,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.START
-            ).apply {
-                leftMargin = dp(14)
-                topMargin = dp(112)
-            }
-        )
         root.addView(mapStage)
 
         // Sleek uncluttered bottom driver console sheet
@@ -912,121 +869,6 @@ class ContractorMainActivity : AppCompatActivity() {
                     }
                 )
             }
-        }
-
-        // Going Home (Homebound) Priority Filter — Rides & Delivery Shifts
-        if (canAutoAssign) {
-            val hbOn = prof?.homeboundEnabled == true
-            val hbAddr = prof?.homeboundAddress?.takeIf { it.isNotBlank() }
-            val hbRad = prof?.homeboundRadiusKm ?: 3.0
-            val hasSavedPin = prof?.homeboundLat != null && prof.homeboundLng != null
-
-            sheetBody.addView(LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                background = AlistoUiKit.roundedBg(
-                    this@ContractorMainActivity,
-                    if (hbOn) "#052E23" else "#0F172A",
-                    12,
-                    if (hbOn) "#10B981" else "#334155"
-                )
-                setPadding(dp(12), dp(9), dp(12), dp(9))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = dp(10) }
-
-                addView(LinearLayout(this@ContractorMainActivity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    addView(TextView(this@ContractorMainActivity).apply {
-                        text = "Going Home Filter"
-                        textSize = 13f
-                        setTypeface(null, Typeface.BOLD)
-                        setTextColor(Color.parseColor(if (hbOn) "#6EE7B7" else AlistoUiKit.TEXT_PRIMARY))
-                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                    })
-                    addView(AlistoUiKit.badgePill(
-                        this@ContractorMainActivity,
-                        if (hbOn) "ACTIVE • ${"%.0f".format(hbRad)}km" else "OFF",
-                        if (hbOn) "#064E3B" else "#1E293B",
-                        if (hbOn) "#34D399" else AlistoUiKit.TEXT_MUTED
-                    ))
-                })
-
-                addView(TextView(this@ContractorMainActivity).apply {
-                    text = if (hbOn && hbAddr != null) {
-                        "Prioritizing bookings near you heading toward: $hbAddr"
-                    } else if (hbAddr != null) {
-                        "Saved pin: $hbAddr (Turn On to prioritize homebound trips)"
-                    } else {
-                        "Set your homebound destination to get priority for bookings along your way home."
-                    }
-                    textSize = 11.5f
-                    setTextColor(Color.parseColor(if (hbOn) "#A7F3D0" else AlistoUiKit.TEXT_MUTED))
-                    setPadding(0, dp(4), 0, dp(8))
-                })
-
-                addView(LinearLayout(this@ContractorMainActivity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    addView(AlistoUiKit.chipButton(
-                        this@ContractorMainActivity,
-                        if (hbAddr != null) "Change Pin" else "Set Destination",
-                        true,
-                        "#1E293B",
-                        "#38BDF8"
-                    ) {
-                        openGoingHomeFilterDialog(user)
-                    }.apply {
-                        layoutParams = LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
-                        ).apply { rightMargin = dp(8) }
-                    })
-
-                    if (hbOn) {
-                        addView(AlistoUiKit.chipButton(
-                            this@ContractorMainActivity,
-                            "Turn Off",
-                            false,
-                            "#450A0A",
-                            "#FCA5A5"
-                        ) {
-                            uiScope.launch {
-                                val res = AlistoKernelClient.setContractorHomeboundRpc(enabled = false)
-                                res.onSuccess {
-                                    Toast.makeText(this@ContractorMainActivity, "Going Home filter turned OFF.", Toast.LENGTH_SHORT).show()
-                                    showActiveContractorPortal(user)
-                                }.onFailure { err ->
-                                    Toast.makeText(this@ContractorMainActivity, err.message ?: "Unable to update Going Home.", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        })
-                    } else if (hasSavedPin) {
-                        addView(AlistoUiKit.chipButton(
-                            this@ContractorMainActivity,
-                            "Turn On",
-                            true,
-                            "#064E3B",
-                            "#6EE7B7"
-                        ) {
-                            uiScope.launch {
-                                val res = AlistoKernelClient.setContractorHomeboundRpc(
-                                    enabled = true,
-                                    lat = prof?.homeboundLat,
-                                    lng = prof?.homeboundLng,
-                                    address = prof?.homeboundAddress,
-                                    radiusKm = hbRad
-                                )
-                                res.onSuccess {
-                                    Toast.makeText(this@ContractorMainActivity, "Going Home filter ACTIVE.", Toast.LENGTH_SHORT).show()
-                                    showActiveContractorPortal(user)
-                                }.onFailure { err ->
-                                    Toast.makeText(this@ContractorMainActivity, err.message ?: "Unable to enable Going Home.", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        })
-                    }
-                })
-            })
         }
 
         // One-tap overlay permission helper (only shown until enabled so pop-ups appear over other apps)
@@ -1768,10 +1610,45 @@ class ContractorMainActivity : AppCompatActivity() {
     private fun openGoingHomeFilterDialog(user: AuthenticatedUser) {
         val prof = AlistoKernelClient.currentContractorProfile
         var selectedRadiusKm = prof?.homeboundRadiusKm ?: 3.0
+        var dlgRef: AlertDialog? = null
         val wrap = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(14), dp(18), dp(8))
             setBackgroundColor(Color.parseColor("#0B1324"))
+        }
+        if (prof?.homeboundEnabled == true) {
+            val activeAddr = prof.homeboundAddress?.takeIf { it.isNotBlank() } ?: "Saved destination"
+            wrap.addView(TextView(this).apply {
+                text = "ACTIVE (${"%.0f".format(selectedRadiusKm)} km) → $activeAddr"
+                textSize = 12f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor("#6EE7B7"))
+                background = AlistoUiKit.roundedBg(this@ContractorMainActivity, "#052E23", 10, "#10B981")
+                setPadding(dp(10), dp(7), dp(10), dp(7))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(8) }
+            })
+            wrap.addView(
+                AlistoUiKit.pillButton(
+                    this, "Turn Off Going Home Filter", "#450A0A", "#FCA5A5", "#EF4444", heightDp = 40, textSizeSp = 12.5f
+                ) {
+                    uiScope.launch {
+                        val res = AlistoKernelClient.setContractorHomeboundRpc(enabled = false)
+                        res.onSuccess {
+                            dlgRef?.dismiss()
+                            Toast.makeText(this@ContractorMainActivity, "Going Home filter turned OFF.", Toast.LENGTH_SHORT).show()
+                            showActiveContractorPortal(user)
+                        }.onFailure { err ->
+                            Toast.makeText(this@ContractorMainActivity, err.message ?: "Unable to turn off Going Home.", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(10) }
+                }
+            )
         }
         wrap.addView(TextView(this).apply {
             text = "When active, Auto-Assign prioritizes bookings near you whose drop-off is near or along the way to your homebound destination."
@@ -1870,6 +1747,7 @@ class ContractorMainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .create()
+        dlgRef = dlg
         dlg.show()
     }
 
