@@ -185,14 +185,18 @@ class ContractorDispatchMonitorService : Service() {
                         presentDominantOffer(envelope)
                     }
                 } else {
-                    if (lastLaunchedKey.isNotEmpty() && ContractorOfferBridge.activeBookingId == null) {
+                    if (!floatingDecisionInFlight &&
+                        (lastLaunchedKey.isNotEmpty() || floatingOverlayView != null || ContractorOfferBridge.activeBookingId != null)
+                    ) {
                         lastLaunchedKey = ""
+                        ContractorOfferBridge.activeBookingId = null
                         cancelOfferNotification(this@ContractorDispatchMonitorService)
                         dismissFloatingOverlay()
+                        ContractorOfferBridge.dismissActiveOverlay("Booking offer expired or cancelled.")
                         ContractorSoundEngine.stopIncomingOfferAlarm()
                     }
                 }
-                delay(2_500L)
+                delay(1_500L)
             }
         }
     }
@@ -207,7 +211,7 @@ class ContractorDispatchMonitorService : Service() {
         val fee = offer.optDouble("quoted_fee", 0.0)
         val title = offer.optString("service_title", "Incoming Booking")
         val ref = offer.optString("booking_ref", "ALISTO")
-        val secs = envelope.optInt("seconds_remaining", 25)
+        val secs = envelope.optInt("seconds_remaining", 15).coerceIn(1, 30)
 
         // Play in-app road-ready audio immediately (never native phone call/message tones)
         ContractorSoundEngine.startIncomingOfferAlarm(this)
@@ -309,7 +313,9 @@ class ContractorDispatchMonitorService : Service() {
         val pickupLng = offer.optDouble("pickup_lng", 0.0)
         val dropoffLat = offer.optDouble("dropoff_lat", 0.0)
         val dropoffLng = offer.optDouble("dropoff_lng", 0.0)
-        val secsInit = envelope.optInt("seconds_remaining", 25).coerceIn(3, 60)
+        val deadlineMs = ContractorOfferBridge.resolveServerDeadlineMs(envelope)
+        val remInitMs = (deadlineMs - System.currentTimeMillis()).coerceAtLeast(1_000L)
+        val secsInit = ((remInitMs + 999L) / 1000L).toInt().coerceIn(1, 30)
         val tripKm = computeRoadDistKm(pickupLat, pickupLng, dropoffLat, dropoffLng)
         val myLat = AlistoLocationTracker.lastLat
         val myLng = AlistoLocationTracker.lastLng
@@ -426,7 +432,8 @@ class ContractorDispatchMonitorService : Service() {
         try {
             wm.addView(backdrop, params)
             floatingOverlayView = backdrop
-            floatingTimer = object : CountDownTimer(secsInit * 1000L, 100L) {
+            val startRemMs = (deadlineMs - System.currentTimeMillis()).coerceAtLeast(1_000L)
+            floatingTimer = object : CountDownTimer(startRemMs, 100L) {
                 override fun onTick(millisUntilFinished: Long) {
                     val s = ((millisUntilFinished + 999L) / 1000L).toInt().coerceAtLeast(0)
                     timerTv.text = "${s}s"

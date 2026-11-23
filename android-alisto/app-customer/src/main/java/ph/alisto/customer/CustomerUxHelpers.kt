@@ -27,6 +27,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import ph.alisto.kernel.AlistoChatEngine
 import ph.alisto.kernel.AlistoKernelClient
 import ph.alisto.kernel.AlistoUiKit
 import ph.alisto.kernel.AlistoUiKit.dp
@@ -501,6 +502,7 @@ internal fun CustomerMainActivity.openLiveCustomerChatDialog(booking: BookingRec
             val res = AlistoKernelClient.sendModeratedChatMessageRpc(booking.id, body)
             res.onSuccess {
                 renderMessages(AlistoKernelClient.chatTranscripts[booking.id].orEmpty())
+                AlistoChatEngine.notifyLocalListeners(booking.id)
                 AlistoKernelClient.chatTranscripts[booking.id]?.lastOrNull()?.id?.takeIf { it.isNotBlank() }?.let {
                     lastSeenChatMsgIds[booking.id] = it
                 }
@@ -515,14 +517,20 @@ internal fun CustomerMainActivity.openLiveCustomerChatDialog(booking: BookingRec
     dialogLayout.addView(inputRow)
 
     val syncStatusTv = TextView(this).apply {
-        text = "● Syncing live every 3s..."
+        text = "● Realtime chat connected"
         textSize = 10.5f
         setTextColor(Color.parseColor("#6EE7B7"))
         setPadding(dp(2), dp(6), dp(2), 0)
     }
     dialogLayout.addView(syncStatusTv)
 
-    var chatPollJob: Job? = null
+    val transcriptListener: (List<ChatMessage>) -> Unit = { msgs ->
+        renderMessages(msgs)
+        syncStatusTv.text = "● Live realtime chat (${msgs.size} message${if (msgs.size == 1) "" else "s"})"
+        syncStatusTv.setTextColor(Color.parseColor("#6EE7B7"))
+        msgs.lastOrNull()?.id?.takeIf { it.isNotBlank() }?.let { lastSeenChatMsgIds[booking.id] = it }
+    }
+
     val dialog = AlertDialog.Builder(this)
         .setTitle("Chat • ${booking.contractorFullName ?: booking.bookingRef}")
         .setView(dialogLayout)
@@ -530,22 +538,21 @@ internal fun CustomerMainActivity.openLiveCustomerChatDialog(booking: BookingRec
         .create()
 
     dialog.setOnShowListener {
-        chatPollJob = uiScope.launch {
-            while (isActive && dialog.isShowing) {
-                val res = AlistoKernelClient.fetchBookingMessagesRpc(booking.id)
-                res.onSuccess { msgs ->
-                    renderMessages(msgs)
-                    syncStatusTv.text = "● Live chat synced (${msgs.size} message${if (msgs.size == 1) "" else "s"}) • 3s heartbeat"
-                    syncStatusTv.setTextColor(Color.parseColor("#6EE7B7"))
-                    msgs.lastOrNull()?.id?.takeIf { it.isNotBlank() }?.let { lastSeenChatMsgIds[booking.id] = it }
-                }.onFailure { err ->
-                    syncStatusTv.text = "Sync retry: ${err.message ?: "reconnecting..."}"
-                    syncStatusTv.setTextColor(Color.parseColor("#FDA4AF"))
-                }
-                delay(3_000L)
+        AlistoChatEngine.openChatBookingId = booking.id
+        AlistoChatEngine.clearChatNotification(this@openLiveCustomerChatDialog, booking.id)
+        AlistoChatEngine.addTranscriptListener(booking.id, transcriptListener)
+        AlistoChatEngine.triggerCatchUp(booking.id, forceFull = true) { res ->
+            res.onFailure {
+                syncStatusTv.text = "● Reconnecting realtime chat..."
+                syncStatusTv.setTextColor(Color.parseColor("#FBBF24"))
             }
         }
     }
-    dialog.setOnDismissListener { chatPollJob?.cancel() }
+    dialog.setOnDismissListener {
+        if (AlistoChatEngine.openChatBookingId == booking.id) {
+            AlistoChatEngine.openChatBookingId = null
+        }
+        AlistoChatEngine.removeTranscriptListener(booking.id, transcriptListener)
+    }
     dialog.show()
 }

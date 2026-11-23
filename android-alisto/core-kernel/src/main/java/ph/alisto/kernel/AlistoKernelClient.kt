@@ -71,7 +71,13 @@ data class ContractorProfileState(
     val autoOffersTimedOut: Int = 0,
     val boardAwardsAccepted: Int = 0,
     val boardAwardsRejected: Int = 0,
-    val boardAwardsTimedOut: Int = 0
+    val boardAwardsTimedOut: Int = 0,
+    val dispatchStatus: String = "OFFLINE",
+    var homeboundEnabled: Boolean = false,
+    var homeboundLat: Double? = null,
+    var homeboundLng: Double? = null,
+    var homeboundAddress: String? = null,
+    var homeboundRadiusKm: Double = 3.0
 )
 
 data class ActiveSubscriptionPass(
@@ -229,7 +235,18 @@ data class BookingRecord(
 data class DispatchPricingRules(
     val commissionRate: Double = 0.12,
     val freeWaitMinutes: Int = 5,
-    val waitingRatePerMinPhp: Double = 5.0
+    val waitingRatePerMinPhp: Double = 5.0,
+    val postCompletionCooldownSeconds: Int = 5,
+    val autoOfferLeaseSeconds: Int = 15
+)
+
+data class HighDemandZone(
+    val id: String,
+    val zoneName: String,
+    val centerLat: Double,
+    val centerLng: Double,
+    val radiusMeters: Int,
+    val isActive: Boolean = true
 )
 
 data class WalletLedgerEntry(
@@ -329,7 +346,8 @@ data class ChatMessage(
     val sentAt: String,
     val id: String = "",
     val senderId: String = "",
-    val senderRole: String = ""
+    val senderRole: String = "",
+    val rawSentAt: String = ""
 )
 
 object AlistoKernelClient {
@@ -352,6 +370,7 @@ object AlistoKernelClient {
     val verticals = mutableListOf<ServiceVertical>()
     val pricingClasses = mutableListOf<ServicePricingClass>()
     val bookings = mutableListOf<BookingRecord>()
+    val activeHighDemandZones = mutableListOf<HighDemandZone>()
     val bookingBids = mutableListOf<BookingBidRecord>()
     val ledgerHistory = mutableListOf<LedgerEntry>()
     var currentPaymentModeInfo: PaymentModeInfo = PaymentModeInfo()
@@ -462,6 +481,12 @@ object AlistoKernelClient {
                     boardAwardsAccepted = cp.optInt("board_awards_accepted", 0),
                     boardAwardsRejected = cp.optInt("board_awards_rejected", 0),
                     boardAwardsTimedOut = cp.optInt("board_awards_timed_out", 0),
+            dispatchStatus = cp.optString("dispatch_status", if (cp.optBoolean("is_online", false)) "AVAILABLE" else "OFFLINE"),
+            homeboundEnabled = cp.optBoolean("homebound_enabled", false),
+            homeboundLat = if (cp.isNull("homebound_lat")) null else cp.optDouble("homebound_lat"),
+            homeboundLng = if (cp.isNull("homebound_lng")) null else cp.optDouble("homebound_lng"),
+            homeboundAddress = if (cp.isNull("homebound_address")) null else cp.optString("homebound_address").ifBlank { null },
+            homeboundRadiusKm = cp.optDouble("homebound_radius_km", 3.0),
                     authorizedPlateNo = if (cp.isNull("authorized_plate_no")) null else cp.optString("authorized_plate_no"),
                     isElectricVehicle = cp.optBoolean("is_electric_vehicle", false),
                     engineDisplacementCc = cp.optInt("engine_displacement_cc", 0),
@@ -1031,34 +1056,94 @@ object AlistoKernelClient {
         return DateTimeFormatter.ofPattern("hh:mm a", Locale.US).format(inst.atZone(zone))
     }
 
-    suspend fun fetchBookingMessagesRpc(bookingId: String, limit: Int = 60): Result<List<ChatMessage>> = withContext(Dispatchers.IO) {
+    suspend fun fetchBookingMessagesRpc(
+        bookingId: String,
+        limit: Int = 60,
+        sinceIso: String? = null
+    ): Result<List<ChatMessage>> = withContext(Dispatchers.IO) {
         val token = currentSessionToken ?: return@withContext Result.failure(IllegalStateException("Session expired."))
         try {
             val json = postRpc("secure_get_booking_messages_rpc", JSONObject().apply {
                 put("p_session_token", token)
                 put("p_booking_id", bookingId)
                 put("p_limit", limit)
+                if (!sinceIso.isNullOrBlank()) put("p_since", sinceIso)
             })
             if (json.optString("status") != "SUCCESS") {
                 return@withContext Result.failure(IllegalStateException(json.optString("message", "Unable to load messages.")))
             }
             val arr = json.optJSONArray("messages") ?: JSONArray()
-            val list = mutableListOf<ChatMessage>()
+            val incoming = mutableListOf<ChatMessage>()
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
-                list.add(
+                val rawTs = o.optString("sent_at", "").ifBlank { o.optString("created_at", "") }
+                incoming.add(
                     ChatMessage(
                         o.optString("sender_name", "User").ifBlank { "User" },
                         o.optString("message_body", ""),
-                        formatManilaClock(o.optString("sent_at", "").ifBlank { o.optString("created_at", "") }),
+                        formatManilaClock(rawTs),
                         id = o.optString("id", ""),
                         senderId = o.optString("sender_id", ""),
-                        senderRole = o.optString("sender_role", "")
+                        senderRole = o.optString("sender_role", ""),
+                        rawSentAt = rawTs
                     )
                 )
             }
-            chatTranscripts[bookingId] = list
-            Result.success(list)
+            val merged = synchronized(chatTranscripts) {
+                if (sinceIso.isNullOrBlank()) {
+                    chatTranscripts[bookingId] = incoming.toMutableList()
+                    incoming.toList()
+                } else {
+                    val existing = chatTranscripts.getOrPut(bookingId) { mutableListOf() }
+                    val seenIds = existing.mapNotNull { it.id.ifBlank { null } }.toMutableSet()
+                    incoming.forEach { msg ->
+                        if (msg.id.isBlank() || seenIds.add(msg.id)) {
+                            existing.add(msg)
+                        }
+                    }
+                    existing.toList()
+                }
+            }
+            Result.success(merged)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun sendBookingMessageDirectRpc(
+        bookingId: String,
+        senderId: String,
+        senderName: String,
+        messageBody: String
+    ): Result<ChatMessage> = withContext(Dispatchers.IO) {
+        try {
+            val json = postRpc("send_booking_message_rpc", JSONObject().apply {
+                put("p_booking_id", bookingId)
+                put("p_sender_id", senderId)
+                put("p_message_body", messageBody.trim())
+            })
+            val status = json.optString("status")
+            if (status == "BLOCKED_MODERATION" || status == "LOCKED_STATE" || status == "ERROR") {
+                return@withContext Result.failure(SecurityException(json.optString("message", "Message blocked by moderation trigger.")))
+            }
+            val rec = json.optJSONObject("message_record")
+            val rawTs = rec?.optString("sent_at")?.ifBlank { rec.optString("created_at") }.orEmpty()
+            val msg = ChatMessage(
+                senderName = senderName.ifBlank { "You" },
+                body = messageBody.trim(),
+                sentAt = formatManilaClock(rawTs),
+                id = rec?.optString("id", "").orEmpty(),
+                senderId = senderId,
+                senderRole = currentSessionUser?.role.orEmpty(),
+                rawSentAt = rawTs
+            )
+            synchronized(chatTranscripts) {
+                val list = chatTranscripts.getOrPut(bookingId) { mutableListOf() }
+                if (msg.id.isBlank() || list.none { it.id == msg.id }) {
+                    list.add(msg)
+                }
+            }
+            Result.success(msg)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -1248,13 +1333,99 @@ object AlistoKernelClient {
                 val rules = DispatchPricingRules(
                     commissionRate = json.optDouble("platform_commission_rate", 0.12),
                     freeWaitMinutes = json.optInt("free_waiting_time_minutes", 5),
-                    waitingRatePerMinPhp = json.optDouble("waiting_time_rate_per_min_php", 5.0)
+                    waitingRatePerMinPhp = json.optDouble("waiting_time_rate_per_min_php", 5.0),
+                    postCompletionCooldownSeconds = json.optInt("post_completion_cooldown_seconds", 5),
+                    autoOfferLeaseSeconds = json.optInt("auto_offer_lease_seconds", 15)
                 )
                 currentPricingRules = rules
                 return@withContext rules
             }
         } catch (_: Exception) {}
         return@withContext currentPricingRules
+    }
+
+    suspend fun fetchActiveHighDemandZonesRpc(): List<HighDemandZone> = withContext(Dispatchers.IO) {
+        try {
+            val json = postRpc("get_active_high_demand_zones_rpc", JSONObject())
+            if (json.optString("status") == "SUCCESS") {
+                val arr = json.optJSONArray("zones") ?: JSONArray()
+                val loaded = mutableListOf<HighDemandZone>()
+                for (i in 0 until arr.length()) {
+                    val z = arr.optJSONObject(i) ?: continue
+                    loaded.add(
+                        HighDemandZone(
+                            id = z.optString("id", ""),
+                            zoneName = z.optString("zone_name", "High-Demand Zone"),
+                            centerLat = z.optDouble("center_lat", 0.0),
+                            centerLng = z.optDouble("center_lng", 0.0),
+                            radiusMeters = z.optInt("radius_meters", 1500),
+                            isActive = z.optBoolean("is_active", true)
+                        )
+                    )
+                }
+                synchronized(activeHighDemandZones) {
+                    activeHighDemandZones.clear()
+                    activeHighDemandZones.addAll(loaded)
+                }
+                return@withContext loaded
+            }
+        } catch (_: Exception) {}
+        return@withContext activeHighDemandZones.toList()
+    }
+
+    /**
+     * Evaluates drop-off coordinates against SuperAdmin High-Demand Zones.
+     * Returns null if no zones are defined yet, 0.0 if inside any active High-Demand Zone,
+     * or the deadheading return distance (km) to the nearest zone boundary if outside.
+     */
+    fun computeDeadheadReturnKmFromZones(dropoffLat: Double, dropoffLng: Double): Double? {
+        val zones = synchronized(activeHighDemandZones) { activeHighDemandZones.filter { it.isActive } }
+        if (zones.isEmpty()) return null
+        var minExcessMeters = Double.MAX_VALUE
+        val res = FloatArray(1)
+        for (z in zones) {
+            android.location.Location.distanceBetween(dropoffLat, dropoffLng, z.centerLat, z.centerLng, res)
+            val distM = res[0].toDouble()
+            if (distM <= z.radiusMeters.toDouble()) return 0.0
+            val excess = distM - z.radiusMeters.toDouble()
+            if (excess < minExcessMeters) minExcessMeters = excess
+        }
+        if (minExcessMeters == Double.MAX_VALUE) return 0.0
+        return kotlin.math.round((minExcessMeters / 1000.0).coerceAtLeast(0.5) * 100.0) / 100.0
+    }
+
+    suspend fun setContractorHomeboundRpc(
+        enabled: Boolean,
+        lat: Double? = null,
+        lng: Double? = null,
+        address: String? = null,
+        radiusKm: Double = 3.0
+    ): Result<ContractorProfileState?> = withContext(Dispatchers.IO) {
+        val token = currentSessionToken ?: return@withContext Result.failure(IllegalStateException("Session expired."))
+        try {
+            val json = postRpc("secure_set_contractor_homebound_rpc", JSONObject().apply {
+                put("p_session_token", token)
+                put("p_enabled", enabled)
+                if (lat != null) put("p_lat", lat)
+                if (lng != null) put("p_lng", lng)
+                if (!address.isNullOrBlank()) put("p_address", address.trim())
+                put("p_radius_km", radiusKm)
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Unable to update Going Home filter.")))
+            }
+            val p = json.optJSONObject("profile")
+            currentContractorProfile?.let { cur ->
+                cur.homeboundEnabled = p?.optBoolean("homebound_enabled", enabled) ?: enabled
+                if (p != null && !p.isNull("homebound_lat")) cur.homeboundLat = p.optDouble("homebound_lat") else if (lat != null) cur.homeboundLat = lat
+                if (p != null && !p.isNull("homebound_lng")) cur.homeboundLng = p.optDouble("homebound_lng") else if (lng != null) cur.homeboundLng = lng
+                if (p != null && !p.isNull("homebound_address")) cur.homeboundAddress = p.optString("homebound_address").ifBlank { null } else if (!address.isNullOrBlank()) cur.homeboundAddress = address.trim()
+                cur.homeboundRadiusKm = p?.optDouble("homebound_radius_km", radiusKm) ?: radiusKm
+            }
+            Result.success(currentContractorProfile)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     suspend fun ackCustomerArrivalRpc(bookingId: String): Result<Boolean> = withContext(Dispatchers.IO) {

@@ -55,6 +55,7 @@ class CustomerMainActivity : AppCompatActivity() {
     private val sequentialWaypoints = mutableListOf<JSONObject>()
     private var realtimePollJob: Job? = null
     private var chatHeartbeatJob: Job? = null
+    private var pendingOpenChatBookingId: String? = null
     private var pickupSearchJob: Job? = null
     private var dropoffSearchJob: Job? = null
     private var reverseGeoJob: Job? = null
@@ -180,12 +181,36 @@ class CustomerMainActivity : AppCompatActivity() {
         return "$prefix, ${nickname.ifBlank { "Friend" }}"
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleChatLaunchIntent(intent)
+    }
+
+    private fun handleChatLaunchIntent(incoming: Intent?) {
+        val bid = incoming?.getStringExtra(AlistoChatEngine.EXTRA_OPEN_CHAT_BOOKING_ID)?.takeIf { it.isNotBlank() } ?: return
+        incoming.removeExtra(AlistoChatEngine.EXTRA_OPEN_CHAT_BOOKING_ID)
+        pendingOpenChatBookingId = bid
+        maybeOpenPendingChatDialog()
+    }
+
+    private fun maybeOpenPendingChatDialog() {
+        val bid = pendingOpenChatBookingId ?: return
+        val booking = AlistoKernelClient.bookings.firstOrNull { it.id == bid } ?: return
+        pendingOpenChatBookingId = null
+        openLiveCustomerChatDialog(booking)
+    }
+
     override fun onResume() {
         super.onResume()
-        if (AlistoKernelClient.currentSessionUser != null) {
+        handleChatLaunchIntent(intent)
+        val resumeUser = AlistoKernelClient.currentSessionUser
+        if (resumeUser != null) {
             if (AlistoLocationTracker.ensureExplicitGpsGate(this, "Alisto Customer")) {
                 startLiveGpsOnMap(forceCenter = false, snapOriginToGps = false)
             }
+            syncCustomerChatEngineWatcher(resumeUser)
+            maybeOpenPendingChatDialog()
         }
     }
 
@@ -407,7 +432,12 @@ class CustomerMainActivity : AppCompatActivity() {
             activeOriginLng = AlistoLocationTracker.lastLng ?: user.homeLng
             draftPickupAddress = user.addressText.ifBlank { "${user.barangayZone}, ${user.municipality}" }
         }
+        AlistoChatEngine.registerHost(this, CustomerMainActivity::class.java.name) {
+            CustomerDoorbellEngine.playIncomingChatChime(this)
+        }
+        uiScope.launch { AlistoKernelClient.fetchActiveHighDemandZonesRpc() }
         startCustomerRealtimeLoop()
+        handleChatLaunchIntent(intent)
         AlistoComplianceGate.checkOtaUpdate(this, "customer", BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
         AlistoComplianceGate.enforceRa10173ConsentIfRequired(this, uiScope, "customer")
 
@@ -1059,7 +1089,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 suppressAutocomplete = false
                 dropSuggestionsBox.visibility = View.GONE
                 customerMapView?.recenter(picked.lat, picked.lng, 16)
-                refreshCustomerMapLayers(user)
+                recalculateRouteAndFare(user)
             }
 
             dropCard.addView(AlistoUiKit.labeledField(this, "◆ Drop-Off / Destination", dInput, 4))
@@ -1624,7 +1654,7 @@ class CustomerMainActivity : AppCompatActivity() {
         }
 
         // Auto-detect out-of-high-demand destination and apply PHP 2/km return surcharge
-        val autoDhKm = computeRemoteDeadheadKm(dLat, dLng)
+        val autoDhKm = AlistoKernelClient.computeDeadheadReturnKmFromZones(dLat, dLng) ?: computeRemoteDeadheadKm(dLat, dLng)
         if (autoDhKm > 0.0) {
             val formattedDh = "%.1f".format(autoDhKm)
             draftDeadheadKm = formattedDh
@@ -2044,7 +2074,7 @@ class CustomerMainActivity : AppCompatActivity() {
         }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) } })
 
         container.addView(AlistoUiKit.pillButton(this, "Sign Out & Lock", "#450A0A", "#FCA5A5", "#7F1D1D", heightDp = 46) {
-            realtimePollJob?.cancel(); chatHeartbeatJob?.cancel(); AlistoLocationTracker.stopLiveUpdates(); AlistoKernelClient.signOut(); showEntryPortalGate()
+            realtimePollJob?.cancel(); chatHeartbeatJob?.cancel(); AlistoChatEngine.stopWatching(); AlistoLocationTracker.stopLiveUpdates(); AlistoKernelClient.signOut(); showEntryPortalGate()
         }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT) })
 
         scroll.addView(container)
@@ -2331,38 +2361,27 @@ class CustomerMainActivity : AppCompatActivity() {
         openLiveCustomerChatDialog(booking)
     }
 
-    private fun startCustomerChatHeartbeat() {
-        if (chatHeartbeatJob?.isActive == true) return
-        chatHeartbeatJob = uiScope.launch {
-            while (isActive) {
-                val user = AlistoKernelClient.currentSessionUser
-                val token = AlistoKernelClient.currentSessionToken
-                if (user != null && !token.isNullOrBlank()) {
-                    val activeChatJob = AlistoKernelClient.bookings.firstOrNull {
-                        it.clientId == user.id && it.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS")
-                    }
-                    if (activeChatJob != null) {
-                        val chatRes = AlistoKernelClient.fetchBookingMessagesRpc(activeChatJob.id)
-                        chatRes.onSuccess { msgs ->
-                            val latest = msgs.lastOrNull()
-                            if (latest != null && latest.id.isNotBlank()) {
-                                val prevId = lastSeenChatMsgIds[activeChatJob.id]
-                                lastSeenChatMsgIds[activeChatJob.id] = latest.id
-                                if (prevId != null && prevId != latest.id && latest.senderId != user.id) {
-                                    CustomerDoorbellEngine.playIncomingChatChime(this@CustomerMainActivity)
-                                    Toast.makeText(
-                                        this@CustomerMainActivity,
-                                        "New message from ${latest.senderName}: ${latest.body}",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-                            }
-                        }
-                    }
-                }
-                delay(3_000L)
-            }
+    private fun syncCustomerChatEngineWatcher(user: AuthenticatedUser) {
+        val activeChatJob = AlistoKernelClient.bookings.firstOrNull {
+            it.clientId == user.id && it.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS")
         }
+        if (activeChatJob != null) {
+            AlistoChatEngine.watchActiveBooking(
+                context = this,
+                bookingId = activeChatJob.id,
+                bookingRef = activeChatJob.bookingRef,
+                userId = user.id,
+                userName = user.nickname.ifBlank { user.fullName.ifBlank { "Customer" } },
+                counterpartyName = activeChatJob.contractorFullName ?: "Your Pro"
+            )
+        } else {
+            AlistoChatEngine.stopWatching()
+        }
+    }
+
+    private fun startCustomerChatHeartbeat() {
+        chatHeartbeatJob?.cancel()
+        AlistoKernelClient.currentSessionUser?.let { syncCustomerChatEngineWatcher(it) }
     }
 
     private fun startCustomerRealtimeLoop() {
@@ -2376,6 +2395,7 @@ class CustomerMainActivity : AppCompatActivity() {
                 delay(6_000L)
                 if (AlistoKernelClient.currentSessionToken.isNullOrBlank()) break
                 AlistoKernelClient.syncBookingsAndWallet()
+                    AlistoKernelClient.currentSessionUser?.let { u -> syncCustomerChatEngineWatcher(u); maybeOpenPendingChatDialog() }
                 val fired = AlistoPushCenter.dispatchUnreadNotifications(this@CustomerMainActivity, uiScope)
                 val user = AlistoKernelClient.currentSessionUser
 
@@ -2436,6 +2456,7 @@ class CustomerMainActivity : AppCompatActivity() {
         super.onDestroy()
         realtimePollJob?.cancel()
         chatHeartbeatJob?.cancel()
+        AlistoChatEngine.stopWatching()
         pickupSearchJob?.cancel()
         dropoffSearchJob?.cancel()
         reverseGeoJob?.cancel()

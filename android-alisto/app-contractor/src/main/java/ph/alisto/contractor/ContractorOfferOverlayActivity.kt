@@ -9,6 +9,7 @@ import android.location.Location
 import android.os.Build
 import android.os.Bundle
 import android.os.CountDownTimer
+import java.lang.ref.WeakReference
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.LinearLayout
@@ -37,10 +38,42 @@ object ContractorOfferBridge {
     @Volatile var lastResultBookingId: String? = null
     @Volatile var lastHandledAtMs: Long = 0L
     @Volatile var isMainActivityForeground: Boolean = false
+    @Volatile var activeOverlayRef: WeakReference<ContractorOfferOverlayActivity>? = null
+
+    fun dismissActiveOverlay(reason: String? = null) {
+        val act = activeOverlayRef?.get() ?: return
+        act.runOnUiThread {
+            if (!act.isFinishing && !act.isDestroyed) {
+                if (!reason.isNullOrBlank()) {
+                    Toast.makeText(act, reason, Toast.LENGTH_SHORT).show()
+                }
+                act.finish()
+            }
+        }
+    }
+
+    fun resolveServerDeadlineMs(offerEnvelope: JSONObject): Long {
+        val nowMs = System.currentTimeMillis()
+        val offer = offerEnvelope.optJSONObject("offer")
+        val secs = offerEnvelope.optInt("seconds_remaining", 15).coerceIn(1, 30)
+        val expIso = offerEnvelope.optString("offer_expires_at", "")
+            .ifBlank { offer?.optString("offer_expires_at", "").orEmpty() }
+        val parsedMs = AlistoKernelClient.parseServerInstant(expIso)?.toEpochMilli()
+        if (parsedMs != null) {
+            val serverRemMs = parsedMs - nowMs
+            // Anchor directly to server offer_expires_at (minus 1s network grace) when clock skew <= 5s
+            if (kotlin.math.abs(serverRemMs - (secs * 1000L)) <= 5_000L) {
+                return (parsedMs - 1_000L).coerceAtMost(nowMs + (secs * 1000L))
+            }
+        }
+        return nowMs + (secs * 1000L)
+    }
 
     fun buildIntent(context: Context, offerEnvelope: JSONObject): Intent {
         val offer = offerEnvelope.optJSONObject("offer") ?: JSONObject()
-        val secs = offerEnvelope.optInt("seconds_remaining", 25).coerceIn(3, 60)
+        val secs = offerEnvelope.optInt("seconds_remaining", 15).coerceIn(1, 30)
+        val deadlineMs = resolveServerDeadlineMs(offerEnvelope)
+        val expIso = offerEnvelope.optString("offer_expires_at", "").ifBlank { offer.optString("offer_expires_at", "") }
         return Intent(context, ContractorOfferOverlayActivity::class.java).apply {
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -71,6 +104,8 @@ object ContractorOfferBridge {
             putExtra("dropoff_lng", offer.optDouble("dropoff_lng", 0.0))
             putExtra("actual_distance_km", offer.optDouble("actual_distance_km", -1.0))
             putExtra("seconds_remaining", secs)
+            putExtra("offer_expires_at", expIso)
+            putExtra("offer_deadline_ms", deadlineMs)
         }
     }
 }
@@ -81,6 +116,11 @@ class ContractorOfferOverlayActivity : AppCompatActivity() {
     private var countDownTimer: CountDownTimer? = null
     private var decisionInFlight = false
     private var bookingId: String = ""
+    private var offerDeadlineMs: Long = 0L
+    private var timerBadgeRef: TextView? = null
+    private var progressRef: android.widget.ProgressBar? = null
+    private var statusHintRef: TextView? = null
+    private var acceptBtnRef: android.view.View? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -165,7 +205,10 @@ class ContractorOfferOverlayActivity : AppCompatActivity() {
         val dropoffLat = srcIntent.getDoubleExtra("dropoff_lat", 0.0)
         val dropoffLng = srcIntent.getDoubleExtra("dropoff_lng", 0.0)
         val recordedDistKm = srcIntent.getDoubleExtra("actual_distance_km", -1.0)
-        val secondsRemaining = srcIntent.getIntExtra("seconds_remaining", 25).coerceIn(3, 60)
+        val secondsRemaining = srcIntent.getIntExtra("seconds_remaining", 15).coerceIn(1, 30)
+        val explicitDeadline = srcIntent.getLongExtra("offer_deadline_ms", 0L)
+        offerDeadlineMs = if (explicitDeadline > 0L) explicitDeadline else (System.currentTimeMillis() + secondsRemaining * 1000L)
+        ContractorOfferBridge.activeOverlayRef = WeakReference(this)
 
         val tripDistKm = if (recordedDistKm > 0.0) recordedDistKm else computeRoadDistanceKm(pickupLat, pickupLng, dropoffLat, dropoffLng)
         val myLat = AlistoLocationTracker.lastLat
@@ -380,20 +423,45 @@ class ContractorOfferOverlayActivity : AppCompatActivity() {
         btnRow.addView(acceptBtn)
         root.addView(btnRow)
 
+        timerBadgeRef = timerBadge
+        progressRef = progress
+        statusHintRef = statusHint
+        acceptBtnRef = acceptBtn
+
         setContentView(root)
         ViewCompat.requestApplyInsets(root)
+        startOrSyncServerCountdown()
+    }
 
-        countDownTimer = object : CountDownTimer(secondsRemaining * 1000L, 100L) {
+    override fun onResume() {
+        super.onResume()
+        if (!decisionInFlight && offerDeadlineMs > 0L) {
+            startOrSyncServerCountdown()
+        }
+    }
+
+    private fun startOrSyncServerCountdown() {
+        countDownTimer?.cancel()
+        val remMs = offerDeadlineMs - System.currentTimeMillis()
+        if (remMs <= 0L) {
+            acceptBtnRef?.isEnabled = false
+            timerBadgeRef?.text = "0s"
+            progressRef?.progress = 0
+            statusHintRef?.let { submitDecision("TIMEOUT", it) } ?: finish()
+            return
+        }
+        countDownTimer = object : CountDownTimer(remMs, 100L) {
             override fun onTick(millisUntilFinished: Long) {
                 val secs = ((millisUntilFinished + 999L) / 1000L).toInt().coerceAtLeast(0)
-                timerBadge.text = "${secs}s"
-                progress.progress = (millisUntilFinished / 100L).toInt()
+                timerBadgeRef?.text = "${secs}s"
+                progressRef?.progress = (millisUntilFinished / 100L).toInt()
             }
 
             override fun onFinish() {
-                timerBadge.text = "0s"
-                progress.progress = 0
-                submitDecision("TIMEOUT", statusHint)
+                acceptBtnRef?.isEnabled = false
+                timerBadgeRef?.text = "0s"
+                progressRef?.progress = 0
+                statusHintRef?.let { submitDecision("TIMEOUT", it) } ?: finish()
             }
         }.start()
     }
@@ -451,6 +519,9 @@ class ContractorOfferOverlayActivity : AppCompatActivity() {
         countDownTimer?.cancel()
         ContractorSoundEngine.stopIncomingOfferAlarm()
         ContractorDispatchMonitorService.cancelOfferNotification(this)
+        if (ContractorOfferBridge.activeOverlayRef?.get() === this) {
+            ContractorOfferBridge.activeOverlayRef = null
+        }
         if (ContractorOfferBridge.activeBookingId == bookingId) {
             ContractorOfferBridge.activeBookingId = null
         }

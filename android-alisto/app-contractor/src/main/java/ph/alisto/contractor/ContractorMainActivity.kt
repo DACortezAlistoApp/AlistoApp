@@ -41,6 +41,7 @@ class ContractorMainActivity : AppCompatActivity() {
     private var lastContractorLocSyncMs: Long = 0L
     private var realtimePollJob: Job? = null
     private var chatHeartbeatJob: Job? = null
+    private var pendingOpenChatBookingId: String? = null
     private var contractorMapView: AlistoInteractiveMapView? = null
     private var promptedLocationPerm = false
     private var hasAutoCenteredGps = false
@@ -54,21 +55,41 @@ class ContractorMainActivity : AppCompatActivity() {
         ContractorOfferBridge.isMainActivityForeground = false
     }
 
+    private fun handleContractorChatLaunchIntent(incoming: Intent?) {
+        val bid = incoming?.getStringExtra(AlistoChatEngine.EXTRA_OPEN_CHAT_BOOKING_ID)?.takeIf { it.isNotBlank() } ?: return
+        incoming.removeExtra(AlistoChatEngine.EXTRA_OPEN_CHAT_BOOKING_ID)
+        pendingOpenChatBookingId = bid
+        maybeOpenPendingContractorChat()
+    }
+
+    private fun maybeOpenPendingContractorChat() {
+        val bid = pendingOpenChatBookingId ?: return
+        val booking = AlistoKernelClient.bookings.firstOrNull { it.id == bid } ?: return
+        pendingOpenChatBookingId = null
+        activeTab = "ACTIVE"
+        openContractorChatDialog(booking)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         intent.getStringExtra("open_tab")?.let { activeTab = it }
         intent.getStringExtra("open_jobs_filter")?.let { jobsFilter = it }
         AlistoKernelClient.currentSessionUser?.let { showActiveContractorPortal(it) }
+        handleContractorChatLaunchIntent(intent)
     }
 
     override fun onResume() {
         super.onResume()
         ContractorOfferBridge.isMainActivityForeground = true
-        if (AlistoKernelClient.currentSessionUser != null) {
+        handleContractorChatLaunchIntent(intent)
+        val resumeUser = AlistoKernelClient.currentSessionUser
+        if (resumeUser != null) {
             if (AlistoLocationTracker.ensureExplicitGpsGate(this, "Alisto Contractor")) {
                 startContractorLiveGps(forceCenter = false)
             }
+            syncContractorChatEngineWatcher(resumeUser)
+            maybeOpenPendingContractorChat()
         }
         val dec = ContractorOfferBridge.lastResultDecision
         if (dec != null && System.currentTimeMillis() - ContractorOfferBridge.lastHandledAtMs < 6000L) {
@@ -511,6 +532,10 @@ class ContractorMainActivity : AppCompatActivity() {
                 )
             }
         }
+        AlistoChatEngine.registerHost(this, ContractorMainActivity::class.java.name) {
+            ContractorSoundEngine.playStepUpdatedTone(this)
+        }
+        handleContractorChatLaunchIntent(intent)
         if (!token.isNullOrBlank()) {
             ContractorDispatchMonitorService.startMonitoring(this, token)
         }
@@ -819,6 +844,121 @@ class ContractorMainActivity : AppCompatActivity() {
                     }
                 )
             }
+        }
+
+        // Going Home (Homebound) Priority Filter — Rides & Delivery Shifts
+        if (canAutoAssign) {
+            val hbOn = prof?.homeboundEnabled == true
+            val hbAddr = prof?.homeboundAddress?.takeIf { it.isNotBlank() }
+            val hbRad = prof?.homeboundRadiusKm ?: 3.0
+            val hasSavedPin = prof?.homeboundLat != null && prof.homeboundLng != null
+
+            sheetBody.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = AlistoUiKit.roundedBg(
+                    this@ContractorMainActivity,
+                    if (hbOn) "#052E23" else "#0F172A",
+                    12,
+                    if (hbOn) "#10B981" else "#334155"
+                )
+                setPadding(dp(12), dp(9), dp(12), dp(9))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(10) }
+
+                addView(LinearLayout(this@ContractorMainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(TextView(this@ContractorMainActivity).apply {
+                        text = "Going Home Filter"
+                        textSize = 13f
+                        setTypeface(null, Typeface.BOLD)
+                        setTextColor(Color.parseColor(if (hbOn) "#6EE7B7" else AlistoUiKit.TEXT_PRIMARY))
+                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    })
+                    addView(AlistoUiKit.badgePill(
+                        this@ContractorMainActivity,
+                        if (hbOn) "ACTIVE • ${"%.0f".format(hbRad)}km" else "OFF",
+                        if (hbOn) "#064E3B" else "#1E293B",
+                        if (hbOn) "#34D399" else AlistoUiKit.TEXT_MUTED
+                    ))
+                })
+
+                addView(TextView(this@ContractorMainActivity).apply {
+                    text = if (hbOn && hbAddr != null) {
+                        "Prioritizing bookings near you heading toward: $hbAddr"
+                    } else if (hbAddr != null) {
+                        "Saved pin: $hbAddr (Turn On to prioritize homebound trips)"
+                    } else {
+                        "Set your homebound destination to get priority for bookings along your way home."
+                    }
+                    textSize = 11.5f
+                    setTextColor(Color.parseColor(if (hbOn) "#A7F3D0" else AlistoUiKit.TEXT_MUTED))
+                    setPadding(0, dp(4), 0, dp(8))
+                })
+
+                addView(LinearLayout(this@ContractorMainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(AlistoUiKit.chipButton(
+                        this@ContractorMainActivity,
+                        if (hbAddr != null) "Change Pin" else "Set Destination",
+                        true,
+                        "#1E293B",
+                        "#38BDF8"
+                    ) {
+                        openGoingHomeFilterDialog(user)
+                    }.apply {
+                        layoutParams = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                        ).apply { rightMargin = dp(8) }
+                    })
+
+                    if (hbOn) {
+                        addView(AlistoUiKit.chipButton(
+                            this@ContractorMainActivity,
+                            "Turn Off",
+                            false,
+                            "#450A0A",
+                            "#FCA5A5"
+                        ) {
+                            uiScope.launch {
+                                val res = AlistoKernelClient.setContractorHomeboundRpc(enabled = false)
+                                res.onSuccess {
+                                    Toast.makeText(this@ContractorMainActivity, "Going Home filter turned OFF.", Toast.LENGTH_SHORT).show()
+                                    showActiveContractorPortal(user)
+                                }.onFailure { err ->
+                                    Toast.makeText(this@ContractorMainActivity, err.message ?: "Unable to update Going Home.", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        })
+                    } else if (hasSavedPin) {
+                        addView(AlistoUiKit.chipButton(
+                            this@ContractorMainActivity,
+                            "Turn On",
+                            true,
+                            "#064E3B",
+                            "#6EE7B7"
+                        ) {
+                            uiScope.launch {
+                                val res = AlistoKernelClient.setContractorHomeboundRpc(
+                                    enabled = true,
+                                    lat = prof?.homeboundLat,
+                                    lng = prof?.homeboundLng,
+                                    address = prof?.homeboundAddress,
+                                    radiusKm = hbRad
+                                )
+                                res.onSuccess {
+                                    Toast.makeText(this@ContractorMainActivity, "Going Home filter ACTIVE.", Toast.LENGTH_SHORT).show()
+                                    showActiveContractorPortal(user)
+                                }.onFailure { err ->
+                                    Toast.makeText(this@ContractorMainActivity, err.message ?: "Unable to enable Going Home.", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        })
+                    }
+                })
+            })
         }
 
         // One-tap overlay permission helper (only shown until enabled so pop-ups appear over other apps)
@@ -1557,38 +1697,135 @@ class ContractorMainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startContractorChatHeartbeat() {
-        if (chatHeartbeatJob?.isActive == true) return
-        chatHeartbeatJob = uiScope.launch {
-            while (isActive) {
-                val user = AlistoKernelClient.currentSessionUser
-                val tok = AlistoKernelClient.currentSessionToken
-                if (user != null && !tok.isNullOrBlank()) {
-                    val activeChatJob = AlistoKernelClient.bookings.firstOrNull {
-                        it.contractorId == user.id && it.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS")
-                    }
-                    if (activeChatJob != null) {
-                        val chatRes = AlistoKernelClient.fetchBookingMessagesRpc(activeChatJob.id)
-                        chatRes.onSuccess { msgs ->
-                            val latest = msgs.lastOrNull()
-                            if (latest != null && latest.id.isNotBlank()) {
-                                val prevId = lastSeenChatMsgIds[activeChatJob.id]
-                                lastSeenChatMsgIds[activeChatJob.id] = latest.id
-                                if (prevId != null && prevId != latest.id && latest.senderId != user.id) {
-                                    ContractorSoundEngine.playStepUpdatedTone(this@ContractorMainActivity)
-                                    Toast.makeText(
-                                        this@ContractorMainActivity,
-                                        "New message from ${latest.senderName}: ${latest.body}",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-                            }
-                        }
+    private fun openGoingHomeFilterDialog(user: AuthenticatedUser) {
+        val prof = AlistoKernelClient.currentContractorProfile
+        var selectedRadiusKm = prof?.homeboundRadiusKm ?: 3.0
+        val wrap = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(8))
+            setBackgroundColor(Color.parseColor("#0B1324"))
+        }
+        wrap.addView(TextView(this).apply {
+            text = "When active, Auto-Assign prioritizes bookings near you whose drop-off is near or along the way to your homebound destination."
+            textSize = 12f
+            setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED))
+            setPadding(0, 0, 0, dp(10))
+        })
+
+        val addrInput = AlistoUiKit.inputField(
+            this,
+            "Enter homebound barangay, subdivision, or landmark...",
+            InputType.TYPE_CLASS_TEXT,
+            prof?.homeboundAddress.orEmpty().ifBlank { user.addressText }
+        )
+        wrap.addView(AlistoUiKit.labeledField(this, "Homebound Destination", addrInput, 8))
+
+        val radLabel = TextView(this).apply {
+            text = "Match Radius around Destination: ${"%.0f".format(selectedRadiusKm)} km"
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#6EE7B7"))
+            setPadding(0, dp(4), 0, dp(6))
+        }
+        wrap.addView(radLabel)
+
+        val radRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(10) }
+        }
+        listOf(2.0, 3.0, 5.0, 8.0).forEach { km ->
+            radRow.addView(AlistoUiKit.chipButton(this, "${km.toInt()} km", true, "#1E293B", "#7DD3FC") {
+                selectedRadiusKm = km
+                radLabel.text = "Match Radius around Destination: ${km.toInt()} km"
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(6) }
+            })
+        }
+        wrap.addView(radRow)
+
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("Going Home Destination Filter")
+            .setView(wrap)
+            .setNeutralButton("Use Saved Home Pin") { _, _ ->
+                val homeLabel = user.addressText.ifBlank { "${user.barangayZone}, ${user.municipality}" }
+                uiScope.launch {
+                    val res = AlistoKernelClient.setContractorHomeboundRpc(
+                        enabled = true,
+                        lat = user.homeLat,
+                        lng = user.homeLng,
+                        address = homeLabel,
+                        radiusKm = selectedRadiusKm
+                    )
+                    res.onSuccess {
+                        Toast.makeText(this@ContractorMainActivity, "Going Home active toward $homeLabel.", Toast.LENGTH_LONG).show()
+                        showActiveContractorPortal(user)
+                    }.onFailure { err ->
+                        Toast.makeText(this@ContractorMainActivity, err.message ?: "Unable to save homebound pin.", Toast.LENGTH_LONG).show()
                     }
                 }
-                delay(3_000L)
             }
+            .setPositiveButton("Save & Enable") { _, _ ->
+                val typed = addrInput.text.toString().trim()
+                if (typed.isBlank()) {
+                    Toast.makeText(this, "Enter an address or tap Use Saved Home Pin.", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                uiScope.launch {
+                    val coords = withContext(Dispatchers.IO) {
+                        try {
+                            @Suppress("DEPRECATION")
+                            val hits = android.location.Geocoder(this@ContractorMainActivity, java.util.Locale.getDefault())
+                                .getFromLocationName("$typed, Philippines", 1)
+                            hits?.firstOrNull()?.let { it.latitude to it.longitude }
+                        } catch (_: Exception) { null }
+                    }
+                    if (coords == null) {
+                        Toast.makeText(this@ContractorMainActivity, "Could not locate \"$typed\". Try a clearer landmark or Use Saved Home Pin.", Toast.LENGTH_LONG).show()
+                        return@launch
+                    }
+                    val res = AlistoKernelClient.setContractorHomeboundRpc(
+                        enabled = true,
+                        lat = coords.first,
+                        lng = coords.second,
+                        address = typed,
+                        radiusKm = selectedRadiusKm
+                    )
+                    res.onSuccess {
+                        Toast.makeText(this@ContractorMainActivity, "Going Home active toward $typed (${selectedRadiusKm.toInt()} km).", Toast.LENGTH_LONG).show()
+                        showActiveContractorPortal(user)
+                    }.onFailure { err ->
+                        Toast.makeText(this@ContractorMainActivity, err.message ?: "Unable to enable Going Home.", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+        dlg.show()
+    }
+
+    private fun syncContractorChatEngineWatcher(user: AuthenticatedUser) {
+        val activeChatJob = AlistoKernelClient.bookings.firstOrNull {
+            it.contractorId == user.id && it.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS")
         }
+        if (activeChatJob != null) {
+            AlistoChatEngine.watchActiveBooking(
+                context = this,
+                bookingId = activeChatJob.id,
+                bookingRef = activeChatJob.bookingRef,
+                userId = user.id,
+                userName = user.nickname.ifBlank { user.fullName.ifBlank { "Pro" } },
+                counterpartyName = activeChatJob.clientNickname.ifBlank { "Customer" }
+            )
+        } else {
+            AlistoChatEngine.stopWatching()
+        }
+    }
+
+    private fun startContractorChatHeartbeat() {
+        chatHeartbeatJob?.cancel()
+        AlistoKernelClient.currentSessionUser?.let { syncContractorChatEngineWatcher(it) }
     }
 
     private fun startContractorRealtimeLoop() {
@@ -1632,9 +1869,9 @@ class ContractorMainActivity : AppCompatActivity() {
                         "${it.id}:${it.status}:${it.contractorId}:${it.offerContractorId}:${it.customerGoingOutAt}"
                     }
                     if (user != null) {
-                        val activeChatJob = AlistoKernelClient.bookings.firstOrNull {
-                            it.contractorId == user.id && it.status in listOf("ACCEPTED", "ON_THE_WAY", "ARRIVED", "ONGOING", "IN_PROGRESS")
-                        }
+                        syncContractorChatEngineWatcher(user)
+                        maybeOpenPendingContractorChat()
+                    }
                         if (activeChatJob != null) {
                             val chatRes = AlistoKernelClient.fetchBookingMessagesRpc(activeChatJob.id)
                             chatRes.onSuccess { msgs ->
@@ -1666,6 +1903,7 @@ class ContractorMainActivity : AppCompatActivity() {
         super.onDestroy()
         realtimePollJob?.cancel()
         chatHeartbeatJob?.cancel()
+        AlistoChatEngine.stopWatching()
         AlistoLocationTracker.stopLiveUpdates()
         AlistoSpatialEngine.stopHeartbeat()
         uiScope.cancel()
