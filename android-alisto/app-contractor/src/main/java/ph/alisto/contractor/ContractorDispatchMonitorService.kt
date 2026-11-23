@@ -240,8 +240,10 @@ class ContractorDispatchMonitorService : Service() {
                     val now = System.currentTimeMillis()
                     val recentlyHandledSame = (ContractorOfferBridge.lastResultBookingId == bid &&
                         now - ContractorOfferBridge.lastHandledAtMs < 5500L)
+                    val offerVert = offer?.optString("vertical_key").orEmpty()
+                    val verticalActive = offerVert.isBlank() || AlistoKernelClient.isVerticalEnabled(offerVert)
                     val overlayAlreadyOpen = ContractorOfferBridge.activeBookingId == bid || floatingOverlayView != null
-                    val shouldLaunch = bid.isNotBlank() && !overlayAlreadyOpen && !recentlyHandledSame &&
+                    val shouldLaunch = verticalActive && bid.isNotBlank() && !overlayAlreadyOpen && !recentlyHandledSame &&
                         (key != lastLaunchedKey || (now - lastLaunchAtMs) > 6500L)
 
                     if (shouldLaunch) {

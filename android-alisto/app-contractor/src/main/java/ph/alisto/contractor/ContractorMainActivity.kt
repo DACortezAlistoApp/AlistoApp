@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
+import androidx.activity.OnBackPressedCallback
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
@@ -38,6 +39,7 @@ class ContractorMainActivity : AppCompatActivity() {
     private var autoAcceptEnabled = false
     private var promptedEarnModeThisSession = false
     private var lastBookingsDigest: String = ""
+    private var exitDialogShowing: Boolean = false
     private var lastContractorLocSyncMs: Long = 0L
     private var realtimePollJob: Job? = null
     private var chatHeartbeatJob: Job? = null
@@ -107,6 +109,7 @@ class ContractorMainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AlistoUiKit.applyDarkSystemBars(this)
+        registerBackExitConfirmation()
         if (AlistoKernelClient.currentSessionUser != null) {
             routeContractorByAccountState()
         } else if (AlistoBiometricVault.hasSavedSession(this, "contractor")) {
@@ -114,6 +117,34 @@ class ContractorMainActivity : AppCompatActivity() {
         } else {
             showContractorEntryGate()
         }
+    }
+
+    // Intercepts back button and gesture back to return to Drive first, then confirm before exiting.
+    private fun registerBackExitConfirmation() {
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val user = AlistoKernelClient.currentSessionUser
+                if (user != null && activeTab != "DRIVE") {
+                    activeTab = "DRIVE"
+                    showActiveContractorPortal(user)
+                    return
+                }
+                if (exitDialogShowing) return
+                exitDialogShowing = true
+                AlertDialog.Builder(this@ContractorMainActivity)
+                    .setTitle("Exit Alisto Contractor?")
+                    .setMessage("Are you sure you want to close the app?")
+                    .setPositiveButton("Exit") { _, _ ->
+                        exitDialogShowing = false
+                        finish()
+                    }
+                    .setNegativeButton("Stay") { _, _ ->
+                        exitDialogShowing = false
+                    }
+                    .setOnDismissListener { exitDialogShowing = false }
+                    .show()
+            }
+        })
     }
 
     override fun onRequestPermissionsResult(
@@ -365,13 +396,18 @@ class ContractorMainActivity : AppCompatActivity() {
         }
     }
 
-    private fun getApprovedVerticals(prof: ContractorProfileState?): List<String> {
+    private fun getProfileApprovedVerticals(prof: ContractorProfileState?): List<String> {
         if (prof == null) return emptyList()
         val list = mutableListOf<String>()
         if (prof.offersSkills) list.add("skills_marketplace")
         if (prof.offersDelivery) list.add("delivery_logistics")
         if (prof.offersRideHailing) list.add("ride_hailing")
         return list
+    }
+
+    // Active contractor verticals are the intersection of profile approvals and live SuperAdmin vertical flags.
+    private fun getApprovedVerticals(prof: ContractorProfileState?): List<String> {
+        return getProfileApprovedVerticals(prof).filter { AlistoKernelClient.isVerticalEnabled(it) }
     }
 
     internal fun getEffectiveShiftVerticals(prof: ContractorProfileState?): List<String> {
@@ -406,19 +442,27 @@ class ContractorMainActivity : AppCompatActivity() {
             Toast.makeText(this, "Only one approved vertical is active on your account.", Toast.LENGTH_SHORT).show()
             return
         }
+        val hasDel = "delivery_logistics" in approved
+        val hasRide = "ride_hailing" in approved
+        val hasSkills = "skills_marketplace" in approved
         val rideVerticals = buildList {
-            if (prof.offersDelivery) add("delivery_logistics")
-            if (prof.offersRideHailing) add("ride_hailing")
+            if (hasDel) add("delivery_logistics")
+            if (hasRide) add("ride_hailing")
         }
         val options = mutableListOf<Pair<String, List<String>>>()
         if (rideVerticals.isNotEmpty()) {
-            options.add("Delivery & Local Ride" to rideVerticals)
+            val comboLabel = when {
+                hasDel && hasRide -> "Delivery & Local Ride"
+                hasDel -> "Delivery Logistics"
+                else -> "Local Ride-Hailing"
+            }
+            options.add(comboLabel to rideVerticals)
         }
-        if (prof.offersDelivery && prof.offersRideHailing) {
+        if (hasDel && hasRide) {
             options.add("Delivery Only" to listOf("delivery_logistics"))
             options.add("Local Ride Only" to listOf("ride_hailing"))
         }
-        if (prof.offersSkills) {
+        if (hasSkills) {
             options.add("Skills Marketplace & Errands" to listOf("skills_marketplace"))
         }
         val labels = options.map { it.first }.toTypedArray()
@@ -447,16 +491,19 @@ class ContractorMainActivity : AppCompatActivity() {
     private fun maybePromptEarnModeToday(user: AuthenticatedUser) {
         if (promptedEarnModeThisSession) return
         val prof = AlistoKernelClient.currentContractorProfile ?: return
-        val hasRide = prof.offersDelivery || prof.offersRideHailing
-        val hasSkills = prof.offersSkills
+        val approved = getApprovedVerticals(prof)
+        val hasDel = "delivery_logistics" in approved
+        val hasRideOnly = "ride_hailing" in approved
+        val hasRide = hasDel || hasRideOnly
+        val hasSkills = "skills_marketplace" in approved
         if (!hasRide || !hasSkills) {
             promptedEarnModeThisSession = true
             return
         }
         promptedEarnModeThisSession = true
         val rideVerticals = buildList {
-            if (prof.offersDelivery) add("delivery_logistics")
-            if (prof.offersRideHailing) add("ride_hailing")
+            if (hasDel) add("delivery_logistics")
+            if (hasRideOnly) add("ride_hailing")
         }
         val skillsVerticals = listOf("skills_marketplace")
 
@@ -503,6 +550,7 @@ class ContractorMainActivity : AppCompatActivity() {
     }
 
     internal fun isBookingOpenForBoard(b: BookingRecord, currentShifts: List<String>, myUserId: String): Boolean {
+        if (!AlistoKernelClient.isVerticalEnabled(b.verticalKey)) return false
         if (b.verticalKey !in currentShifts) return false
         if (b.contractorId != null) return false
         if (b.status !in listOf("CREATED", "PENDING", "SEARCHING")) return false
@@ -853,7 +901,7 @@ class ContractorMainActivity : AppCompatActivity() {
         if (currentShifts.isEmpty()) {
             if (approvedVerticals.isEmpty()) {
                 sheetBody.addView(TextView(this).apply {
-                    text = "No approved service verticals yet. Contact Admin to activate your vertical."
+                    text = if (getProfileApprovedVerticals(prof).isNotEmpty()) "Your service vertical is temporarily paused by Operations. It will reactivate automatically." else "No approved service verticals yet. Contact Admin to activate your vertical."
                     textSize = 12f
                     setTextColor(Color.parseColor("#FCA5A5"))
                     setPadding(0, dp(4), 0, dp(8))
@@ -1792,7 +1840,10 @@ class ContractorMainActivity : AppCompatActivity() {
                     val offerBid = offerObj?.optString("id").orEmpty()
                     val recentlyHandled = (ContractorOfferBridge.lastResultBookingId == offerBid &&
                         System.currentTimeMillis() - ContractorOfferBridge.lastHandledAtMs < 5500L)
+                    val offerVert = offerObj?.optString("vertical_key").orEmpty()
+                    val verticalActive = offerVert.isBlank() || AlistoKernelClient.isVerticalEnabled(offerVert)
                     if (ContractorOfferBridge.isMainActivityForeground &&
+                        verticalActive &&
                         offerBid.isNotBlank() &&
                         ContractorOfferBridge.activeBookingId != offerBid &&
                         !recentlyHandled
@@ -1817,7 +1868,7 @@ class ContractorMainActivity : AppCompatActivity() {
                     )
                     val digest = AlistoKernelClient.bookings.joinToString("|") {
                         "${it.id}:${it.status}:${it.contractorId}:${it.offerContractorId}:${it.customerGoingOutAt}"
-                    }
+                    } + "::" + AlistoKernelClient.verticalsDigest()
                     if (user != null) {
                         syncContractorChatEngineWatcher(user)
                         maybeOpenPendingContractorChat()

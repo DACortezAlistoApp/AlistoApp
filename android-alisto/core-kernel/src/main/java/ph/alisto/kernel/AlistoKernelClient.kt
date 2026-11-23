@@ -518,6 +518,19 @@ object AlistoKernelClient {
         }
     }
 
+    // Returns true while bootstrap data is still loading, then enforces live SuperAdmin flags.
+    fun isVerticalEnabled(verticalKey: String): Boolean {
+        if (verticals.isEmpty()) return true
+        return verticals.firstOrNull { it.key == verticalKey }?.isEnabled == true
+    }
+
+    // Compact signature used by polling loops to detect live vertical toggles without re-login.
+    fun verticalsDigest(): String {
+        return verticals
+            .sortedBy { it.key }
+            .joinToString("|") { "${it.key}:${if (it.isEnabled) 1 else 0}" }
+    }
+
     private fun hydrateCollectionsFromSnapshot(json: JSONObject) {
         json.optJSONArray("verticals_list")?.let { arr ->
             verticals.clear()

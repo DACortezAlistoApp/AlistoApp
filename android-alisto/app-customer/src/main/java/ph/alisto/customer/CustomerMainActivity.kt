@@ -10,6 +10,7 @@ import java.util.Calendar
 import android.graphics.Typeface
 import android.content.Intent
 import android.os.Bundle
+import androidx.activity.OnBackPressedCallback
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
@@ -39,6 +40,8 @@ class CustomerMainActivity : AppCompatActivity() {
     private var showAdvancedOptions = false
 
     private var selectedVerticalKey = "skills_marketplace"
+    private var lastVerticalsDigest: String = ""
+    private var exitDialogShowing: Boolean = false
     private var selectedVehicleType = "Motorcycle"
     private var selectedPaymentMethod = "CASH"
     private var activeDeadheadInput: EditText? = null
@@ -101,6 +104,7 @@ class CustomerMainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        registerBackExitConfirmation()
         AlistoUiKit.applyDarkSystemBars(this)
         showAnimatedLaunchSplash()
     }
@@ -170,6 +174,41 @@ class CustomerMainActivity : AppCompatActivity() {
                 showEntryPortalGate()
             }
         }
+    }
+
+    // Intercepts hardware back and Android gesture back so accidental swipes do not kill the app.
+    private fun registerBackExitConfirmation() {
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (AlistoKernelClient.currentSessionUser != null) {
+                    if (activeTab == "BOOK" && bookingStep != "LAUNCHER") {
+                        bookingStep = "LAUNCHER"
+                        showAuthenticatedCustomerPortal()
+                        return
+                    }
+                    if (activeTab != "BOOK") {
+                        activeTab = "BOOK"
+                        bookingStep = "LAUNCHER"
+                        showAuthenticatedCustomerPortal()
+                        return
+                    }
+                }
+                if (exitDialogShowing) return
+                exitDialogShowing = true
+                AlertDialog.Builder(this@CustomerMainActivity)
+                    .setTitle("Exit Alisto?")
+                    .setMessage("Are you sure you want to close the app?")
+                    .setPositiveButton("Exit") { _, _ ->
+                        exitDialogShowing = false
+                        finish()
+                    }
+                    .setNegativeButton("Stay") { _, _ ->
+                        exitDialogShowing = false
+                    }
+                    .setOnDismissListener { exitDialogShowing = false }
+                    .show()
+            }
+        })
     }
 
     private fun timeOfDayGreeting(nickname: String): String {
@@ -643,7 +682,26 @@ class CustomerMainActivity : AppCompatActivity() {
                 LauncherOption("Request a Local Ride", "Point-to-point sub-400cc local road mobility", "MOBILITY", "#38BDF8", "ride_hailing", "POINT_TO_POINT", "Local Ride")
             )
 
-            options.forEach { opt ->
+            // Hide any service vertical paused by SuperAdmin; it reappears automatically when re-enabled.
+            val activeOptions = options.filter { AlistoKernelClient.isVerticalEnabled(it.vKey) }
+            if (activeOptions.isEmpty()) {
+                val emptyCard = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER_LIGHT, padDp = 16)
+                emptyCard.addView(TextView(this).apply {
+                    text = "Services Temporarily Paused"
+                    textSize = 15f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.parseColor(AlistoUiKit.AMBER))
+                })
+                emptyCard.addView(TextView(this).apply {
+                    text = "No service verticals are active right now. Available services will appear here automatically once reactivated."
+                    textSize = 12.5f
+                    setTextColor(Color.parseColor(AlistoUiKit.TEXT_MUTED))
+                    setPadding(0, dp(4), 0, 0)
+                })
+                body.addView(emptyCard)
+            }
+
+            activeOptions.forEach { opt ->
                 val card = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER_LIGHT, padDp = 15)
                 card.setOnClickListener {
                     selectedVerticalKey = opt.vKey
@@ -2391,6 +2449,9 @@ class CustomerMainActivity : AppCompatActivity() {
         AlistoKernelClient.bookings.forEach { b ->
             if (!lastBookingStatuses.containsKey(b.id)) lastBookingStatuses[b.id] = b.status
         }
+        if (lastVerticalsDigest.isEmpty()) {
+            lastVerticalsDigest = AlistoKernelClient.verticalsDigest()
+        }
         realtimePollJob = uiScope.launch {
             while (isActive) {
                 delay(6_000L)
@@ -2440,6 +2501,25 @@ class CustomerMainActivity : AppCompatActivity() {
                             }
                         }
                     }
+                    val latestVerticalsDigest = AlistoKernelClient.verticalsDigest()
+                    val verticalsChanged = latestVerticalsDigest != lastVerticalsDigest
+                    if (verticalsChanged) {
+                        lastVerticalsDigest = latestVerticalsDigest
+                        if (activeTab == "BOOK" && bookingStep != "LAUNCHER" && !AlistoKernelClient.isVerticalEnabled(selectedVerticalKey)) {
+                            bookingStep = "LAUNCHER"
+                            Toast.makeText(
+                                this@CustomerMainActivity,
+                                "This service vertical was paused by operations.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            showAuthenticatedCustomerPortal()
+                            break
+                        }
+                        if (activeTab == "BOOK" && bookingStep == "LAUNCHER") {
+                            statusChanged = true
+                        }
+                    }
+
                     refreshCustomerMapLayers(user)
                     if (statusChanged && (activeTab == "ACTIVITY" || (activeTab == "BOOK" && bookingStep == "LAUNCHER"))) {
                         showAuthenticatedCustomerPortal()
