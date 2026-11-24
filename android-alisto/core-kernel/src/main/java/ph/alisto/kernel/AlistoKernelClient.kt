@@ -1209,6 +1209,45 @@ object AlistoKernelClient {
         } catch (_: Exception) {}
     }
 
+    suspend fun lookupP2pRecipientRpc(recipientIdentifier: String): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val token = currentSessionToken ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
+        try {
+            val json = postRpc("secure_lookup_p2p_recipient_rpc", JSONObject().apply {
+                put("p_session_token", token)
+                put("p_recipient_identifier", recipientIdentifier.trim())
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Recipient lookup failed.")))
+            }
+            return@withContext Result.success(json)
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
+    suspend fun transferP2pCreditsRpc(
+        recipientIdentifier: String,
+        amountPhp: Double,
+        note: String = ""
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val token = currentSessionToken ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
+        try {
+            val json = postRpc("secure_p2p_credit_transfer_rpc", JSONObject().apply {
+                put("p_session_token", token)
+                put("p_recipient_identifier", recipientIdentifier.trim())
+                put("p_amount", amountPhp)
+                put("p_note", note.trim())
+            })
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Transfer failed.")))
+            }
+            syncBookingsAndWallet()
+            return@withContext Result.success(json)
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
     suspend fun createBookingV2Rpc(
         verticalKey: String,
         jobSubtype: String,

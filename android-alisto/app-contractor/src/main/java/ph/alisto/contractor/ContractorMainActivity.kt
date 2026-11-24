@@ -571,6 +571,7 @@ class ContractorMainActivity : AppCompatActivity() {
     }
 
     private var lastDriveUiDigest: String = ""
+    private var isSubmittingP2pTransfer: Boolean = false
 
     internal fun showActiveContractorPortal(user: AuthenticatedUser) {
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.parseColor(AlistoUiKit.BG_DEEP)))
@@ -1127,6 +1128,121 @@ class ContractorMainActivity : AppCompatActivity() {
         return scroll
     }
 
+    private fun openContractorP2pTransferDialog(user: AuthenticatedUser) {
+        val availBal = AlistoKernelClient.contractorAvailableCredits
+        val recipInput = AlistoUiKit.inputField(
+            this, "@username, phone, or email",
+            android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        )
+        val amtInput = AlistoUiKit.inputField(
+            this, "e.g. 100.00",
+            android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        )
+        val noteInput = AlistoUiKit.inputField(
+            this, "Optional note (e.g. Credit share)",
+            android.text.InputType.TYPE_CLASS_TEXT
+        )
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(14), dp(20), dp(6))
+            addView(TextView(this@ContractorMainActivity).apply {
+                text = "Available to send: PHP ${"%.2f".format(availBal)} (Held commission credits cannot be transferred)."
+                textSize = 12f
+                setTextColor(Color.parseColor(AlistoUiKit.CYAN))
+                setPadding(0, 0, 0, dp(10))
+            })
+            addView(AlistoUiKit.labeledField(this@ContractorMainActivity, "Recipient (@username / Phone / Email)", recipInput, 8))
+            addView(AlistoUiKit.labeledField(this@ContractorMainActivity, "Amount to Send (PHP)", amtInput, 8))
+            addView(AlistoUiKit.labeledField(this@ContractorMainActivity, "Memo / Note (Optional)", noteInput, 4))
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Send Credits (P2P Transfer)")
+            .setView(box)
+            .setPositiveButton("Verify Recipient") { _, _ ->
+                if (isSubmittingP2pTransfer) {
+                    Toast.makeText(this, "Transfer already in progress — please wait...", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val recipRaw = recipInput.text.toString().trim()
+                val amount = amtInput.text.toString().toDoubleOrNull() ?: 0.0
+                val note = noteInput.text.toString().trim()
+                if (recipRaw.isBlank()) {
+                    Toast.makeText(this, "Enter a recipient @username, phone, or email.", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                if (amount < 1.0 || amount > 50000.0) {
+                    Toast.makeText(this, "Amount must be between PHP 1.00 and PHP 50,000.00.", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                if (amount > availBal) {
+                    Toast.makeText(this, "Insufficient available credits (PHP ${"%.2f".format(availBal)}).", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+
+                uiScope.launch {
+                    val lookupRes = AlistoKernelClient.lookupP2pRecipientRpc(recipRaw)
+                    lookupRes.onSuccess { resJson ->
+                        val r = resJson.optJSONObject("recipient") ?: org.json.JSONObject()
+                        val rName = r.optString("full_name", "Alisto User")
+                        val rHandle = r.optString("username", "").let { if (it.isNotBlank()) "@$it" else recipRaw }
+                        val rRole = r.optString("role", "user").uppercase()
+                        val memoLine = if (note.isNotBlank()) "\nNote: $note" else ""
+
+                        AlertDialog.Builder(this@ContractorMainActivity)
+                            .setTitle("Confirm Credit Transfer")
+                            .setMessage(
+                                "Recipient: $rName ($rHandle)\n" +
+                                    "Account Type: $rRole\n" +
+                                    "Amount: PHP ${"%.2f".format(amount)}$memoLine\n\n" +
+                                    "This transfer is immediate and recorded on both users' credit ledgers."
+                            )
+                            .setPositiveButton("Confirm & Send") { _, _ ->
+                                if (isSubmittingP2pTransfer) return@setPositiveButton
+                                isSubmittingP2pTransfer = true
+                                uiScope.launch {
+                                    try {
+                                        val txRes = AlistoKernelClient.transferP2pCreditsRpc(recipRaw, amount, note)
+                                        txRes.onSuccess { txJson ->
+                                            val ref = txJson.optString("transfer_ref", "P2P")
+                                            val newBal = txJson.optDouble("sender_balance_after", availBal - amount)
+                                            AlertDialog.Builder(this@ContractorMainActivity)
+                                                .setTitle("Transfer Completed")
+                                                .setMessage(
+                                                    "Sent PHP ${"%.2f".format(amount)} to $rName ($rHandle).\n" +
+                                                        "Ref: $ref\n" +
+                                                        "New Balance: PHP ${"%.2f".format(newBal)}"
+                                                )
+                                                .setPositiveButton("Done", null)
+                                                .show()
+                                            AlistoKernelClient.currentSessionUser?.let { showActiveContractorPortal(it) }
+                                        }.onFailure { err ->
+                                            AlertDialog.Builder(this@ContractorMainActivity)
+                                                .setTitle("Transfer Failed")
+                                                .setMessage(err.message ?: "Unable to complete transfer.")
+                                                .setPositiveButton("OK", null)
+                                                .show()
+                                        }
+                                    } finally {
+                                        isSubmittingP2pTransfer = false
+                                    }
+                                }
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }.onFailure { err ->
+                        AlertDialog.Builder(this@ContractorMainActivity)
+                            .setTitle("Recipient Not Found")
+                            .setMessage(err.message ?: "Unable to verify recipient.")
+                            .setPositiveButton("OK", null)
+                            .show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun buildContractorWalletTab(user: AuthenticatedUser): View {
         val activePass = AlistoKernelClient.currentSubscriptionPass
         val payInfo = AlistoKernelClient.currentPaymentModeInfo
@@ -1182,6 +1298,12 @@ class ContractorMainActivity : AppCompatActivity() {
             if (payInfo.paymentMode == "MANUAL") "Grind Pass • 0% Comm (Manual Ref)" else "Grind Pass • 0% Comm (PayMongo)",
             AlistoUiKit.AMBER, AlistoUiKit.BG_DEEP, heightDp = 48
         ) { initiateContractorPaymentFlow("SUBSCRIPTION_PASS", 8000.0, "GRIND_PASS", "Hard-Working Grind Pass (0% 24/7)") }.apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
+        })
+
+        container.addView(AlistoUiKit.pillButton(
+            this, "Send Credits (P2P Transfer)", "#0E3A5D", AlistoUiKit.TEXT_PRIMARY, AlistoUiKit.CYAN, heightDp = 48
+        ) { openContractorP2pTransferDialog(user) }.apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(18) }
         })
 
