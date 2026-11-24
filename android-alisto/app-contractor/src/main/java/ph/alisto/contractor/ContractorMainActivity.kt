@@ -559,7 +559,10 @@ class ContractorMainActivity : AppCompatActivity() {
         return true
     }
 
+    private var lastDriveUiDigest: String = ""
+
     internal fun showActiveContractorPortal(user: AuthenticatedUser) {
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.parseColor(AlistoUiKit.BG_DEEP)))
         AlistoPushCenter.ensureNotificationPermission(this)
         AlistoPushCenter.dispatchUnreadNotifications(this, uiScope)
         startContractorRealtimeLoop()
@@ -1869,15 +1872,39 @@ class ContractorMainActivity : AppCompatActivity() {
                     val digest = AlistoKernelClient.bookings.joinToString("|") {
                         "${it.id}:${it.status}:${it.contractorId}:${it.offerContractorId}:${it.customerGoingOutAt}"
                     } + "::" + AlistoKernelClient.verticalsDigest()
+                    val driveDigest = if (user != null) {
+                        val myJobsSig = AlistoKernelClient.bookings
+                            .filter { it.contractorId == user.id }
+                            .joinToString("|") { "${it.id}:${it.status}:${it.customerGoingOutAt}" }
+                        val openCount = AlistoKernelClient.bookings.count { isBookingOpenForBoard(it, shifts, user.id) }
+                        "$myJobsSig::open=$openCount::${AlistoKernelClient.verticalsDigest()}"
+                    } else ""
                     if (user != null) {
                         syncContractorChatEngineWatcher(user)
                         maybeOpenPendingContractorChat()
                     }
-                    if (user != null && digest != lastBookingsDigest) {
-                        lastBookingsDigest = digest
-                        if (activeTab == "JOBS" || activeTab == "DRIVE" || activeTab == "ACTIVE") {
-                            showActiveContractorPortal(user)
-                            break
+                    if (user != null) {
+                        if (lastBookingsDigest.isEmpty()) {
+                            // Prime initial digest without tearing down the active view and map WebView.
+                            lastBookingsDigest = digest
+                            lastDriveUiDigest = driveDigest
+                        } else if (activeTab == "DRIVE") {
+                            // Pins already updated in-place via updateMapLayers(); avoid full WebView rebuild flashes.
+                            if (driveDigest != lastDriveUiDigest) {
+                                lastBookingsDigest = digest
+                                lastDriveUiDigest = driveDigest
+                                showActiveContractorPortal(user)
+                                break
+                            } else {
+                                lastBookingsDigest = digest
+                            }
+                        } else if (digest != lastBookingsDigest) {
+                            lastBookingsDigest = digest
+                            lastDriveUiDigest = driveDigest
+                            if (activeTab == "JOBS" || activeTab == "ACTIVE") {
+                                showActiveContractorPortal(user)
+                                break
+                            }
                         }
                     }
                 }

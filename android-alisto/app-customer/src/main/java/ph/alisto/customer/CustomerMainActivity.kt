@@ -101,12 +101,29 @@ class CustomerMainActivity : AppCompatActivity() {
     private var draftTip: String = ""
     private var draftErrandGoods: String = "0"
     private var draftDeadheadKm: String = "0"
+    private var isSubmittingBooking: Boolean = false
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString("alisto_active_tab", activeTab)
+        outState.putString("alisto_booking_step", bookingStep)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.parseColor(AlistoUiKit.BG_DEEP)))
+        savedInstanceState?.let { st ->
+            activeTab = st.getString("alisto_active_tab", activeTab) ?: activeTab
+            bookingStep = st.getString("alisto_booking_step", bookingStep) ?: bookingStep
+        }
         registerBackExitConfirmation()
         AlistoUiKit.applyDarkSystemBars(this)
-        showAnimatedLaunchSplash()
+        // Resume directly if the session is still live in memory after switching apps.
+        if (AlistoKernelClient.currentSessionUser != null) {
+            showAuthenticatedCustomerPortal()
+        } else {
+            showAnimatedLaunchSplash()
+        }
     }
 
     private fun showAnimatedLaunchSplash() {
@@ -598,26 +615,34 @@ class CustomerMainActivity : AppCompatActivity() {
             elevation = dp(12).toFloat()
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                if (hasActive) FrameLayout.LayoutParams.WRAP_CONTENT else (resources.displayMetrics.heightPixels * 0.58f).toInt(),
+                FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM
             )
-        }
-        if (!hasActive) {
-            root.post {
-                if (root.height > 0) {
-                    (sheet.layoutParams as? FrameLayout.LayoutParams)?.height = (root.height * 0.58f).toInt()
-                    sheet.requestLayout()
-                }
-            }
         }
         sheet.addView(AlistoUiKit.dragHandle(this))
 
         val scroll = ScrollView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                if (hasActive) LinearLayout.LayoutParams.WRAP_CONTENT else 0,
-                if (hasActive) 0f else 1f
+                LinearLayout.LayoutParams.WRAP_CONTENT
             )
+        }
+        if (!hasActive) {
+            // Wrap tightly to enabled verticals; cap at 58% height with internal scroll if taller.
+            root.post {
+                if (root.height > 0) {
+                    val maxSheetHeight = (root.height * 0.58f).toInt()
+                    if (sheet.height > maxSheetHeight) {
+                        (sheet.layoutParams as? FrameLayout.LayoutParams)?.height = maxSheetHeight
+                        scroll.layoutParams = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            0,
+                            1f
+                        )
+                        sheet.requestLayout()
+                    }
+                }
+            }
         }
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1384,6 +1409,10 @@ class CustomerMainActivity : AppCompatActivity() {
         // 5. PRIMARY SUBMIT CTA
         sheetBody.addView(
             AlistoUiKit.pillButton(this, "Confirm & Broadcast Request", AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP, "#FEF08A", heightDp = 50, textSizeSp = 15f) {
+                if (isSubmittingBooking) {
+                    Toast.makeText(this@CustomerMainActivity, "Sending your booking request — please wait...", Toast.LENGTH_SHORT).show()
+                    return@pillButton
+                }
                 val title = titleInput.text.toString().ifBlank { selectedServiceLabel }
                 val pAddr = pickupInput.text.toString().ifBlank { user.addressText }
                 val pNote = pickupNoteInput.text.toString().trim()
@@ -1406,52 +1435,85 @@ class CustomerMainActivity : AppCompatActivity() {
                 val tip = tipInput.text.toString().toDoubleOrNull() ?: 0.0
                 val wpArr = JSONArray().apply { sequentialWaypoints.forEach { put(it) } }
 
-                showBroadcastChargesConfirmation(title, fee, tip, selectedPaymentMethod) {
-                    uiScope.launch {
-                    val res = AlistoKernelClient.createBookingV2Rpc(
-                        verticalKey = selectedVerticalKey,
-                        jobSubtype = selectedJobSubtype,
-                        municipality = user.municipality,
-                        barangayZone = user.barangayZone,
-                        skillCategory = selectedSkillCategory,
-                        serviceTitle = title,
-                        pickupAddress = pAddr,
-                        dropoffAddress = dAddr,
-                        waypointsJson = wpArr,
-                        quotedFee = fee,
-                        tipAmount = tip,
-                        errandItemCostPhp = errandCost,
-                        deadheadReturnKm = deadheadKm,
-                        pickupLat = activeOriginLat,
-                        pickupLng = activeOriginLng,
-                        dropoffLat = activeDropoffLat ?: activeOriginLat,
-                        dropoffLng = activeDropoffLng ?: activeOriginLng,
-                        pickupNote = pNote,
-                        dropoffNote = dNote,
-                        bookingNotes = bNotes,
-                        vehicleType = if (needsDropoff) selectedVehicleType else "",
-                        paymentMethod = if (user.isDelinquent) "WALLET_CREDITS" else selectedPaymentMethod
-                    )
-                    res.onSuccess { respJson ->
-                        sequentialWaypoints.clear()
-                        draftTitle = ""; draftPickupNote = ""; draftDropoffAddress = ""; draftDropoffNote = ""; draftBookingNotes = ""; draftTip = ""; draftDeadheadKm = ""; lastRemoteNoticeKey = ""
-                        activeDropoffLat = null; activeDropoffLng = null
-                        val autoMatched = respJson.optBoolean("auto_assigned", false)
-                        val routeMsg = when {
-                            autoMatched -> "Yey! We found a pro for you! Your pro is preparing to head over."
-                            bNotes.isNotBlank() -> "Posted to Open Bookings — matching pros are reviewing your special note."
-                            else -> "We are finding the nearest pro for you..."
+                val launchBroadcast: () -> Unit = {
+                    showBroadcastChargesConfirmation(title, fee, tip, selectedPaymentMethod) {
+                        if (isSubmittingBooking) {
+                            Toast.makeText(this@CustomerMainActivity, "Booking request already in progress...", Toast.LENGTH_SHORT).show()
+                            return@showBroadcastChargesConfirmation
                         }
-                        Toast.makeText(this@CustomerMainActivity, routeMsg, Toast.LENGTH_LONG).show()
-                        AlistoKernelClient.bookings.forEach { bk -> lastBookingStatuses[bk.id] = bk.status }
-                        activeTab = "ACTIVITY"
-                        bookingStep = "LAUNCHER"
-                        showAuthenticatedCustomerPortal()
-                    }.onFailure { err ->
-                        AlertDialog.Builder(this@CustomerMainActivity)
-                            .setTitle("Booking Notice").setMessage(err.message).setPositiveButton("OK", null).show()
+                        isSubmittingBooking = true
+                        uiScope.launch {
+                            try {
+                                val res = AlistoKernelClient.createBookingV2Rpc(
+                                    verticalKey = selectedVerticalKey,
+                                    jobSubtype = selectedJobSubtype,
+                                    municipality = user.municipality,
+                                    barangayZone = user.barangayZone,
+                                    skillCategory = selectedSkillCategory,
+                                    serviceTitle = title,
+                                    pickupAddress = pAddr,
+                                    dropoffAddress = dAddr,
+                                    waypointsJson = wpArr,
+                                    quotedFee = fee,
+                                    tipAmount = tip,
+                                    errandItemCostPhp = errandCost,
+                                    deadheadReturnKm = deadheadKm,
+                                    pickupLat = activeOriginLat,
+                                    pickupLng = activeOriginLng,
+                                    dropoffLat = activeDropoffLat ?: activeOriginLat,
+                                    dropoffLng = activeDropoffLng ?: activeOriginLng,
+                                    pickupNote = pNote,
+                                    dropoffNote = dNote,
+                                    bookingNotes = bNotes,
+                                    vehicleType = if (needsDropoff) selectedVehicleType else "",
+                                    paymentMethod = if (user.isDelinquent) "WALLET_CREDITS" else selectedPaymentMethod
+                                )
+                                res.onSuccess { respJson ->
+                                    sequentialWaypoints.clear()
+                                    draftTitle = ""; draftPickupNote = ""; draftDropoffAddress = ""; draftDropoffNote = ""; draftBookingNotes = ""; draftTip = ""; draftDeadheadKm = ""; lastRemoteNoticeKey = ""
+                                    activeDropoffLat = null; activeDropoffLng = null
+                                    val autoMatched = respJson.optBoolean("auto_assigned", false)
+                                    val routeMsg = when {
+                                        autoMatched -> "Yey! We found a pro for you! Your pro is preparing to head over."
+                                        bNotes.isNotBlank() -> "Posted to Open Bookings — matching pros are reviewing your special note."
+                                        else -> "We are finding the nearest pro for you..."
+                                    }
+                                    Toast.makeText(this@CustomerMainActivity, routeMsg, Toast.LENGTH_LONG).show()
+                                    AlistoKernelClient.bookings.forEach { bk -> lastBookingStatuses[bk.id] = bk.status }
+                                    activeTab = "ACTIVITY"
+                                    bookingStep = "LAUNCHER"
+                                    showAuthenticatedCustomerPortal()
+                                }.onFailure { err ->
+                                    AlertDialog.Builder(this@CustomerMainActivity)
+                                        .setTitle("Booking Notice").setMessage(err.message).setPositiveButton("OK", null).show()
+                                }
+                            } finally {
+                                isSubmittingBooking = false
+                            }
+                        }
                     }
                 }
+
+                // Require explicit confirmation before creating a 2nd+ active booking request.
+                val existingOpenBookings = AlistoKernelClient.bookings.filter {
+                    it.clientId == user.id &&
+                        it.status !in listOf("COMPLETED", "COMPLETED_WITH_DISPUTE", "CANCELLED", "EXPIRED")
+                }
+                if (existingOpenBookings.isNotEmpty()) {
+                    val activeSummary = existingOpenBookings.take(2).joinToString("\n") {
+                        "• ${it.serviceTitle} (${it.status.replace('_', ' ')})"
+                    }
+                    AlertDialog.Builder(this@CustomerMainActivity)
+                        .setTitle("You Already Have an Active Booking")
+                        .setMessage(
+                            "You currently have ${existingOpenBookings.size} ongoing booking request(s):\n$activeSummary\n\n" +
+                                "Do you want to proceed and submit another booking request?"
+                        )
+                        .setPositiveButton("Confirm New Booking") { _, _ -> launchBroadcast() }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                } else {
+                    launchBroadcast()
                 }
             }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT) }
         )
