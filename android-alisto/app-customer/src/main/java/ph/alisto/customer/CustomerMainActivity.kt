@@ -102,6 +102,8 @@ class CustomerMainActivity : AppCompatActivity() {
     private var draftErrandGoods: String = "0"
     private var draftDeadheadKm: String = "0"
     private var isSubmittingBooking: Boolean = false
+    private var selectedScheduledStartIso: String? = null
+    private var selectedScheduledLabel: String = ""
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
@@ -1328,7 +1330,120 @@ class CustomerMainActivity : AppCompatActivity() {
             })
         }
 
-        // 4B. PAYMENT METHOD SELECTOR (Optional Wallet Credits for Good Standing; Mandatory for Delinquent)
+        // 4A. BOOKING SCHEDULE SELECTOR (Immediate Dispatch vs. Scheduled Future Slot)
+        val schedCard = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 12)
+        val schedTitleView = TextView(this).apply {
+            text = if (selectedScheduledStartIso.isNullOrBlank()) {
+                "Booking Schedule • Immediate Dispatch (Now)"
+            } else {
+                "Booking Schedule • Scheduled: $selectedScheduledLabel"
+            }
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(if (selectedScheduledStartIso.isNullOrBlank()) AlistoUiKit.CYAN else AlistoUiKit.GOLD_SOFT))
+            setPadding(0, 0, 0, dp(8))
+        }
+        schedCard.addView(schedTitleView)
+
+        val schedRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        }
+        lateinit var btnBookNow: TextView
+        lateinit var btnScheduleLater: TextView
+
+        fun refreshScheduleButtons() {
+            val isSched = !selectedScheduledStartIso.isNullOrBlank()
+            schedTitleView.text = if (!isSched) {
+                "Booking Schedule • Immediate Dispatch (Now)"
+            } else {
+                "Booking Schedule • $selectedScheduledLabel"
+            }
+            schedTitleView.setTextColor(Color.parseColor(if (!isSched) AlistoUiKit.CYAN else AlistoUiKit.GOLD_SOFT))
+            btnScheduleLater.text = if (isSched) "Change Time" else "Schedule Later"
+
+            listOf(btnBookNow to !isSched, btnScheduleLater to isSched).forEach { (btn, active) ->
+                btn.setTypeface(null, if (active) Typeface.BOLD else Typeface.NORMAL)
+                btn.setTextColor(Color.parseColor(if (active) AlistoUiKit.BG_DEEP else AlistoUiKit.TEXT_PRIMARY))
+                btn.background = AlistoUiKit.frostedGlassBg(
+                    this@CustomerMainActivity,
+                    fillHex = if (active) AlistoUiKit.GOLD_ACCENT else "#A6164CA8",
+                    radiusDp = 18,
+                    strokeHex = if (active) "#E6FEF08A" else AlistoUiKit.BORDER,
+                    alphaFraction = if (active) 0.90f else 0.72f
+                )
+            }
+        }
+
+        btnBookNow = TextView(this).apply {
+            text = "Book Now"
+            gravity = Gravity.CENTER
+            textSize = 12.5f
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) }
+            setOnClickListener {
+                selectedScheduledStartIso = null
+                selectedScheduledLabel = ""
+                refreshScheduleButtons()
+            }
+        }
+        btnScheduleLater = TextView(this).apply {
+            text = "Schedule Later"
+            gravity = Gravity.CENTER
+            textSize = 12.5f
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                val nowCal = java.util.Calendar.getInstance()
+                val defaultCal = java.util.Calendar.getInstance().apply { add(java.util.Calendar.MINUTE, 30) }
+                val dpDialog = android.app.DatePickerDialog(
+                    this@CustomerMainActivity,
+                    { _, year, month, dayOfMonth ->
+                        android.app.TimePickerDialog(
+                            this@CustomerMainActivity,
+                            { _, hourOfDay, minute ->
+                                val picked = java.util.Calendar.getInstance().apply {
+                                    set(year, month, dayOfMonth, hourOfDay, minute, 0)
+                                    set(java.util.Calendar.MILLISECOND, 0)
+                                }
+                                val minAllowedMs = System.currentTimeMillis() + (15L * 60L * 1000L)
+                                if (picked.timeInMillis < minAllowedMs) {
+                                    Toast.makeText(
+                                        this@CustomerMainActivity,
+                                        "Please pick a schedule at least 15 minutes from now.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                    return@TimePickerDialog
+                                }
+                                val utcFmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).apply {
+                                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                                }
+                                val displayFmt = java.text.SimpleDateFormat("MMM d, yyyy • h:mm a", java.util.Locale.US)
+                                selectedScheduledStartIso = utcFmt.format(picked.time)
+                                selectedScheduledLabel = displayFmt.format(picked.time)
+                                refreshScheduleButtons()
+                            },
+                            defaultCal.get(java.util.Calendar.HOUR_OF_DAY),
+                            defaultCal.get(java.util.Calendar.MINUTE),
+                            false
+                        ).show()
+                    },
+                    defaultCal.get(java.util.Calendar.YEAR),
+                    defaultCal.get(java.util.Calendar.MONTH),
+                    defaultCal.get(java.util.Calendar.DAY_OF_MONTH)
+                )
+                dpDialog.datePicker.minDate = nowCal.timeInMillis - 1000L
+                dpDialog.datePicker.maxDate = nowCal.timeInMillis + (30L * 24L * 60L * 60L * 1000L)
+                dpDialog.show()
+            }
+        }
+        schedRow.addView(btnBookNow)
+        schedRow.addView(btnScheduleLater)
+        schedCard.addView(schedRow)
+        refreshScheduleButtons()
+        sheetBody.addView(schedCard)
+
+                // 4B. PAYMENT METHOD SELECTOR (Optional Wallet Credits for Good Standing; Mandatory for Delinquent)
         if (user.isDelinquent) selectedPaymentMethod = "WALLET_CREDITS"
         val payCard = AlistoUiKit.surfaceCard(this, AlistoUiKit.BG_CARD, AlistoUiKit.BORDER, padDp = 12)
         payCard.addView(TextView(this).apply {
@@ -1466,14 +1581,19 @@ class CustomerMainActivity : AppCompatActivity() {
                                     dropoffNote = dNote,
                                     bookingNotes = bNotes,
                                     vehicleType = if (needsDropoff) selectedVehicleType else "",
-                                    paymentMethod = if (user.isDelinquent) "WALLET_CREDITS" else selectedPaymentMethod
+                                    paymentMethod = if (user.isDelinquent) "WALLET_CREDITS" else selectedPaymentMethod,
+                                    scheduledStartAtIso = selectedScheduledStartIso
                                 )
                                 res.onSuccess { respJson ->
                                     sequentialWaypoints.clear()
                                     draftTitle = ""; draftPickupNote = ""; draftDropoffAddress = ""; draftDropoffNote = ""; draftBookingNotes = ""; draftTip = ""; draftDeadheadKm = ""; lastRemoteNoticeKey = ""
                                     activeDropoffLat = null; activeDropoffLng = null
+                                    val scheduledDisplay = selectedScheduledLabel
+                                    selectedScheduledStartIso = null
+                                    selectedScheduledLabel = ""
                                     val autoMatched = respJson.optBoolean("auto_assigned", false)
                                     val routeMsg = when {
+                                        scheduledDisplay.isNotBlank() -> "Scheduled booking posted for $scheduledDisplay — pros can now reserve it on the board."
                                         autoMatched -> "Yey! We found a pro for you! Your pro is preparing to head over."
                                         bNotes.isNotBlank() -> "Posted to Open Bookings — matching pros are reviewing your special note."
                                         else -> "We are finding the nearest pro for you..."

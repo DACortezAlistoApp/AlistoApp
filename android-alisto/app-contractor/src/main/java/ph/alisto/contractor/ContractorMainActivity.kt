@@ -106,8 +106,19 @@ class ContractorMainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString("alisto_contractor_tab", activeTab)
+        outState.putString("alisto_contractor_jobs_filter", jobsFilter)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.parseColor(AlistoUiKit.BG_DEEP)))
+        savedInstanceState?.let { st ->
+            activeTab = st.getString("alisto_contractor_tab", activeTab) ?: activeTab
+            jobsFilter = st.getString("alisto_contractor_jobs_filter", jobsFilter) ?: jobsFilter
+        }
         AlistoUiKit.applyDarkSystemBars(this)
         registerBackExitConfirmation()
         if (AlistoKernelClient.currentSessionUser != null) {

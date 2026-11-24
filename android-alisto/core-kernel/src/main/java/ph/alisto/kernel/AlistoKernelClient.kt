@@ -1231,7 +1231,8 @@ object AlistoKernelClient {
         dropoffNote: String = "",
         bookingNotes: String = "",
         vehicleType: String = "",
-        paymentMethod: String = "CASH"
+        paymentMethod: String = "CASH",
+        scheduledStartAtIso: String? = null
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
@@ -1267,6 +1268,9 @@ object AlistoKernelClient {
                 put("p_tip_amount", tipAmount)
                 put("p_errand_item_cost", errandItemCostPhp)
                 put("p_deadhead_return_km", deadheadReturnKm)
+                if (!scheduledStartAtIso.isNullOrBlank()) {
+                    put("p_scheduled_start_at", scheduledStartAtIso)
+                }
                 put("p_payment_method", paymentMethod)
             })
             if (json.optString("status") != "SUCCESS") {
