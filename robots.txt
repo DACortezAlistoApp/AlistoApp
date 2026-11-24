@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://dacortezalistoapp.github.io/AlistoApp/sitemap.xml

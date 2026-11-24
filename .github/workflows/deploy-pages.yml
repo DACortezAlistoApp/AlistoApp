@@ -9,6 +9,8 @@ on:
       - "alisto-customer.apk"
       - "alisto-contractor.apk"
       - ".nojekyll"
+      - "robots.txt"
+      - "sitemap.xml"
       - ".github/workflows/deploy-pages.yml"
   workflow_run:
     workflows: [ "Build & Publish Alisto Native Android Kotlin APKs" ]
@@ -42,6 +44,8 @@ jobs:
         run: |
           mkdir -p _site
           cp index.html ops-portal.html .nojekyll _site/
+          [ -f robots.txt ] && cp robots.txt _site/
+          [ -f sitemap.xml ] && cp sitemap.xml _site/
           [ -f alisto-customer.apk ] && cp alisto-customer.apk _site/
           [ -f alisto-contractor.apk ] && cp alisto-contractor.apk _site/
           ls -lh _site/
