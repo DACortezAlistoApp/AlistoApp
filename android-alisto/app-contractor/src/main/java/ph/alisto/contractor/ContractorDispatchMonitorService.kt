@@ -40,6 +40,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import ph.alisto.kernel.AlistoKernelClient
 import ph.alisto.kernel.AlistoLocationTracker
@@ -55,8 +57,13 @@ class ContractorDispatchMonitorService : Service() {
         private const val CH_OFFER_SILENT = "alisto_contractor_urgent_offer_v4_heads_up"
         const val ACTION_OFFER_DECISION = "ph.alisto.contractor.ACTION_OFFER_DECISION"
         const val ACTION_TEST_OVERLAY = "ph.alisto.contractor.ACTION_TEST_OVERLAY"
+        const val ACTION_STOP_MONITORING = "ph.alisto.contractor.ACTION_STOP_MONITORING"
         private const val NOTIF_STATUS_ID = 4101
         const val NOTIF_OFFER_ID = 4102
+        private const val HEARTBEAT_INTERVAL_MS = AlistoKernelClient.HEARTBEAT_INTERVAL_SEC * 1000L
+
+        @Volatile
+        var isServiceRunning: Boolean = false
 
         fun saveSessionToken(context: Context, token: String?) {
             context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().apply {
@@ -77,9 +84,18 @@ class ContractorDispatchMonitorService : Service() {
             } catch (_: Exception) {}
         }
 
+        fun cancelAllNotifications(context: Context) {
+            try {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.cancel(NOTIF_STATUS_ID)
+                nm.cancel(NOTIF_OFFER_ID)
+            } catch (_: Exception) {}
+        }
+
         fun stopMonitoring(context: Context) {
             try {
-                cancelOfferNotification(context)
+                isServiceRunning = false
+                cancelAllNotifications(context)
                 ContractorSoundEngine.stopIncomingOfferAlarm()
                 context.stopService(Intent(context, ContractorDispatchMonitorService::class.java))
             } catch (_: Exception) {}
@@ -112,6 +128,8 @@ class ContractorDispatchMonitorService : Service() {
     private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pollJob: Job? = null
+    private var heartbeatJob: Job? = null
+    private var taskRemovedHandled: Boolean = false
     private var lastLaunchedKey: String = ""
     private var lastLaunchAtMs: Long = 0L
 
@@ -125,6 +143,12 @@ class ContractorDispatchMonitorService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP_MONITORING) {
+            tearDownForegroundCleanly()
+            return START_NOT_STICKY
+        }
+        taskRemovedHandled = false
+        isServiceRunning = true
         ensureChannels()
         val statusNotif = buildStatusNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -133,6 +157,7 @@ class ContractorDispatchMonitorService : Service() {
             startForeground(NOTIF_STATUS_ID, statusNotif)
         }
         startOfferPollingLoop()
+        startPresenceHeartbeatLoop()
 
         when (intent?.action) {
             ACTION_OFFER_DECISION -> {
@@ -174,7 +199,7 @@ class ContractorDispatchMonitorService : Service() {
                 }, 5_000L)
             }
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun ensureChannels() {
@@ -215,7 +240,7 @@ class ContractorDispatchMonitorService : Service() {
         return NotificationCompat.Builder(this, CH_STATUS)
             .setSmallIcon(R.drawable.ic_alisto_app_logo)
             .setContentTitle("Alisto Pro • Online")
-            .setContentText("Listening for auto-assigned jobs & booking awards")
+            .setContentText("Listening for auto-assigned jobs and booking awards")
             .setSilent(true)
             .setOngoing(true)
             .setContentIntent(pi)
@@ -642,12 +667,98 @@ class ContractorDispatchMonitorService : Service() {
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
+    private fun startPresenceHeartbeatLoop() {
+        if (heartbeatJob?.isActive == true) return
+        heartbeatJob = serviceScope.launch {
+            while (isActive) {
+                val token = AlistoKernelClient.currentSessionToken
+                    ?: getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(KEY_SESSION_TOKEN, null)
+                if (token.isNullOrBlank()) {
+                    mainHandler.post { tearDownForegroundCleanly() }
+                    break
+                }
+                val res = AlistoKernelClient.sendContractorHeartbeatRpc(
+                    sessionTokenOverride = token,
+                    lat = AlistoLocationTracker.lastLat,
+                    lng = AlistoLocationTracker.lastLng
+                )
+                res.onSuccess { json ->
+                    val serverOnline = json.optBoolean("is_online", false)
+                    val serverAuto = json.optBoolean("auto_accept_enabled", false)
+                    if (!serverOnline || !serverAuto) {
+                        Log.i("AlistoPresence", "Server presence no longer ONLINE+AUTO (online=$serverOnline, auto=$serverAuto); stopping foreground listener.")
+                        mainHandler.post { tearDownForegroundCleanly() }
+                        return@launch
+                    }
+                }
+                delay(HEARTBEAT_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun tearDownForegroundCleanly() {
+        isServiceRunning = false
         pollJob?.cancel()
+        heartbeatJob?.cancel()
         dismissFloatingOverlay()
+        ContractorSoundEngine.stopIncomingOfferAlarm()
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        } catch (_: Exception) {}
+        cancelAllNotifications(this)
+        stopSelf()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        if (taskRemovedHandled) return
+        taskRemovedHandled = true
+        isServiceRunning = false
+
+        val token = AlistoKernelClient.currentSessionToken
+            ?: getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(KEY_SESSION_TOKEN, null)
+
+        // Dispatch a bounded keepalive offline presence call before tearing down the service
+        if (!token.isNullOrBlank()) {
+            try {
+                runBlocking(Dispatchers.IO) {
+                    withTimeoutOrNull(2_500L) {
+                        AlistoKernelClient.setContractorPresenceRpc(
+                            isOnline = false,
+                            autoAccept = false,
+                            disconnectReason = "TASK_REMOVED",
+                            sessionTokenOverride = token
+                        )
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        tearDownForegroundCleanly()
+    }
+
+    override fun onDestroy() {
+        isServiceRunning = false
+        pollJob?.cancel()
+        heartbeatJob?.cancel()
+        dismissFloatingOverlay()
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        } catch (_: Exception) {}
+        cancelAllNotifications(this)
         serviceScope.cancel()
         mainScope.cancel()
         ContractorSoundEngine.stopIncomingOfferAlarm()
+        super.onDestroy()
     }
 }

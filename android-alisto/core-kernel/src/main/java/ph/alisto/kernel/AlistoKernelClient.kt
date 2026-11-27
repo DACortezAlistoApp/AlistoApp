@@ -472,7 +472,7 @@ object AlistoKernelClient {
                     flaggedDocs = flagged,
                     resubmissionNotes = if (cp.isNull("resubmission_notes")) null else cp.optString("resubmission_notes"),
                     activeShiftVerticals = if (shifts.isEmpty()) listOf("skills_marketplace") else shifts,
-                    isOnline = cp.optBoolean("is_online", true),
+                    isOnline = cp.optBoolean("is_online", false),
                     autoAcceptEnabled = cp.optBoolean("auto_accept_enabled", false),
                     autoOffersReceived = cp.optInt("auto_offers_received", 0),
                     autoOffersAccepted = cp.optInt("auto_offers_accepted", 0),
@@ -1248,6 +1248,24 @@ object AlistoKernelClient {
         }
     }
 
+    const val IDEMPOTENCY_KEY_TTL_SEC: Int = 600
+    const val DUPLICATE_BOOKING_WINDOW_SEC: Int = 60
+    const val CLIENT_SUBMIT_TIMEOUT_MS: Long = 15_000L
+
+    suspend fun lookupBookingByIdempotencyRpc(idempotencyKey: String): JSONObject? = withContext(Dispatchers.IO) {
+        val token = currentSessionToken ?: return@withContext null
+        if (idempotencyKey.isBlank()) return@withContext null
+        try {
+            val json = postRpc("secure_lookup_booking_by_idempotency_rpc", JSONObject().apply {
+                put("p_session_token", token)
+                put("p_idempotency_key", idempotencyKey)
+            })
+            if (json.optString("status") == "FOUND") json else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     suspend fun createBookingV2Rpc(
         verticalKey: String,
         jobSubtype: String,
@@ -1271,7 +1289,9 @@ object AlistoKernelClient {
         bookingNotes: String = "",
         vehicleType: String = "",
         paymentMethod: String = "CASH",
-        scheduledStartAtIso: String? = null
+        scheduledStartAtIso: String? = null,
+        idempotencyKey: String? = null,
+        allowMultiBooking: Boolean = false
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
         val activeUser = currentSessionUser ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
         try {
@@ -1287,7 +1307,7 @@ object AlistoKernelClient {
             val dLat = dropoffLat ?: pLat
             val dLng = dropoffLng ?: pLng
 
-            val json = postRpc("create_booking_v2_rpc", JSONObject().apply {
+            val reqBody = JSONObject().apply {
                 put("p_client_id", activeUser.id)
                 put("p_vertical_key", verticalKey)
                 put("p_job_subtype", jobSubtype)
@@ -1311,7 +1331,42 @@ object AlistoKernelClient {
                     put("p_scheduled_start_at", scheduledStartAtIso)
                 }
                 put("p_payment_method", paymentMethod)
-            })
+                if (!idempotencyKey.isNullOrBlank()) {
+                    put("p_idempotency_key", idempotencyKey)
+                }
+                put("p_allow_multi_booking", allowMultiBooking)
+            }
+            val json = try {
+                kotlinx.coroutines.withTimeout(CLIENT_SUBMIT_TIMEOUT_MS) {
+                    postRpc("create_booking_v2_rpc", reqBody)
+                }
+            } catch (netErr: Exception) {
+                // Intermittent signal / timeout reconciliation: check if server already persisted this key
+                if (!idempotencyKey.isNullOrBlank()) {
+                    val found = lookupBookingByIdempotencyRpc(idempotencyKey)
+                    if (found != null) {
+                        syncBookingsAndWallet()
+                        return@withContext Result.success(
+                            JSONObject().apply {
+                                put("status", "SUCCESS")
+                                put("idempotent_replay", true)
+                                put("reconciled_after_timeout", true)
+                                put("booking", found.optJSONObject("booking"))
+                                put("auto_offered", found.optBoolean("auto_offered", false))
+                            }
+                        )
+                    }
+                    try { syncBookingsAndWallet() } catch (_: Exception) {}
+                }
+                val isNetTimeout = netErr is kotlinx.coroutines.TimeoutCancellationException ||
+                    netErr is java.io.IOException
+                val errMsg = if (isNetTimeout) {
+                    "Weak signal or request timed out (${CLIENT_SUBMIT_TIMEOUT_MS / 1000}s). Checked server with no duplicate created — tap Confirm to safely retry."
+                } else {
+                    netErr.message ?: "Booking request failed."
+                }
+                return@withContext Result.failure(IllegalStateException(errMsg))
+            }
             if (json.optString("status") != "SUCCESS") {
                 return@withContext Result.failure(IllegalStateException(json.optString("message", "Booking blocked.")))
             }
@@ -1338,6 +1393,8 @@ object AlistoKernelClient {
         } catch (_: Exception) {}
     }
 
+    class BookingAlreadyAssignedException(message: String) : IllegalStateException(message)
+
     suspend fun requestOpenBookingRpc(bookingId: String): Result<JSONObject> = withContext(Dispatchers.IO) {
         val token = currentSessionToken ?: return@withContext Result.failure(IllegalStateException("Session expired."))
         try {
@@ -1346,11 +1403,20 @@ object AlistoKernelClient {
                 put("p_booking_id", bookingId)
             })
             val status = json.optString("status", "ERROR")
+            val errCode = json.optString("error_code", "")
             if (status == "AWARDED") {
                 syncBookingsAndWallet()
                 Result.success(json)
+            } else if (
+                status == "CONFLICT_409" ||
+                errCode == "BOOKING_ALREADY_ASSIGNED" ||
+                status == "ALREADY_TAKEN" ||
+                status == "ALREADY_AWARDED"
+            ) {
+                val msg = json.optString("message", "This open booking has already been assigned to a different rider.")
+                Result.failure(BookingAlreadyAssignedException(msg))
             } else {
-                Result.failure(IllegalStateException(json.optString("message", "Another contractor requested this booking first.")))
+                Result.failure(IllegalStateException(json.optString("message", "Unable to request booking.")))
             }
         } catch (e: Exception) {
             Result.failure(e)
@@ -1714,6 +1780,67 @@ object AlistoKernelClient {
                 put("p_comments", comments)
             })
             syncBookingsAndWallet()
+            return@withContext Result.success(json)
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
+    const val HEARTBEAT_INTERVAL_SEC: Int = 30
+    const val PRESENCE_GRACE_TTL_SEC: Int = 90
+
+    suspend fun setContractorPresenceRpc(
+        isOnline: Boolean,
+        autoAccept: Boolean,
+        disconnectReason: String? = null,
+        activeShiftVerticals: List<String>? = null,
+        sessionTokenOverride: String? = null
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val token = sessionTokenOverride?.takeIf { it.isNotBlank() }
+            ?: currentSessionToken
+            ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
+        try {
+            val payload = JSONObject().apply {
+                put("p_session_token", token)
+                put("p_is_online", isOnline)
+                put("p_auto_accept", if (isOnline) autoAccept else false)
+                if (!disconnectReason.isNullOrBlank()) {
+                    put("p_disconnect_reason", disconnectReason)
+                }
+                if (activeShiftVerticals != null) {
+                    put("p_active_shift_verticals", org.json.JSONArray(activeShiftVerticals))
+                }
+            }
+            val json = postRpc("secure_contractor_presence_rpc", payload)
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("message", "Presence update failed.")))
+            }
+            return@withContext Result.success(json)
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
+
+    suspend fun sendContractorHeartbeatRpc(
+        sessionTokenOverride: String? = null,
+        lat: Double? = null,
+        lng: Double? = null
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val token = sessionTokenOverride?.takeIf { it.isNotBlank() }
+            ?: currentSessionToken
+            ?: return@withContext Result.failure(IllegalStateException("Not authenticated."))
+        try {
+            val payload = JSONObject().apply {
+                put("p_session_token", token)
+                if (lat != null && lng != null) {
+                    put("p_lat", lat)
+                    put("p_lng", lng)
+                }
+            }
+            val json = postRpc("secure_contractor_heartbeat_rpc", payload)
+            if (json.optString("status") != "SUCCESS") {
+                return@withContext Result.failure(IllegalStateException(json.optString("status", "Heartbeat failed.")))
+            }
             return@withContext Result.success(json)
         } catch (e: Exception) {
             return@withContext Result.failure(e)

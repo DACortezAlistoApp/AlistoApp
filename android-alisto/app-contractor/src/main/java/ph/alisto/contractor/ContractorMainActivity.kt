@@ -485,12 +485,16 @@ class ContractorMainActivity : AppCompatActivity() {
                 val canAuto = supportsAutoAssign(chosen)
                 val nextAuto = if (canAuto) autoAcceptEnabled else false
                 autoAcceptEnabled = nextAuto
+                if (!prof.isOnline || !nextAuto) {
+                    ContractorDispatchMonitorService.stopMonitoring(this@ContractorMainActivity)
+                }
                 uiScope.launch {
                     AlistoKernelClient.toggleContractorDispatchModeRpc(
                         isOnline = prof.isOnline,
                         autoAccept = nextAuto,
                         activeShiftVerticals = chosen
                     )
+                    AlistoKernelClient.currentSessionUser?.let { syncContractorForegroundLifecycle(it) }
                     Toast.makeText(this@ContractorMainActivity, "Shift switched to $label", Toast.LENGTH_SHORT).show()
                     routeContractorByAccountState()
                 }
@@ -561,6 +565,7 @@ class ContractorMainActivity : AppCompatActivity() {
     }
 
     internal fun isBookingOpenForBoard(b: BookingRecord, currentShifts: List<String>, myUserId: String): Boolean {
+        if (b.id in purgedBookingIds) return false
         if (!AlistoKernelClient.isVerticalEnabled(b.verticalKey)) return false
         if (b.verticalKey !in currentShifts) return false
         if (b.contractorId != null) return false
@@ -572,6 +577,24 @@ class ContractorMainActivity : AppCompatActivity() {
 
     private var lastDriveUiDigest: String = ""
     private var isSubmittingP2pTransfer: Boolean = false
+    private var coldStartReconciled: Boolean = false
+    private val claimingBookingIds = mutableSetOf<String>()
+    private val purgedBookingIds = mutableSetOf<String>()
+
+    private fun syncContractorForegroundLifecycle(user: AuthenticatedUser) {
+        val prof = AlistoKernelClient.currentContractorProfile
+        val token = AlistoKernelClient.currentSessionToken
+        val effShifts = getEffectiveShiftVerticals(prof)
+        val canAuto = supportsAutoAssign(effShifts)
+        val isOnline = prof?.isOnline == true
+        val isAutoOn = isOnline && autoAcceptEnabled && canAuto && !user.isDelinquent
+
+        if (isAutoOn && !token.isNullOrBlank()) {
+            ContractorDispatchMonitorService.startMonitoring(this, token)
+        } else {
+            ContractorDispatchMonitorService.stopMonitoring(this)
+        }
+    }
 
     internal fun showActiveContractorPortal(user: AuthenticatedUser) {
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.parseColor(AlistoUiKit.BG_DEEP)))
@@ -585,23 +608,36 @@ class ContractorMainActivity : AppCompatActivity() {
         val prof = AlistoKernelClient.currentContractorProfile
         val token = AlistoKernelClient.currentSessionToken
         val effShifts = getEffectiveShiftVerticals(prof)
-        if (prof != null && !prof.isOnline && effShifts.isNotEmpty() && !autoOnlineSyncedThisSession) {
-            autoOnlineSyncedThisSession = true
-            uiScope.launch {
-                AlistoKernelClient.toggleContractorDispatchModeRpc(
-                    isOnline = true,
-                    autoAccept = autoAcceptEnabled && supportsAutoAssign(effShifts),
-                    activeShiftVerticals = effShifts
-                )
+
+        // Cold-start presence reconciliation: if no foreground listener is bound on launch,
+        // force stale ONLINE/AUTO backend sessions to OFFLINE so phantom assignments cannot occur.
+        if (!coldStartReconciled) {
+            coldStartReconciled = true
+            if (!ContractorDispatchMonitorService.isServiceRunning) {
+                autoAcceptEnabled = false
+                ContractorDispatchMonitorService.stopMonitoring(this)
+                if (prof != null && (prof.isOnline || prof.autoAcceptEnabled) && !token.isNullOrBlank()) {
+                    uiScope.launch {
+                        AlistoKernelClient.setContractorPresenceRpc(
+                            isOnline = false,
+                            autoAccept = false,
+                            disconnectReason = "COLD_START_RECONCILE",
+                            activeShiftVerticals = effShifts.ifEmpty { null }
+                        )
+                        AlistoKernelClient.fetchAppBootStateRpc(token, "contractor")
+                        AlistoKernelClient.currentSessionUser?.let { showActiveContractorPortal(it) }
+                    }
+                }
+            } else {
+                autoAcceptEnabled = (prof?.isOnline == true && prof.autoAcceptEnabled && supportsAutoAssign(effShifts))
             }
         }
+
         AlistoChatEngine.registerHost(this, ContractorMainActivity::class.java.name) {
             ContractorSoundEngine.playStepUpdatedTone(this)
         }
         handleContractorChatLaunchIntent(intent)
-        if (!token.isNullOrBlank()) {
-            ContractorDispatchMonitorService.startMonitoring(this, token)
-        }
+        syncContractorForegroundLifecycle(user)
 
         if (AlistoLocationTracker.ensureExplicitGpsGate(this, "Alisto Contractor")) {
             startContractorLiveGps(forceCenter = false)
@@ -737,6 +773,74 @@ class ContractorMainActivity : AppCompatActivity() {
             })
         }
         topHud.addView(walletPill)
+
+        val onlineTogglePill = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = AlistoUiKit.frostedGlassBg(
+                this@ContractorMainActivity,
+                if (isOnline) "#E6064E3B" else "#D91E293B",
+                24,
+                if (isOnline) "#34D399" else "#64748B",
+                alphaFraction = 0.92f
+            )
+            setPadding(dp(10), dp(9), dp(10), dp(9))
+            elevation = dp(6).toFloat()
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = dp(6) }
+            setOnClickListener {
+                val nextOnline = !isOnline
+                if (!nextOnline) {
+                    autoAcceptEnabled = false
+                    ContractorDispatchMonitorService.stopMonitoring(this@ContractorMainActivity)
+                }
+                uiScope.launch {
+                    if (!nextOnline) {
+                        AlistoKernelClient.setContractorPresenceRpc(
+                            isOnline = false,
+                            autoAccept = false,
+                            disconnectReason = "MANUAL_OFFLINE",
+                            activeShiftVerticals = currentShifts
+                        )
+                        AlistoKernelClient.currentSessionToken?.let { tok ->
+                            AlistoKernelClient.fetchAppBootStateRpc(tok, "contractor")
+                        }
+                        Toast.makeText(this@ContractorMainActivity, "Status: OFFLINE (Dispatch listener stopped)", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val nextAuto = autoAcceptEnabled && canAutoAssign
+                        AlistoKernelClient.toggleContractorDispatchModeRpc(
+                            isOnline = true,
+                            autoAccept = nextAuto,
+                            activeShiftVerticals = currentShifts
+                        )
+                        AlistoKernelClient.currentSessionUser?.let { syncContractorForegroundLifecycle(it) }
+                        Toast.makeText(
+                            this@ContractorMainActivity,
+                            if (nextAuto) "Status: ONLINE + AUTO-ASSIGN" else "Status: ONLINE (Manual Board Mode)",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    routeContractorByAccountState()
+                }
+            }
+            addView(View(this@ContractorMainActivity).apply {
+                background = AlistoUiKit.roundedBg(
+                    this@ContractorMainActivity,
+                    if (isOnline) AlistoUiKit.EMERALD else "#94A3B8",
+                    5
+                )
+                layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(6) }
+            })
+            addView(TextView(this@ContractorMainActivity).apply {
+                text = if (isOnline) "ONLINE" else "OFFLINE"
+                textSize = 12f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor(if (isOnline) "#A7F3D0" else "#CBD5E1"))
+            })
+        }
+        topHud.addView(onlineTogglePill)
         topHud.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
 
         // Upper-right slots: Going Home pill immediately left of Auto-ON / Auto-OFF (Delivery & Ride-Hailing)
@@ -765,7 +869,7 @@ class ContractorMainActivity : AppCompatActivity() {
             }
             topHud.addView(goingHomePill)
 
-            val autoOn = autoAcceptEnabled
+            val autoOn = isOnline && autoAcceptEnabled
             val autoTogglePill = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -779,17 +883,22 @@ class ContractorMainActivity : AppCompatActivity() {
                 setPadding(dp(11), dp(9), dp(11), dp(9))
                 elevation = dp(6).toFloat()
                 setOnClickListener {
-                    val nextAuto = !autoAcceptEnabled
+                    val nextAuto = !autoOn
                     autoAcceptEnabled = nextAuto
+                    if (!nextAuto) {
+                        ContractorDispatchMonitorService.stopMonitoring(this@ContractorMainActivity)
+                    }
                     uiScope.launch {
+                        val targetOnline = if (nextAuto) true else isOnline
                         AlistoKernelClient.toggleContractorDispatchModeRpc(
-                            isOnline = true,
+                            isOnline = targetOnline,
                             autoAccept = nextAuto,
                             activeShiftVerticals = currentShifts
                         )
+                        AlistoKernelClient.currentSessionUser?.let { syncContractorForegroundLifecycle(it) }
                         Toast.makeText(
                             this@ContractorMainActivity,
-                            if (nextAuto) "Auto-Assignment ON (Delivery & Ride)" else "Auto-Assignment OFF",
+                            if (nextAuto) "Auto-Assignment ON (Listening for jobs)" else "Auto-Assignment OFF (Background listener stopped)",
                             Toast.LENGTH_SHORT
                         ).show()
                         routeContractorByAccountState()
@@ -1426,10 +1535,15 @@ class ContractorMainActivity : AppCompatActivity() {
         container.addView(AlistoUiKit.pillButton(this, "Sign Out & Go Offline", "#450A0A", "#FCA5A5", "#7F1D1D", heightDp = 46) {
             uiScope.launch {
                 try {
-                    AlistoKernelClient.toggleContractorDispatchModeRpc(
-                        isOnline = false, autoAccept = false, activeShiftVerticals = currentShifts
+                    AlistoKernelClient.setContractorPresenceRpc(
+                        isOnline = false,
+                        autoAccept = false,
+                        disconnectReason = "USER_LOGOUT",
+                        activeShiftVerticals = currentShifts
                     )
                 } catch (_: Exception) {}
+                autoAcceptEnabled = false
+                coldStartReconciled = false
                 realtimePollJob?.cancel()
                 AlistoLocationTracker.stopLiveUpdates()
                 AlistoSpatialEngine.stopHeartbeat()
@@ -1509,43 +1623,73 @@ class ContractorMainActivity : AppCompatActivity() {
                 val myActiveBid = AlistoKernelClient.bookingBids.find {
                     it.bookingId == b.id && it.contractorId == user.id && it.status == "ACTIVE"
                 }
+                var requestBtnRef: View? = null
                 val requestBtn = AlistoUiKit.pillButton(
                     this@ContractorMainActivity, "Request Booking", AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP, "#FEF08A", heightDp = 44, textSizeSp = 13.5f
                 ) {
+                    // Synchronous tap lock prevents duplicate manual claim requests on double-tap
+                    if (b.id in claimingBookingIds || claimingBookingIds.isNotEmpty()) return@pillButton
+                    claimingBookingIds.add(b.id)
+                    requestBtnRef?.isEnabled = false
+                    requestBtnRef?.alpha = 0.6f
+                    (requestBtnRef as? TextView)?.text = "Claiming..."
+
                     uiScope.launch {
-                        val res = AlistoKernelClient.requestOpenBookingRpc(b.id)
-                        res.onSuccess { awardJson ->
-                            val secs = awardJson.optInt("seconds_remaining", 25)
-                            val offerPayload = JSONObject().apply {
-                                put("seconds_remaining", secs)
-                                put("offer", JSONObject().apply {
-                                    put("id", b.id)
-                                    put("booking_ref", b.bookingRef)
-                                    put("offer_source", "BOARD_REQUEST")
-                                    put("vertical_key", b.verticalKey)
-                                    put("service_title", b.serviceTitle)
-                                    put("pickup_address", b.pickupAddress)
-                                    put("pickup_note", b.pickupNote)
-                                    put("dropoff_address", b.dropoffAddress)
-                                    put("dropoff_note", b.dropoffNote)
-                                    put("booking_notes", b.bookingNotes)
-                                    put("municipality", b.municipality)
-                                    put("barangay_zone", b.barangayZone)
-                                    put("quoted_fee", b.quotedFee)
-                                    put("tip_amount", b.tipAmount)
-                                    put("payment_method", b.paymentMethod)
-                                    put("client_nickname", b.clientNickname)
-                                    put("client_trust_score", b.clientTrustScore)
-                                })
+                        try {
+                            val res = AlistoKernelClient.requestOpenBookingRpc(b.id)
+                            res.onSuccess { awardJson ->
+                                val secs = awardJson.optInt("seconds_remaining", 25)
+                                val expAt = awardJson.optString("offer_expires_at", "")
+                                val offerPayload = JSONObject().apply {
+                                    put("seconds_remaining", secs)
+                                    if (expAt.isNotBlank()) put("offer_expires_at", expAt)
+                                    put("offer", JSONObject().apply {
+                                        put("id", b.id)
+                                        put("booking_ref", b.bookingRef)
+                                        put("offer_source", "BOARD_REQUEST")
+                                        put("vertical_key", b.verticalKey)
+                                        put("service_title", b.serviceTitle)
+                                        put("pickup_address", b.pickupAddress)
+                                        put("pickup_note", b.pickupNote)
+                                        put("dropoff_address", b.dropoffAddress)
+                                        put("dropoff_note", b.dropoffNote)
+                                        put("booking_notes", b.bookingNotes)
+                                        put("municipality", b.municipality)
+                                        put("barangay_zone", b.barangayZone)
+                                        put("quoted_fee", b.quotedFee)
+                                        put("tip_amount", b.tipAmount)
+                                        put("payment_method", b.paymentMethod)
+                                        put("client_nickname", b.clientNickname)
+                                        put("client_trust_score", b.clientTrustScore)
+                                    })
+                                }
+                                startActivity(ContractorOfferBridge.buildIntent(this@ContractorMainActivity, offerPayload))
+                            }.onFailure { err ->
+                                val isAssignedConflict = err is AlistoKernelClient.BookingAlreadyAssignedException ||
+                                    (err.message?.contains("already been assigned", ignoreCase = true) == true)
+                                if (isAssignedConflict) {
+                                    purgedBookingIds.add(b.id)
+                                    Toast.makeText(
+                                        this@ContractorMainActivity,
+                                        "This open booking has already been assigned to a different rider.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                    showActiveContractorPortal(user)
+                                } else {
+                                    Toast.makeText(
+                                        this@ContractorMainActivity,
+                                        err.message ?: "Unable to request booking.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                                AlistoKernelClient.syncBookingsAndWallet()
+                                showActiveContractorPortal(user)
                             }
-                            startActivity(ContractorOfferBridge.buildIntent(this@ContractorMainActivity, offerPayload))
-                        }.onFailure { err ->
-                            Toast.makeText(this@ContractorMainActivity, err.message ?: "Booking already awarded.", Toast.LENGTH_LONG).show()
-                            AlistoKernelClient.syncBookingsAndWallet()
-                            showActiveContractorPortal(user)
+                        } finally {
+                            claimingBookingIds.remove(b.id)
                         }
                     }
-                }
+                }.also { requestBtnRef = it }
 
                 if (b.verticalKey == "skills_marketplace") {
                     card.addView(LinearLayout(this).apply {

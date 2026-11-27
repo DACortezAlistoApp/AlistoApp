@@ -102,6 +102,8 @@ class CustomerMainActivity : AppCompatActivity() {
     private var draftErrandGoods: String = "0"
     private var draftDeadheadKm: String = "0"
     private var isSubmittingBooking: Boolean = false
+    private var pendingBookingIdempotencyKey: String? = null
+    private var pendingBookingSignature: String = ""
     private var isSubmittingP2pTransfer: Boolean = false
     private var selectedScheduledStartIso: String? = null
     private var selectedScheduledLabel: String = ""
@@ -1523,6 +1525,7 @@ class CustomerMainActivity : AppCompatActivity() {
         sheetBody.addView(payCard)
 
         // 5. PRIMARY SUBMIT CTA
+        var submitBtnRef: View? = null
         sheetBody.addView(
             AlistoUiKit.pillButton(this, "Confirm & Broadcast Request", AlistoUiKit.GOLD_ACCENT, AlistoUiKit.BG_DEEP, "#FEF08A", heightDp = 50, textSizeSp = 15f) {
                 if (isSubmittingBooking) {
@@ -1551,13 +1554,30 @@ class CustomerMainActivity : AppCompatActivity() {
                 val tip = tipInput.text.toString().toDoubleOrNull() ?: 0.0
                 val wpArr = JSONArray().apply { sequentialWaypoints.forEach { put(it) } }
 
-                val launchBroadcast: () -> Unit = {
+                val launchBroadcast: (Boolean) -> Unit = { allowMulti ->
                     showBroadcastChargesConfirmation(title, fee, tip, selectedPaymentMethod) {
                         if (isSubmittingBooking) {
                             Toast.makeText(this@CustomerMainActivity, "Booking request already in progress...", Toast.LENGTH_SHORT).show()
                             return@showBroadcastChargesConfirmation
                         }
+                        // Synchronous UI lock + stable UUIDv4 idempotency key across retries for the same trip
                         isSubmittingBooking = true
+                        submitBtnRef?.isEnabled = false
+                        submitBtnRef?.alpha = 0.6f
+                        (submitBtnRef as? TextView)?.text = "Placing Booking..."
+
+                        val reqSig = listOf(
+                            selectedVerticalKey, selectedJobSubtype,
+                            activeOriginLat, activeOriginLng,
+                            activeDropoffLat, activeDropoffLng,
+                            fee, tip, selectedPaymentMethod, selectedScheduledStartIso
+                        ).joinToString("|")
+                        if (pendingBookingIdempotencyKey.isNullOrBlank() || pendingBookingSignature != reqSig) {
+                            pendingBookingIdempotencyKey = java.util.UUID.randomUUID().toString()
+                            pendingBookingSignature = reqSig
+                        }
+                        val idemKey = pendingBookingIdempotencyKey!!
+
                         uiScope.launch {
                             try {
                                 val res = AlistoKernelClient.createBookingV2Rpc(
@@ -1583,9 +1603,13 @@ class CustomerMainActivity : AppCompatActivity() {
                                     bookingNotes = bNotes,
                                     vehicleType = if (needsDropoff) selectedVehicleType else "",
                                     paymentMethod = if (user.isDelinquent) "WALLET_CREDITS" else selectedPaymentMethod,
-                                    scheduledStartAtIso = selectedScheduledStartIso
+                                    scheduledStartAtIso = selectedScheduledStartIso,
+                                    idempotencyKey = idemKey,
+                                    allowMultiBooking = allowMulti
                                 )
                                 res.onSuccess { respJson ->
+                                    pendingBookingIdempotencyKey = null
+                                    pendingBookingSignature = ""
                                     sequentialWaypoints.clear()
                                     draftTitle = ""; draftPickupNote = ""; draftDropoffAddress = ""; draftDropoffNote = ""; draftBookingNotes = ""; draftTip = ""; draftDeadheadKm = ""; lastRemoteNoticeKey = ""
                                     activeDropoffLat = null; activeDropoffLng = null
@@ -1610,6 +1634,9 @@ class CustomerMainActivity : AppCompatActivity() {
                                 }
                             } finally {
                                 isSubmittingBooking = false
+                                submitBtnRef?.isEnabled = true
+                                submitBtnRef?.alpha = 1.0f
+                                (submitBtnRef as? TextView)?.text = "Confirm & Broadcast Request"
                             }
                         }
                     }
@@ -1630,13 +1657,13 @@ class CustomerMainActivity : AppCompatActivity() {
                             "You currently have ${existingOpenBookings.size} ongoing booking request(s):\n$activeSummary\n\n" +
                                 "Do you want to proceed and submit another booking request?"
                         )
-                        .setPositiveButton("Confirm New Booking") { _, _ -> launchBroadcast() }
+                        .setPositiveButton("Confirm New Booking") { _, _ -> launchBroadcast(true) }
                         .setNegativeButton("Cancel", null)
                         .show()
                 } else {
-                    launchBroadcast()
+                    launchBroadcast(false)
                 }
-            }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT) }
+            }.also { submitBtnRef = it }.apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT) }
         )
 
         sheetScroll.addView(sheetBody)
